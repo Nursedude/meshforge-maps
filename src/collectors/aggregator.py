@@ -7,12 +7,13 @@ into a single unified collection with deduplication.
 
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .aredn_collector import AREDNCollector
 from .base import make_feature_collection
 from .hamclock_collector import HamClockCollector
 from .meshtastic_collector import MeshtasticCollector
+from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
 from .reticulum_collector import ReticulumCollector
 
 logger = logging.getLogger(__name__)
@@ -26,9 +27,21 @@ class DataAggregator:
         cache_ttl = config.get("cache_ttl_minutes", 15) * 60
         self._collectors = {}
 
+        # Initialize live MQTT subscriber for Meshtastic
+        self._mqtt_subscriber: Optional[MQTTSubscriber] = None
+        mqtt_store: Optional[MQTTNodeStore] = None
+        if config.get("enable_meshtastic", True):
+            self._mqtt_subscriber = MQTTSubscriber()
+            if self._mqtt_subscriber.available:
+                self._mqtt_subscriber.start()
+                mqtt_store = self._mqtt_subscriber.store
+            else:
+                self._mqtt_subscriber = None
+
         if config.get("enable_meshtastic", True):
             self._collectors["meshtastic"] = MeshtasticCollector(
-                cache_ttl_seconds=cache_ttl
+                cache_ttl_seconds=cache_ttl,
+                mqtt_store=mqtt_store,
             )
 
         if config.get("enable_reticulum", True):
@@ -97,6 +110,12 @@ class DataAggregator:
         if not collector:
             return make_feature_collection([], source_name)
         return collector.collect()
+
+    def get_topology_links(self) -> List[Dict[str, Any]]:
+        """Get topology link data from MQTT subscriber."""
+        if self._mqtt_subscriber:
+            return self._mqtt_subscriber.store.get_topology_links()
+        return []
 
     def clear_all_caches(self) -> None:
         for collector in self._collectors.values():
