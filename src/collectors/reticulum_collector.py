@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .base import BaseCollector, make_feature, make_feature_collection
+from .base import BaseCollector, make_feature, make_feature_collection, validate_coordinates
 
 logger = logging.getLogger(__name__)
 
@@ -142,12 +142,10 @@ class ReticulumCollector(BaseCollector):
 
     def _parse_rns_interface(self, iface: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Parse an RNS interface entry into a GeoJSON feature."""
-        lat = iface.get("latitude")
-        lon = iface.get("longitude")
-        if lat is None or lon is None:
+        coords = validate_coordinates(iface.get("latitude"), iface.get("longitude"))
+        if coords is None:
             return None
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            return None
+        lat, lon = coords
 
         iface_name = iface.get("name", "Unknown")
         iface_type = iface.get("type", "unknown").lower()
@@ -215,17 +213,10 @@ class ReticulumCollector(BaseCollector):
                 lat = pos.get("latitude") or pos.get("lat")
                 lon = pos.get("longitude") or pos.get("lon")
 
-        if lat is None or lon is None:
+        coords = validate_coordinates(lat, lon)
+        if coords is None:
             return None
-
-        try:
-            lat = float(lat)
-            lon = float(lon)
-        except (ValueError, TypeError):
-            return None
-
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            return None
+        lat, lon = coords
 
         # Extract identity
         node_id = (
