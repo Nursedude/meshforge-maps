@@ -3,13 +3,19 @@ MeshForge Maps - Reticulum / RMAP Data Collector
 
 Collects node data from Reticulum network sources:
   1. Local RNS path table (rnstatus --json via localhost:37428)
-  2. MeshForge unified node tracker cache (RNS nodes)
-  3. RMAP.world data (rmap.world - community map of RNS nodes)
+  2. Reticulum Community Hub (RCH) API -- telemetry + node data
+  3. MeshForge unified node tracker cache (RNS nodes)
+  4. RMAP.world data (rmap.world - community map of RNS nodes)
 
 RMAP.world (https://rmap.world) tracks ~306 nodes including:
   - RNodes (LoRa), NomadNet, RNSD, TCP, I2C, TNC, RetiBBS, LXMF
   - TCP transport interface at rmap.world:4242
-  - No public REST API currently; future GitHub repo planned
+
+Reticulum Community Hub (RCH) by FreeTAKTeam exposes a FastAPI northbound
+REST API for telemetry collection and node management over LXMF.
+  - GitHub: https://github.com/FreeTAKTeam/Reticulum-Telemetry-Hub
+  - PyPI: ReticulumCommunityHub
+  - API: /docs (Swagger) on configured host:port
 
 Reticulum nodes use cryptographic destination hashes (128-bit SHA-256 derived)
 for identity. Privacy-first design: no source addresses in packets.
@@ -22,6 +28,8 @@ import logging
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from .base import BaseCollector, make_feature, make_feature_collection
 
@@ -30,6 +38,10 @@ logger = logging.getLogger(__name__)
 # MeshForge RNS cache locations
 RNS_CACHE_PATH = Path.home() / ".local" / "share" / "meshforge" / "rns_nodes.json"
 NODE_CACHE_PATH = Path.home() / ".local" / "share" / "meshforge" / "node_cache.json"
+
+# Reticulum Community Hub (RCH) API defaults
+RCH_DEFAULT_HOST = "localhost"
+RCH_DEFAULT_PORT = 8000
 
 # RNS node type mapping for display
 RNS_NODE_TYPES = {
@@ -48,9 +60,20 @@ RNS_NODE_TYPES = {
 
 
 class ReticulumCollector(BaseCollector):
-    """Collects Reticulum node data from local RNS and cached sources."""
+    """Collects Reticulum node data from local RNS, RCH API, and caches."""
 
     source_name = "reticulum"
+
+    def __init__(
+        self,
+        rch_host: str = RCH_DEFAULT_HOST,
+        rch_port: int = RCH_DEFAULT_PORT,
+        rch_api_key: Optional[str] = None,
+        cache_ttl_seconds: int = 900,
+    ):
+        super().__init__(cache_ttl_seconds)
+        self._rch_base = f"http://{rch_host}:{rch_port}"
+        self._rch_api_key = rch_api_key
 
     def _fetch(self) -> Dict[str, Any]:
         features: List[Dict[str, Any]] = []
@@ -64,7 +87,15 @@ class ReticulumCollector(BaseCollector):
                 seen_ids.add(fid)
                 features.append(f)
 
-        # Source 2: MeshForge RNS node cache
+        # Source 2: Reticulum Community Hub (RCH) API
+        rch_nodes = self._fetch_from_rch()
+        for f in rch_nodes:
+            fid = f["properties"].get("id")
+            if fid and fid not in seen_ids:
+                seen_ids.add(fid)
+                features.append(f)
+
+        # Source 3: MeshForge RNS node cache
         cache_nodes = self._fetch_from_cache()
         for f in cache_nodes:
             fid = f["properties"].get("id")
@@ -72,7 +103,7 @@ class ReticulumCollector(BaseCollector):
                 seen_ids.add(fid)
                 features.append(f)
 
-        # Source 3: MeshForge unified node cache (RNS entries)
+        # Source 4: MeshForge unified node cache (RNS entries)
         unified_nodes = self._fetch_from_unified_cache()
         for f in unified_nodes:
             fid = f["properties"].get("id")
@@ -133,6 +164,93 @@ class ReticulumCollector(BaseCollector):
             is_online=iface.get("status") == "up",
             description=iface.get("description", ""),
             altitude=iface.get("height"),
+        )
+
+    def _fetch_from_rch(self) -> List[Dict[str, Any]]:
+        """Fetch node/telemetry data from Reticulum Community Hub (RCH) API.
+
+        RCH (FreeTAKTeam/Reticulum-Telemetry-Hub) exposes a FastAPI northbound
+        REST API. Typical endpoints:
+          - GET /api/v1/nodes       -> list of known nodes
+          - GET /api/v1/telemetry   -> telemetry data with positions
+          - GET /api/v1/subscribers -> subscriber registry
+
+        The API auto-documents at /docs (Swagger UI).
+        """
+        features = []
+        # Try telemetry endpoint first (has position data)
+        for endpoint in ("/api/v1/telemetry", "/api/v1/nodes"):
+            try:
+                url = f"{self._rch_base}{endpoint}"
+                headers = {"Accept": "application/json"}
+                if self._rch_api_key:
+                    headers["X-API-Key"] = self._rch_api_key
+                req = Request(url, headers=headers)
+                with urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+
+                nodes = data if isinstance(data, list) else data.get("items", data.get("nodes", []))
+                for node in nodes:
+                    feature = self._parse_rch_node(node)
+                    if feature:
+                        features.append(feature)
+
+                if features:
+                    logger.debug("RCH API (%s) returned %d nodes", endpoint, len(features))
+                    break  # Got data, no need to try next endpoint
+            except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
+                logger.debug("RCH API %s unavailable: %s", endpoint, e)
+        return features
+
+    def _parse_rch_node(self, node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Parse a node from RCH API response into a GeoJSON feature."""
+        # RCH telemetry may include position in various formats
+        lat = node.get("latitude") or node.get("lat")
+        lon = node.get("longitude") or node.get("lon")
+
+        # Position may be nested under telemetry or location
+        if lat is None or lon is None:
+            pos = node.get("position", node.get("location", node.get("telemetry", {})))
+            if isinstance(pos, dict):
+                lat = pos.get("latitude") or pos.get("lat")
+                lon = pos.get("longitude") or pos.get("lon")
+
+        if lat is None or lon is None:
+            return None
+
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except (ValueError, TypeError):
+            return None
+
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return None
+
+        # Extract identity
+        node_id = (
+            node.get("destination_hash")
+            or node.get("hash")
+            or node.get("identity")
+            or node.get("id", "")
+        )
+        name = node.get("display_name") or node.get("name") or str(node_id)[:16]
+        node_type = node.get("type", "unknown").lower()
+        display_type = RNS_NODE_TYPES.get(node_type, node_type)
+
+        return make_feature(
+            node_id=str(node_id),
+            lat=lat,
+            lon=lon,
+            network="reticulum",
+            name=name,
+            node_type=display_type,
+            rns_interface_type=node_type,
+            is_online=node.get("online", node.get("is_online")),
+            last_seen=node.get("last_seen", node.get("updated_at")),
+            description=node.get("description", ""),
+            altitude=node.get("altitude") or node.get("height"),
+            source="rch",
         )
 
     def _fetch_from_cache(self) -> List[Dict[str, Any]]:

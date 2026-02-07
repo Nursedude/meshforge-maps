@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script src="https://unpkg.com/d3@7/dist/d3.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -374,6 +375,12 @@
             <span class="layer-color" style="background:#4fc3f7"></span>
             <span class="layer-label">Marker Clustering</span>
         </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="overlayTopology" onchange="toggleTopology()">
+            <span class="layer-color" style="background:#29b6f6"></span>
+            <span class="layer-label">Topology Links</span>
+            <span class="layer-count" id="countLinks">0</span>
+        </label>
     </div>
 
     <div class="panel-section" id="weatherSection">
@@ -476,6 +483,8 @@
     let clusterGroup;
     let directGroup;        // non-clustered layer group
     let terminatorLayer;
+    let topologyLayer;      // Leaflet layer group for topology links
+    let showTopology = false;
     let useClustering = true;
 
     // Per-network layer groups (for toggle visibility)
@@ -869,18 +878,114 @@
     }
 
     // =========================================================================
+    // Topology / Link Visualization
+    // =========================================================================
+
+    function toggleTopology() {
+        showTopology = document.getElementById('overlayTopology').checked;
+        if (showTopology) {
+            loadTopologyData();
+        } else if (topologyLayer) {
+            map.removeLayer(topologyLayer);
+            topologyLayer = null;
+            document.getElementById('countLinks').textContent = '0';
+        }
+    }
+
+    async function loadTopologyData() {
+        try {
+            const resp = await fetch(API_BASE + '/api/topology');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            renderTopologyLinks(data.links || []);
+        } catch (e) {
+            console.debug('Topology data unavailable:', e);
+        }
+    }
+
+    function renderTopologyLinks(links) {
+        if (topologyLayer) {
+            map.removeLayer(topologyLayer);
+        }
+        topologyLayer = L.layerGroup();
+
+        for (const link of links) {
+            if (!link.source_lat || !link.target_lat) continue;
+
+            // SNR-based styling
+            const snr = link.snr || 0;
+            let linkColor = '#29b6f6';    // default cyan
+            let linkWeight = 1.5;
+            let linkOpacity = 0.5;
+
+            if (snr >= 10) {
+                linkColor = '#66bb6a'; linkWeight = 2.5; linkOpacity = 0.8;
+            } else if (snr >= 5) {
+                linkColor = '#ffa726'; linkWeight = 2; linkOpacity = 0.7;
+            } else if (snr > 0) {
+                linkColor = '#ef5350'; linkWeight = 1.5; linkOpacity = 0.6;
+            }
+
+            const line = L.polyline(
+                [[link.source_lat, link.source_lon], [link.target_lat, link.target_lon]],
+                {
+                    color: linkColor,
+                    weight: linkWeight,
+                    opacity: linkOpacity,
+                    dashArray: snr > 0 ? null : '4 6',
+                    interactive: true,
+                }
+            );
+
+            // Popup for link details
+            const snrText = snr ? snr.toFixed(1) + ' dB' : 'unknown';
+            line.bindPopup(
+                `<div class="popup-title" style="color:#29b6f6">Mesh Link</div>` +
+                `<div class="popup-row"><span class="popup-key">From</span><span class="popup-val">${esc(link.source)}</span></div>` +
+                `<div class="popup-row"><span class="popup-key">To</span><span class="popup-val">${esc(link.target)}</span></div>` +
+                `<div class="popup-row"><span class="popup-key">SNR</span><span class="popup-val">${snrText}</span></div>`
+            );
+
+            topologyLayer.addLayer(line);
+        }
+
+        topologyLayer.addTo(map);
+        document.getElementById('countLinks').textContent = links.length;
+    }
+
+    // =========================================================================
+    // Service Worker Registration (Offline Tile Caching)
+    // =========================================================================
+
+    function registerServiceWorker() {
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw-tiles.js', { scope: '/' })
+                .then(function(reg) {
+                    console.debug('SW registered:', reg.scope);
+                })
+                .catch(function(err) {
+                    console.debug('SW registration skipped:', err.message);
+                });
+        }
+    }
+
+    // =========================================================================
     // Auto-refresh
     // =========================================================================
 
     setInterval(function() {
         loadNodeData();
+        if (showTopology) loadTopologyData();
     }, 5 * 60 * 1000); // Refresh every 5 minutes
 
     // =========================================================================
     // Init
     // =========================================================================
 
-    document.addEventListener('DOMContentLoaded', initMap);
+    document.addEventListener('DOMContentLoaded', function() {
+        initMap();
+        registerServiceWorker();
+    });
 </script>
 
 </body>

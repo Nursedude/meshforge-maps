@@ -46,6 +46,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "/api/tile-providers": self._serve_tile_providers,
             "/api/sources": self._serve_sources,
             "/api/overlay": self._serve_overlay,
+            "/api/topology": self._serve_topology,
             "/api/status": self._serve_status,
         }
 
@@ -123,13 +124,25 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         overlay = data.get("properties", {}).get("overlay_data", {})
         self._send_json(overlay)
 
+    def _serve_topology(self) -> None:
+        """Serve topology link data for D3.js force graph."""
+        if not self.aggregator:
+            self._send_json({"links": []})
+            return
+        links = self.aggregator.get_topology_links()
+        self._send_json({"links": links, "link_count": len(links)})
+
     def _serve_status(self) -> None:
         """Serve server health status."""
+        mqtt_status = "unavailable"
+        if self.aggregator and self.aggregator._mqtt_subscriber:
+            mqtt_status = "connected" if self.aggregator._mqtt_subscriber._running else "stopped"
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
-            "version": "0.1.0",
+            "version": "0.2.0-beta",
             "sources": self.config.get_enabled_sources() if self.config else [],
+            "mqtt_live": mqtt_status,
         })
 
     def _send_json(self, data: Any, status: int = 200) -> None:

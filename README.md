@@ -1,12 +1,23 @@
 # meshforge-maps
 
-**Maps extension for [MeshForge](https://github.com/Nursedude/meshforge)** -- a unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, HamClock propagation data, and AREDN into a single configurable Leaflet.js web map.
+![Version](https://img.shields.io/badge/version-0.2.0--beta-blue)
+![Status](https://img.shields.io/badge/status-beta-orange)
+![License](https://img.shields.io/badge/license-GPL--3.0-green)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen)
+![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
-MeshForge Maps is a MeshForge extension plugin (`type: extension`) that provides a dedicated NOC-style mapping interface for mesh network operators, emergency communications teams, and ham radio enthusiasts.
+**Maps extension for [MeshForge](https://github.com/Nursedude/meshforge)** -- a unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, HamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, and offline tile caching.
+
+> This repo is an extension of [Nursedude/meshforge](https://github.com/Nursedude/meshforge) -- env updates will come from that repo.
 
 ## Features
 
-- **Multi-source data aggregation** -- collects node data from Meshtastic (MQTT/meshtasticd), Reticulum (rnstatus/RMAP), AREDN (sysinfo API), and HamClock/NOAA propagation feeds
+- **Multi-source data aggregation** -- collects node data from Meshtastic (MQTT/meshtasticd), Reticulum (rnstatus/RMAP/RCH), AREDN (sysinfo API), and HamClock/NOAA propagation feeds
+- **Live MQTT subscription** -- real-time Meshtastic node tracking via `mqtt.meshtastic.org` with protobuf decoding (POSITION_APP, NODEINFO_APP, TELEMETRY_APP, NEIGHBORINFO_APP)
+- **Reticulum Community Hub (RCH) integration** -- telemetry proxy via FreeTAKTeam's FastAPI northbound REST API
+- **Topology/link visualization** -- D3.js-powered mesh link overlay showing node-to-node connections with SNR-based coloring
+- **Offline tile caching** -- service worker (sw-tiles.js) caches map tiles for offline/field use with LRU eviction
 - **Configurable tile layers** -- CartoDB Dark, OpenStreetMap, OpenTopoMap, Esri Satellite, Esri Topo, Stadia Terrain
 - **Network-specific layer toggles** -- show/hide Meshtastic (green), Reticulum (purple), AREDN (orange) independently
 - **Space weather overlay** -- solar flux index, Kp index, solar wind speed, HF band condition assessment from NOAA SWPC
@@ -14,57 +25,159 @@ MeshForge Maps is a MeshForge extension plugin (`type: extension`) that provides
 - **Marker clustering** -- toggleable clustering for dense node areas
 - **Dark theme** -- matches MeshForge core UI (dark CartoDB + cyan accents)
 - **Standalone mode** -- runs independently or as a MeshForge plugin
+- **Zero required dependencies** -- stdlib only; paho-mqtt and meshtastic are optional for live MQTT
 
-## Architecture
+## System Architecture
 
+```mermaid
+graph TB
+    subgraph External["External Data Sources"]
+        MQTT["mqtt.meshtastic.org<br/>msh/# topics"]
+        MESHTD["meshtasticd<br/>:4403 HTTP API"]
+        RNS["rnstatus<br/>local RNS instance"]
+        RCH["Reticulum Community Hub<br/>FastAPI :8000"]
+        NOAA["NOAA SWPC<br/>Space Weather APIs"]
+        HAMCLK["HamClock/OpenHamClock<br/>:8080"]
+        AREDN_NODES["AREDN Mesh Nodes<br/>sysinfo.json API"]
+    end
+
+    subgraph Core["meshforge-maps Core"]
+        MQTTSUB["MQTTSubscriber<br/>paho-mqtt + protobuf"]
+        STORE["MQTTNodeStore<br/>thread-safe in-memory"]
+        MC["MeshtasticCollector"]
+        RC["ReticulumCollector"]
+        HC["HamClockCollector"]
+        AC["AREDNCollector"]
+        AGG["DataAggregator<br/>merge + dedup"]
+        CFG["MapsConfig<br/>settings.json"]
+    end
+
+    subgraph Server["HTTP Server :8808"]
+        HANDLER["MapRequestHandler"]
+        API_GEO["/api/nodes/geojson"]
+        API_TOPO["/api/topology"]
+        API_OVR["/api/overlay"]
+        API_STAT["/api/status"]
+    end
+
+    subgraph Frontend["Leaflet.js Frontend"]
+        MAP["Map View<br/>Leaflet + MarkerCluster"]
+        TOPO["Topology Overlay<br/>D3.js link lines"]
+        SW["sw-tiles.js<br/>Offline Tile Cache"]
+        PANEL["Control Panel<br/>layers, weather, style"]
+    end
+
+    MQTT -->|ServiceEnvelope protobuf| MQTTSUB
+    MQTTSUB --> STORE
+    STORE --> MC
+    MESHTD --> MC
+    RNS --> RC
+    RCH -->|REST API| RC
+    NOAA --> HC
+    HAMCLK --> HC
+    AREDN_NODES --> AC
+
+    MC --> AGG
+    RC --> AGG
+    HC --> AGG
+    AC --> AGG
+    CFG --> AGG
+
+    AGG --> HANDLER
+    HANDLER --> API_GEO
+    HANDLER --> API_TOPO
+    HANDLER --> API_OVR
+    HANDLER --> API_STAT
+
+    API_GEO --> MAP
+    API_TOPO --> TOPO
+    API_OVR --> PANEL
+    SW -.->|cache-first| MAP
 ```
-meshforge-maps/
-├── manifest.json               # MeshForge plugin manifest
-├── src/
-│   ├── main.py                 # Plugin entry point (MeshForge Plugin class)
-│   ├── map_server.py           # HTTP server (Flask-free, stdlib only)
-│   ├── collectors/
-│   │   ├── base.py             # BaseCollector ABC, GeoJSON helpers
-│   │   ├── aggregator.py       # Multi-source merge with dedup
-│   │   ├── meshtastic_collector.py   # meshtasticd API + MQTT cache
-│   │   ├── reticulum_collector.py    # rnstatus + RMAP + node cache
-│   │   ├── hamclock_collector.py     # NOAA SWPC + HamClock API + terminator
-│   │   └── aredn_collector.py        # AREDN sysinfo.json API + cache
-│   └── utils/
-│       └── config.py           # Config management, tile providers, colors
-├── web/
-│   └── meshforge_maps.html     # Leaflet.js frontend (single-file)
-├── config/                     # User config directory
-├── tests/                      # Test suite
-└── docs/                       # Additional documentation
+
+## Data Flow
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Server as MapServer :8808
+    participant Agg as DataAggregator
+    participant MQTT as MQTTSubscriber
+    participant Mesh as meshtasticd
+    participant RCH as RCH API
+    participant NOAA as NOAA SWPC
+
+    Browser->>Server: GET /api/nodes/geojson
+    Server->>Agg: collect_all()
+
+    par Parallel Collection
+        Agg->>Mesh: HTTP /api/v1/nodes
+        Agg->>MQTT: get_all_nodes()
+        Agg->>RCH: GET /api/v1/telemetry
+        Agg->>NOAA: GET solar flux, Kp, wind
+    end
+
+    Agg-->>Server: Merged GeoJSON FeatureCollection
+    Server-->>Browser: 200 OK (GeoJSON)
+
+    Browser->>Server: GET /api/topology
+    Server->>MQTT: get_topology_links()
+    Server-->>Browser: 200 OK (links)
+
+    Note over Browser: Renders markers + topology<br/>on Leaflet map
+```
+
+## Collector Priority
+
+```mermaid
+flowchart LR
+    subgraph Meshtastic
+        M1["1. meshtasticd API"] --> M2["2. Live MQTT"] --> M3["3. MQTT Cache File"]
+    end
+    subgraph Reticulum
+        R1["1. rnstatus --json"] --> R2["2. RCH API"] --> R3["3. RNS Cache"] --> R4["4. Unified Cache"]
+    end
+    subgraph AREDN
+        A1["1. Node sysinfo API"] --> A2["2. AREDN Cache"] --> A3["3. Unified Cache"]
+    end
+    subgraph HamClock
+        H1["1. NOAA SWPC APIs"] --> H2["2. Local HamClock"]
+    end
 ```
 
 ## Data Sources
 
 | Source | Protocol | Data | Status |
 |--------|----------|------|--------|
-| **Meshtastic** | HTTP API (meshtasticd :4403) + MQTT cache | Node positions, telemetry, battery, SNR | Active |
-| **Reticulum/RMAP** | rnstatus --json + node cache | RNS interfaces, node types, transport info | Active |
-| **HamClock/NOAA** | NOAA SWPC REST APIs | Solar flux, Kp index, band conditions, terminator | Active |
-| **AREDN** | sysinfo.json per-node API | Node locations, firmware, link quality | Active |
+| **Meshtastic** | HTTP API (meshtasticd :4403) + Live MQTT + cache | Node positions, telemetry, battery, SNR, neighbors | Active |
+| **Reticulum/RMAP** | rnstatus --json + RCH REST API + node cache | RNS interfaces, node types, transport info | Active |
+| **HamClock/NOAA** | NOAA SWPC REST APIs + local HamClock | Solar flux, Kp index, band conditions, terminator | Active |
+| **AREDN** | sysinfo.json per-node API + cache | Node locations, firmware, link quality | Active |
 
-### Meshtastic
-Nodes from local meshtasticd HTTP API (`localhost:4403/api/v1/nodes`) and MeshForge's MQTT subscriber cache. Supports POSITION_APP, NODEINFO_APP, and TELEMETRY_APP data.
+### Meshtastic (Live MQTT)
 
-### Reticulum / RMAP
-Local RNS path table via `rnstatus -d --json` and MeshForge node caches. [RMAP.world](https://rmap.world) tracks ~306 Reticulum nodes globally (RNodes, NomadNet, RNSD, TCP, TNC, RetiBBS). See [Discussion #743](https://github.com/markqvist/Reticulum/discussions/743) for RMAP project details. No public API currently -- future integration planned when available.
+Real-time node tracking via the public Meshtastic MQTT broker at `mqtt.meshtastic.org`. Subscribes to `msh/#` topic tree and decodes `ServiceEnvelope` protobuf packets. Processes POSITION_APP, NODEINFO_APP, TELEMETRY_APP, and NEIGHBORINFO_APP for live map updates and topology links.
+
+**Optional dependencies:** `paho-mqtt`, `meshtastic` (for protobuf). Falls back to JSON mode or cache file without them.
+
+Reference: [meshtastic.org/docs/software/integrations/mqtt](https://meshtastic.org/docs/software/integrations/mqtt/) | [liamcottle/meshtastic-map](https://github.com/liamcottle/meshtastic-map)
+
+### Reticulum / RMAP / RCH
+
+Local RNS path table via `rnstatus -d --json` and [Reticulum Community Hub (RCH)](https://github.com/FreeTAKTeam/Reticulum-Telemetry-Hub) FastAPI endpoints. [RMAP.world](https://rmap.world) tracks ~306 Reticulum nodes globally. See [Discussion #743](https://github.com/markqvist/Reticulum/discussions/743).
 
 ### HamClock / Propagation
+
 Space weather from [NOAA SWPC](https://services.swpc.noaa.gov/) public JSON APIs. Optional local HamClock instance on port 8080. [OpenHamClock](https://github.com/accius/openhamclock) is the recommended successor.
 
 ### AREDN
-Per-node sysinfo API at `http://<node>.local.mesh/a/sysinfo?lqm=1`. Requires mesh network access. See [AREDN docs](https://docs.arednmesh.org/en/latest/arednHow-toGuides/devtools.html).
+
+Per-node sysinfo API at `http://<node>.local.mesh/a/sysinfo?lqm=1`. Requires mesh network access. Reference: [AREDN World Map](https://worldmap.arednmesh.org/) | [AREDN docs](https://docs.arednmesh.org/en/latest/arednHow-toGuides/devtools.html)
 
 ## Installation
 
 ### As MeshForge Plugin
 ```bash
-# Clone into MeshForge plugins directory
 git clone https://github.com/Nursedude/meshforge-maps.git \
     ~/.config/meshforge/plugins/meshforge-maps/
 
@@ -79,7 +192,13 @@ python -m src.main
 # Opens http://127.0.0.1:8808
 ```
 
-No external Python dependencies required -- uses only stdlib (`http.server`, `json`, `urllib`, `subprocess`, `threading`).
+### Optional: Live MQTT Support
+```bash
+pip install paho-mqtt meshtastic
+# Enables real-time Meshtastic node tracking via mqtt.meshtastic.org
+```
+
+No external Python dependencies required for core functionality -- uses only stdlib (`http.server`, `json`, `urllib`, `subprocess`, `threading`).
 
 ## Configuration
 
@@ -105,11 +224,31 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `/` | GET | Map HTML page |
 | `/api/nodes/geojson` | GET | All nodes (aggregated GeoJSON) |
 | `/api/nodes/<source>` | GET | Single source GeoJSON |
+| `/api/topology` | GET | Mesh link/neighbor data for D3.js |
 | `/api/config` | GET | Current configuration |
 | `/api/tile-providers` | GET | Available tile layers |
 | `/api/sources` | GET | Enabled data sources |
 | `/api/overlay` | GET | Space weather + terminator data |
-| `/api/status` | GET | Server health check |
+| `/api/status` | GET | Server health + MQTT status |
+
+## Offline Tile Caching
+
+The service worker (`sw-tiles.js`) provides offline map tile access:
+
+```mermaid
+flowchart LR
+    REQ["Tile Request"] --> SW["Service Worker"]
+    SW -->|cache hit| CACHE["CacheStorage<br/>meshforge-maps-tiles-v1"]
+    SW -->|cache miss| NET["Network Fetch"]
+    NET -->|store| CACHE
+    CACHE -->|LRU eviction<br/>at 2000 tiles| EVICT["Remove oldest"]
+    CACHE --> RESP["Response to Map"]
+```
+
+- **Tiles:** Cache-first strategy (instant offline response)
+- **API:** Network-first with cache fallback
+- **CDN assets:** Cache-first (Leaflet, D3, MarkerCluster)
+- **Max cache:** 2000 tiles with LRU eviction
 
 ## Tile Providers
 
@@ -121,6 +260,14 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `esri_satellite` | Esri Satellite | RF line-of-sight / terrain |
 | `esri_topo` | Esri Topographic | Field operations |
 | `stadia_terrain` | Stadia Terrain | Landscape overview |
+
+## Testing
+
+```bash
+python -m pytest tests/ -v
+# 85 tests covering: base helpers, config, all 4 collectors,
+# aggregator deduplication, MQTT node store, topology links
+```
 
 ## Contributing
 
@@ -141,6 +288,9 @@ Follow [MeshForge contributing guidelines](https://github.com/Nursedude/meshforg
 
 - [MeshForge](https://github.com/Nursedude/meshforge) -- Turnkey Mesh Network Operations Center
 - [RMAP.world](https://rmap.world) -- Reticulum Network World Map
+- [Reticulum Community Hub](https://github.com/FreeTAKTeam/Reticulum-Telemetry-Hub) -- RCH FastAPI telemetry hub
+- [meshtastic-map](https://github.com/liamcottle/meshtastic-map) -- Meshtastic MQTT map (reference implementation)
+- [AREDN World Map](https://worldmap.arednmesh.org/) -- Global AREDN node visualization
 - [OpenHamClock](https://github.com/accius/openhamclock) -- Ham radio dashboard (HamClock successor)
 - [AREDN](https://www.arednmesh.org/) -- Amateur Radio Emergency Data Network
 - [Meshtastic](https://meshtastic.org/) -- LoRa mesh networking platform
