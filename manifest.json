@@ -1,8 +1,8 @@
 {
     "id": "org.meshforge.extension.maps",
     "name": "MeshForge Maps",
-    "version": "0.1.0",
-    "description": "Unified multi-source mesh network map aggregating Meshtastic, Reticulum/RMAP, HamClock, and AREDN data with configurable tile layers",
+    "version": "0.2.0-beta",
+    "description": "Unified multi-source mesh network map aggregating Meshtastic, Reticulum/RMAP, HamClock, and AREDN data with live MQTT, topology visualization, and offline tile caching",
     "author": "MeshForge Community",
     "type": "extension",
     "entry_point": "src/main.py",
@@ -21,9 +21,17 @@
         "aredn",
         "leaflet",
         "geojson",
-        "noc"
+        "noc",
+        "mqtt",
+        "topology",
+        "d3",
+        "offline"
     ],
     "dependencies": [],
+    "optional_dependencies": [
+        "paho-mqtt",
+        "meshtastic"
+    ],
     "permissions": [
         "network_access"
     ],
