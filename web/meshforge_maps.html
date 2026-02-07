@@ -802,14 +802,17 @@
             const network = props.network || 'unknown';
             const color = NETWORK_COLORS[network] || '#78909c';
 
-            // Create marker with custom icon
+            // Create marker with visual staleness indicator
+            // Upstream: offline nodes render at 40% opacity with grayscale
+            const isStale = props.is_online === false;
             const marker = L.circleMarker([lat, lon], {
-                radius: 7,
+                radius: isStale ? 5 : 7,
                 fillColor: color,
-                color: props.is_online ? color : '#546e7a',
-                weight: props.is_online ? 2 : 1,
-                opacity: props.is_online ? 1.0 : 0.5,
-                fillOpacity: props.is_online === false ? 0.3 : 0.7,
+                color: isStale ? '#546e7a' : color,
+                weight: isStale ? 1 : 2,
+                opacity: isStale ? 0.4 : 1.0,
+                fillOpacity: isStale ? 0.2 : 0.7,
+                className: isStale ? 'node-marker-stale' : '',
             });
 
             // Bind popup
@@ -864,20 +867,43 @@
         addRow('Type', props.node_type, '');
         addRow('Hardware', props.hardware, '');
         addRow('Role', props.role, '');
+
+        // Relay indicator
+        if (props.is_relay) {
+            rows.push(`<div class="popup-row"><span class="popup-key">Relay</span><span class="popup-val" style="color:#ffa726">Yes</span></div>`);
+        }
+        if (props.via_mqtt) {
+            rows.push(`<div class="popup-row"><span class="popup-key">Via</span><span class="popup-val" style="color:#42a5f5">MQTT</span></div>`);
+        }
+
         if (props.battery != null) addRow('Battery', props.battery, '%');
         if (props.voltage != null) addRow('Voltage', Number(props.voltage).toFixed(2), 'V');
         if (props.snr != null) addRow('SNR', props.snr, ' dB');
         if (props.altitude != null) addRow('Altitude', props.altitude, 'm');
         if (props.hops_away != null) addRow('Hops', props.hops_away, '');
+
+        // Channel utilization warning (upstream improvement)
+        if (props.channel_util != null) {
+            const cu = Number(props.channel_util);
+            const cuColor = cu > 50 ? '#ef5350' : cu > 25 ? '#ffa726' : '#66bb6a';
+            rows.push(`<div class="popup-row"><span class="popup-key">Ch Util</span><span class="popup-val" style="color:${cuColor}">${cu.toFixed(1)}%</span></div>`);
+        }
+        if (props.air_util_tx != null) {
+            addRow('Air TX', Number(props.air_util_tx).toFixed(1), '%');
+        }
+
+        // Environmental sensors
         if (props.temperature != null) addRow('Temp', Number(props.temperature).toFixed(1), '\u00b0C');
         if (props.humidity != null) addRow('Humidity', Number(props.humidity).toFixed(0), '%');
+        if (props.pressure != null) addRow('Pressure', Number(props.pressure).toFixed(1), ' hPa');
         addRow('Firmware', props.firmware, '');
 
-        // AREDN link type indicator
+        // AREDN link type indicator with color coding
         if (props.link_type) {
             const ltColor = props.link_type === 'RF' ? '#ff7043' :
                             props.link_type === 'DTD' ? '#66bb6a' :
-                            props.link_type === 'TUN' ? '#42a5f5' : '#78909c';
+                            props.link_type === 'TUN' ? '#42a5f5' :
+                            props.link_type === 'XLINK' ? '#ab47bc' : '#78909c';
             rows.push(`<div class="popup-row"><span class="popup-key">Link</span><span class="popup-val" style="color:${ltColor}">${esc(props.link_type)}</span></div>`);
         }
         addRow('Info', props.description, '');
@@ -1175,6 +1201,25 @@
     }
 
     // =========================================================================
+    // =========================================================================
+    // Health Check (data staleness indicator)
+    // =========================================================================
+
+    async function checkDataHealth() {
+        try {
+            const resp = await fetch(API_BASE + '/api/status');
+            if (!resp.ok) return;
+            const status = await resp.json();
+            if (status.data_stale) {
+                setConnectionStatus('error', 'Stale Data');
+                showToast('Warning: data is stale -- sources may be unreachable', true);
+            }
+        } catch (e) {
+            // Silently ignore health check failures
+        }
+    }
+
+    // =========================================================================
     // Auto-refresh
     // =========================================================================
 
@@ -1186,6 +1231,9 @@
         });
         if (showTopology) loadTopologyData();
     }, 5 * 60 * 1000); // Refresh every 5 minutes
+
+    // Periodic health check (every 2 minutes)
+    setInterval(checkDataHealth, 2 * 60 * 1000);
 
     // =========================================================================
     // Init

@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .base import BaseCollector, make_feature, make_feature_collection
+from .base import BaseCollector, make_feature, make_feature_collection, validate_coordinates
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,9 @@ class AREDNCollector(BaseCollector):
         and not some other HTTP service on the same port.
         """
         features = []
-        url = f"http://{target}/a/sysinfo?lqm=1"
+        # AREDN API runs on port 8080 (not port 80)
+        host = target if ":" in target else f"{target}:8080"
+        url = f"http://{host}/a/sysinfo?lqm=1"
         try:
             req = Request(url, headers={
                 "Accept": "application/json",
@@ -125,17 +127,10 @@ class AREDNCollector(BaseCollector):
         self, data: Dict[str, Any], target: str
     ) -> Optional[Dict[str, Any]]:
         """Parse AREDN sysinfo.json response into a GeoJSON feature."""
-        lat = data.get("lat")
-        lon = data.get("lon")
-        if lat is None or lon is None:
+        coords = validate_coordinates(data.get("lat"), data.get("lon"))
+        if coords is None:
             return None
-        try:
-            lat = float(lat)
-            lon = float(lon)
-        except (ValueError, TypeError):
-            return None
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            return None
+        lat, lon = coords
 
         node_name = data.get("node", target)
         model = data.get("model", "")

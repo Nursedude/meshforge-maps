@@ -22,6 +22,7 @@ Reference: https://meshtastic.org/docs/software/integrations/mqtt/
 
 import json
 import logging
+import math
 import random
 import threading
 import time
@@ -83,6 +84,8 @@ def _safe_float(value: Any, low: float, high: float) -> Optional[float]:
         return None
     try:
         v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return None
         if not (low <= v <= high):
             return None
         return v
@@ -168,15 +171,16 @@ class MQTTNodeStore:
 
     def get_all_nodes(self) -> List[Dict[str, Any]]:
         """Return all non-stale nodes with valid coordinates."""
+        from .base import validate_coordinates
+
         now = int(time.time())
         with self._lock:
             result = []
             for node in self._nodes.values():
-                lat = node.get("latitude")
-                lon = node.get("longitude")
-                if lat is None or lon is None:
-                    continue
-                if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                coords = validate_coordinates(
+                    node.get("latitude"), node.get("longitude")
+                )
+                if coords is None:
                     continue
                 last_seen = node.get("last_seen", 0)
                 if (now - last_seen) > self._stale_seconds:
@@ -186,25 +190,34 @@ class MQTTNodeStore:
 
     def get_topology_links(self) -> List[Dict[str, Any]]:
         """Return neighbor/link data for topology visualization."""
+        from .base import validate_coordinates
+
         with self._lock:
             links = []
             for node_id, neighbors in self._neighbors.items():
                 source = self._nodes.get(node_id, {})
-                if not (source.get("latitude") and source.get("longitude")):
+                src_coords = validate_coordinates(
+                    source.get("latitude"), source.get("longitude")
+                )
+                if src_coords is None:
                     continue
                 for neighbor in neighbors:
                     nid = neighbor.get("node_id", "")
                     target = self._nodes.get(nid, {})
-                    if target.get("latitude") and target.get("longitude"):
-                        links.append({
-                            "source": node_id,
-                            "target": nid,
-                            "source_lat": source["latitude"],
-                            "source_lon": source["longitude"],
-                            "target_lat": target["latitude"],
-                            "target_lon": target["longitude"],
-                            "snr": neighbor.get("snr"),
-                        })
+                    tgt_coords = validate_coordinates(
+                        target.get("latitude"), target.get("longitude")
+                    )
+                    if tgt_coords is None:
+                        continue
+                    links.append({
+                        "source": node_id,
+                        "target": nid,
+                        "source_lat": src_coords[0],
+                        "source_lon": src_coords[1],
+                        "target_lat": tgt_coords[0],
+                        "target_lon": tgt_coords[1],
+                        "snr": neighbor.get("snr"),
+                    })
             return links
 
     @property

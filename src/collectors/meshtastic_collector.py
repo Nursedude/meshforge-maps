@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .base import BaseCollector, make_feature, make_feature_collection
+from .base import BaseCollector, make_feature, make_feature_collection, validate_coordinates
 
 logger = logging.getLogger(__name__)
 
@@ -102,17 +102,10 @@ class MeshtasticCollector(BaseCollector):
         lat = position.get("latitude") or position.get("latitudeI")
         lon = position.get("longitude") or position.get("longitudeI")
 
-        if lat is None or lon is None:
+        coords = validate_coordinates(lat, lon, convert_int=True)
+        if coords is None:
             return None
-
-        # meshtasticd may return integer lat/lon (latitudeI = lat * 1e7)
-        if isinstance(lat, int) and abs(lat) > 900:
-            lat = lat / 1e7
-        if isinstance(lon, int) and abs(lon) > 1800:
-            lon = lon / 1e7
-
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            return None
+        lat, lon = coords
 
         user = node.get("user", {})
         node_id = user.get("id", node.get("num", ""))
@@ -123,10 +116,13 @@ class MeshtasticCollector(BaseCollector):
         device_metrics = node.get("deviceMetrics", {}) or {}
         battery = device_metrics.get("batteryLevel")
         voltage = device_metrics.get("voltage")
+        channel_util = device_metrics.get("channelUtilization")
+        air_util_tx = device_metrics.get("airUtilTx")
 
         snr = node.get("snr")
         last_heard = node.get("lastHeard")
         hops_away = node.get("hopsAway")
+        via_mqtt = node.get("viaMqtt")
         is_online = None
         if last_heard:
             age_seconds = time.time() - last_heard
@@ -147,7 +143,11 @@ class MeshtasticCollector(BaseCollector):
             is_online=is_online,
             is_local=hops_away == 0 if hops_away is not None else None,
             is_gateway=role in ("ROUTER", "ROUTER_CLIENT") if role else None,
+            is_relay=role in ("ROUTER", "ROUTER_CLIENT", "REPEATER") if role else None,
             hops_away=hops_away,
+            via_mqtt=via_mqtt,
+            channel_util=channel_util,
+            air_util_tx=air_util_tx,
             last_seen=last_heard,
             altitude=position.get("altitude"),
         )
@@ -199,12 +199,10 @@ class MeshtasticCollector(BaseCollector):
         self, node_id: str, node: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """Parse a node from MQTT cache format."""
-        lat = node.get("latitude")
-        lon = node.get("longitude")
-        if lat is None or lon is None:
+        coords = validate_coordinates(node.get("latitude"), node.get("longitude"))
+        if coords is None:
             return None
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            return None
+        lat, lon = coords
 
         return make_feature(
             node_id=node_id,

@@ -6,11 +6,49 @@ Each collector outputs standardized GeoJSON FeatureCollections.
 """
 
 import logging
+import math
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def validate_coordinates(
+    lat: Any, lon: Any, convert_int: bool = False
+) -> Optional[Tuple[float, float]]:
+    """Validate and normalize GPS coordinates.
+
+    Handles NaN, Infinity, int-to-float conversion (latitudeI = lat * 1e7),
+    and out-of-range values. Returns (lat, lon) tuple or None if invalid.
+    """
+    if lat is None or lon is None:
+        return None
+
+    # Integer coordinate conversion (Meshtastic latitudeI format)
+    if convert_int:
+        if isinstance(lat, int) and abs(lat) > 900:
+            lat = lat / 1e7
+        if isinstance(lon, int) and abs(lon) > 1800:
+            lon = lon / 1e7
+
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except (ValueError, TypeError):
+        return None
+
+    # Guard against NaN and Infinity
+    if math.isnan(lat) or math.isnan(lon):
+        return None
+    if math.isinf(lat) or math.isinf(lon):
+        return None
+
+    # Range check
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+
+    return (lat, lon)
 
 
 def make_feature(
@@ -21,8 +59,16 @@ def make_feature(
     name: str = "",
     node_type: str = "",
     **extra_props: Any,
-) -> Dict[str, Any]:
-    """Create a standardized GeoJSON Feature for a mesh node."""
+) -> Optional[Dict[str, Any]]:
+    """Create a standardized GeoJSON Feature for a mesh node.
+
+    Returns None if coordinates are invalid (NaN, Infinity, out of range).
+    """
+    coords = validate_coordinates(lat, lon)
+    if coords is None:
+        return None
+    lat, lon = coords
+
     properties = {
         "id": node_id,
         "name": name or node_id,
