@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import threading
+import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -60,18 +61,28 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         }
 
         handler = routes.get(path)
-        if handler:
-            handler()
-        elif path.startswith("/api/nodes/"):
-            # /api/nodes/<source_name>
-            source = path.split("/")[-1]
-            self._serve_source_geojson(source)
-        else:
-            # Serve static files from web directory
-            web_dir = self._get_web_dir()
-            if web_dir:
-                self.directory = web_dir
-            super().do_GET()
+        try:
+            if handler:
+                handler()
+            elif path.startswith("/api/nodes/"):
+                # /api/nodes/<source_name>
+                source = path.split("/")[-1]
+                self._serve_source_geojson(source)
+            else:
+                # Serve static files from web directory
+                web_dir = self._get_web_dir()
+                if web_dir:
+                    self.directory = web_dir
+                super().do_GET()
+        except (BrokenPipeError, ConnectionResetError):
+            # Client disconnected before response completed -- expected
+            pass
+        except Exception as e:
+            logger.error("Request handler error for %s: %s", self.path, e)
+            try:
+                self._send_json({"error": "Internal server error"}, 500)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests."""
@@ -161,22 +172,34 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"links": links, "link_count": len(links)})
 
     def _serve_status(self) -> None:
-        """Serve server health status."""
+        """Serve server health status with uptime and node store stats."""
+        import time as _time
         aggregator = self._get_aggregator()
         config = self._get_config()
         mqtt_status = "unavailable"
+        mqtt_nodes = 0
         if aggregator and aggregator._mqtt_subscriber:
             mqtt_status = "connected" if aggregator._mqtt_subscriber._running else "stopped"
+            mqtt_nodes = aggregator._mqtt_subscriber.store.node_count
+        start_time = getattr(self.server, "_mf_start_time", None)
+        uptime = int(_time.time() - start_time) if start_time else None
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
             "version": "0.2.0-beta",
             "sources": config.get_enabled_sources() if config else [],
             "mqtt_live": mqtt_status,
+            "mqtt_node_count": mqtt_nodes,
+            "uptime_seconds": uptime,
         })
 
     def _send_json(self, data: Any, status: int = 200) -> None:
-        body = json.dumps(data, default=str).encode("utf-8")
+        try:
+            body = json.dumps(data, default=str).encode("utf-8")
+        except (TypeError, ValueError) as e:
+            logger.error("JSON serialization error: %s", e)
+            body = b'{"error": "serialization error"}'
+            status = 500
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-cache")
@@ -227,6 +250,7 @@ class MapServer:
                 self._server._mf_aggregator = self._aggregator  # type: ignore[attr-defined]
                 self._server._mf_config = self._config  # type: ignore[attr-defined]
                 self._server._mf_web_dir = self._web_dir  # type: ignore[attr-defined]
+                self._server._mf_start_time = time.time()  # type: ignore[attr-defined]
 
                 self._thread = threading.Thread(
                     target=self._server.serve_forever,

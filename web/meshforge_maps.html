@@ -367,6 +367,12 @@
             color: #ef5350;
         }
 
+        /* Stale/offline node visual indicator */
+        .node-marker-stale {
+            opacity: 0.4;
+            filter: grayscale(60%);
+        }
+
         /* Refresh button states */
         .refresh-btn {
             width: 100%;
@@ -516,6 +522,26 @@
     // =========================================================================
 
     const API_BASE = window.location.origin;
+
+    // Fetch with retry (exponential backoff) for API resilience
+    async function fetchWithRetry(url, retries, baseDelay) {
+        retries = retries || 2;
+        baseDelay = baseDelay || 1000;
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                const resp = await fetch(url);
+                if (resp.ok) return resp;
+                if (resp.status >= 500 && attempt < retries) {
+                    await new Promise(r => setTimeout(r, baseDelay * Math.pow(2, attempt)));
+                    continue;
+                }
+                return resp; // Return non-retryable errors as-is
+            } catch (e) {
+                if (attempt >= retries) throw e;
+                await new Promise(r => setTimeout(r, baseDelay * Math.pow(2, attempt)));
+            }
+        }
+    }
 
     // Network colors (matches meshforge core palette)
     const NETWORK_COLORS = {
@@ -733,7 +759,7 @@
         if (btn) btn.disabled = true;
 
         try {
-            const resp = await fetch(API_BASE + '/api/nodes/geojson');
+            const resp = await fetchWithRetry(API_BASE + '/api/nodes/geojson', 2, 1000);
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             const data = await resp.json();
             processGeoJSON(data);
@@ -827,40 +853,56 @@
     function buildPopup(props, color) {
         const rows = [];
 
-        if (props.node_type) {
-            rows.push(`<div class="popup-row"><span class="popup-key">Type</span><span class="popup-val">${esc(props.node_type)}</span></div>`);
+        // Helper: only add row if value is defined and non-empty
+        function addRow(label, value, suffix) {
+            if (value != null && value !== '') {
+                const display = suffix ? esc(String(value)) + suffix : esc(String(value));
+                rows.push(`<div class="popup-row"><span class="popup-key">${esc(label)}</span><span class="popup-val">${display}</span></div>`);
+            }
         }
-        if (props.hardware) {
-            rows.push(`<div class="popup-row"><span class="popup-key">Hardware</span><span class="popup-val">${esc(props.hardware)}</span></div>`);
+
+        addRow('Type', props.node_type, '');
+        addRow('Hardware', props.hardware, '');
+        addRow('Role', props.role, '');
+        if (props.battery != null) addRow('Battery', props.battery, '%');
+        if (props.voltage != null) addRow('Voltage', Number(props.voltage).toFixed(2), 'V');
+        if (props.snr != null) addRow('SNR', props.snr, ' dB');
+        if (props.altitude != null) addRow('Altitude', props.altitude, 'm');
+        if (props.hops_away != null) addRow('Hops', props.hops_away, '');
+        if (props.temperature != null) addRow('Temp', Number(props.temperature).toFixed(1), '\u00b0C');
+        if (props.humidity != null) addRow('Humidity', Number(props.humidity).toFixed(0), '%');
+        addRow('Firmware', props.firmware, '');
+
+        // AREDN link type indicator
+        if (props.link_type) {
+            const ltColor = props.link_type === 'RF' ? '#ff7043' :
+                            props.link_type === 'DTD' ? '#66bb6a' :
+                            props.link_type === 'TUN' ? '#42a5f5' : '#78909c';
+            rows.push(`<div class="popup-row"><span class="popup-key">Link</span><span class="popup-val" style="color:${ltColor}">${esc(props.link_type)}</span></div>`);
         }
-        if (props.role) {
-            rows.push(`<div class="popup-row"><span class="popup-key">Role</span><span class="popup-val">${esc(props.role)}</span></div>`);
-        }
-        if (props.battery != null) {
-            rows.push(`<div class="popup-row"><span class="popup-key">Battery</span><span class="popup-val">${props.battery}%</span></div>`);
-        }
-        if (props.snr != null) {
-            rows.push(`<div class="popup-row"><span class="popup-key">SNR</span><span class="popup-val">${props.snr} dB</span></div>`);
-        }
-        if (props.altitude != null) {
-            rows.push(`<div class="popup-row"><span class="popup-key">Altitude</span><span class="popup-val">${props.altitude}m</span></div>`);
-        }
-        if (props.firmware) {
-            rows.push(`<div class="popup-row"><span class="popup-key">Firmware</span><span class="popup-val">${esc(props.firmware)}</span></div>`);
-        }
-        if (props.description) {
-            rows.push(`<div class="popup-row"><span class="popup-key">Info</span><span class="popup-val">${esc(props.description)}</span></div>`);
-        }
+        addRow('Info', props.description, '');
 
         const onlineStr = props.is_online === true ? 'Online' :
                           props.is_online === false ? 'Offline' : 'Unknown';
         const onlineColor = props.is_online === true ? '#66bb6a' :
                             props.is_online === false ? '#ef5350' : '#78909c';
 
+        // Last-seen timestamp
+        let lastSeenStr = '';
+        if (props.last_seen) {
+            try {
+                const ts = typeof props.last_seen === 'number' ? new Date(props.last_seen * 1000) : new Date(props.last_seen);
+                if (!isNaN(ts.getTime())) {
+                    lastSeenStr = `<div class="popup-row" style="font-size:10px;color:#546e7a"><span class="popup-key">Seen</span><span class="popup-val">${ts.toLocaleString()}</span></div>`;
+                }
+            } catch (e) { /* ignore parse errors */ }
+        }
+
         return `
             <div class="popup-title" style="color:${color}">${esc(props.name || props.id || 'Unknown')}</div>
             <div class="popup-network" style="color:${color}">${esc(props.network || '')} <span style="color:${onlineColor}">${onlineStr}</span></div>
             ${rows.join('')}
+            ${lastSeenStr}
             <div class="popup-row" style="margin-top:4px;font-size:10px;color:#546e7a">
                 <span>ID: ${esc(props.id || '')}</span>
             </div>
