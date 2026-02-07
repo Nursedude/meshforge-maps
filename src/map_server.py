@@ -26,12 +26,21 @@ logger = logging.getLogger(__name__)
 
 
 class MapRequestHandler(SimpleHTTPRequestHandler):
-    """HTTP request handler for MeshForge Maps."""
+    """HTTP request handler for MeshForge Maps.
 
-    # Set by the server
-    aggregator: Optional[DataAggregator] = None
-    config: Optional[MapsConfig] = None
-    web_dir: Optional[str] = None
+    Instance-level state is injected via the server reference rather than
+    class-level attributes, preventing multiple MapServer instances from
+    clobbering each other's state.
+    """
+
+    def _get_aggregator(self) -> Optional[DataAggregator]:
+        return getattr(self.server, "_mf_aggregator", None)
+
+    def _get_config(self) -> Optional[MapsConfig]:
+        return getattr(self.server, "_mf_config", None)
+
+    def _get_web_dir(self) -> Optional[str]:
+        return getattr(self.server, "_mf_web_dir", None)
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -59,9 +68,19 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._serve_source_geojson(source)
         else:
             # Serve static files from web directory
-            if self.web_dir:
-                self.directory = self.web_dir
+            web_dir = self._get_web_dir()
+            if web_dir:
+                self.directory = web_dir
             super().do_GET()
+
+    def do_OPTIONS(self) -> None:
+        """Handle CORS preflight requests."""
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.end_headers()
 
     def _serve_map(self) -> None:
         """Serve the main map HTML page."""
@@ -78,26 +97,29 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_geojson(self) -> None:
         """Serve aggregated GeoJSON from all enabled sources."""
-        if not self.aggregator:
+        aggregator = self._get_aggregator()
+        if not aggregator:
             self._send_json({"error": "Aggregator not initialized"}, 503)
             return
-        data = self.aggregator.collect_all()
+        data = aggregator.collect_all()
         self._send_json(data)
 
     def _serve_source_geojson(self, source: str) -> None:
         """Serve GeoJSON from a single source."""
-        if not self.aggregator:
+        aggregator = self._get_aggregator()
+        if not aggregator:
             self._send_json({"error": "Aggregator not initialized"}, 503)
             return
-        data = self.aggregator.collect_source(source)
+        data = aggregator.collect_source(source)
         self._send_json(data)
 
     def _serve_config(self) -> None:
         """Serve current configuration (non-sensitive)."""
-        if not self.config:
+        config = self._get_config()
+        if not config:
             self._send_json({})
             return
-        cfg = self.config.to_dict()
+        cfg = config.to_dict()
         cfg["network_colors"] = NETWORK_COLORS
         self._send_json(cfg)
 
@@ -107,41 +129,49 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_sources(self) -> None:
         """Serve list of enabled data sources."""
-        if not self.config:
+        config = self._get_config()
+        if not config:
             self._send_json({"sources": []})
             return
         self._send_json({
-            "sources": self.config.get_enabled_sources(),
+            "sources": config.get_enabled_sources(),
             "network_colors": NETWORK_COLORS,
         })
 
     def _serve_overlay(self) -> None:
-        """Serve overlay data (space weather, terminator)."""
-        if not self.aggregator:
+        """Serve overlay data (space weather, terminator).
+
+        Uses cached overlay from the last collect_all() to avoid a
+        redundant heavy aggregation call on every overlay request.
+        """
+        aggregator = self._get_aggregator()
+        if not aggregator:
             self._send_json({})
             return
-        data = self.aggregator.collect_all()
-        overlay = data.get("properties", {}).get("overlay_data", {})
+        overlay = aggregator.get_cached_overlay()
         self._send_json(overlay)
 
     def _serve_topology(self) -> None:
         """Serve topology link data for D3.js force graph."""
-        if not self.aggregator:
+        aggregator = self._get_aggregator()
+        if not aggregator:
             self._send_json({"links": []})
             return
-        links = self.aggregator.get_topology_links()
+        links = aggregator.get_topology_links()
         self._send_json({"links": links, "link_count": len(links)})
 
     def _serve_status(self) -> None:
         """Serve server health status."""
+        aggregator = self._get_aggregator()
+        config = self._get_config()
         mqtt_status = "unavailable"
-        if self.aggregator and self.aggregator._mqtt_subscriber:
-            mqtt_status = "connected" if self.aggregator._mqtt_subscriber._running else "stopped"
+        if aggregator and aggregator._mqtt_subscriber:
+            mqtt_status = "connected" if aggregator._mqtt_subscriber._running else "stopped"
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
             "version": "0.2.0-beta",
-            "sources": self.config.get_enabled_sources() if self.config else [],
+            "sources": config.get_enabled_sources() if config else [],
             "mqtt_live": mqtt_status,
         })
 
@@ -156,8 +186,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _find_map_file(self) -> Optional[Path]:
         """Locate the map HTML file."""
-        if self.web_dir:
-            p = Path(self.web_dir) / "meshforge_maps.html"
+        web_dir = self._get_web_dir()
+        if web_dir:
+            p = Path(web_dir) / "meshforge_maps.html"
             if p.exists():
                 return p
         # Fallback: relative to this source file
@@ -175,36 +206,67 @@ class MapServer:
         self._aggregator = DataAggregator(config.to_dict())
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
+        self._port: int = 0  # Actual bound port
+        self._web_dir = str(Path(__file__).parent.parent / "web")
 
-        # Configure the handler class
-        MapRequestHandler.aggregator = self._aggregator
-        MapRequestHandler.config = config
-        MapRequestHandler.web_dir = str(
-            Path(__file__).parent.parent / "web"
+    def start(self) -> bool:
+        """Start the HTTP server in a background thread.
+
+        Returns True if the server started successfully, False otherwise.
+        Tries the configured port first, then falls back up to 4 adjacent ports.
+        """
+        base_port = self._config.get("http_port", 8808)
+        last_error: Optional[Exception] = None
+
+        for offset in range(5):
+            port = base_port + offset
+            try:
+                self._server = HTTPServer(("127.0.0.1", port), MapRequestHandler)
+                # Attach instance state to the server object so handlers can
+                # access it via self.server without class-level mutation.
+                self._server._mf_aggregator = self._aggregator  # type: ignore[attr-defined]
+                self._server._mf_config = self._config  # type: ignore[attr-defined]
+                self._server._mf_web_dir = self._web_dir  # type: ignore[attr-defined]
+
+                self._thread = threading.Thread(
+                    target=self._server.serve_forever,
+                    name="meshforge-maps-http",
+                    daemon=True,
+                )
+                self._thread.start()
+                self._port = port
+                if offset > 0:
+                    logger.warning(
+                        "Port %d in use, MeshForge Maps started on http://127.0.0.1:%d",
+                        base_port, port,
+                    )
+                else:
+                    logger.info("MeshForge Maps server started on http://127.0.0.1:%d", port)
+                return True
+            except OSError as e:
+                last_error = e
+                logger.debug("Port %d unavailable: %s", port, e)
+                continue
+
+        logger.error(
+            "Failed to start map server on ports %d-%d: %s",
+            base_port, base_port + 4, last_error,
         )
-
-    def start(self) -> None:
-        """Start the HTTP server in a background thread."""
-        port = self._config.get("http_port", 8808)
-        try:
-            self._server = HTTPServer(("127.0.0.1", port), MapRequestHandler)
-            self._thread = threading.Thread(
-                target=self._server.serve_forever,
-                name="meshforge-maps-http",
-                daemon=True,
-            )
-            self._thread.start()
-            logger.info("MeshForge Maps server started on http://127.0.0.1:%d", port)
-        except OSError as e:
-            logger.error("Failed to start map server on port %d: %s", port, e)
+        return False
 
     def stop(self) -> None:
-        """Stop the HTTP server."""
+        """Stop the HTTP server and clean up the aggregator."""
         if self._server:
             self._server.shutdown()
             logger.info("MeshForge Maps server stopped")
+        self._aggregator.shutdown()
         self._server = None
         self._thread = None
+
+    @property
+    def port(self) -> int:
+        """The actual port the server bound to (0 if not started)."""
+        return self._port
 
     @property
     def aggregator(self) -> DataAggregator:
