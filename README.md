@@ -1,2 +1,147 @@
 # meshforge-maps
-Maps - extension tool of MeshForge is a Network Operations Center (NOC) 
+
+**Maps extension for [MeshForge](https://github.com/Nursedude/meshforge)** -- a unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, HamClock propagation data, and AREDN into a single configurable Leaflet.js web map.
+
+MeshForge Maps is a MeshForge extension plugin (`type: extension`) that provides a dedicated NOC-style mapping interface for mesh network operators, emergency communications teams, and ham radio enthusiasts.
+
+## Features
+
+- **Multi-source data aggregation** -- collects node data from Meshtastic (MQTT/meshtasticd), Reticulum (rnstatus/RMAP), AREDN (sysinfo API), and HamClock/NOAA propagation feeds
+- **Configurable tile layers** -- CartoDB Dark, OpenStreetMap, OpenTopoMap, Esri Satellite, Esri Topo, Stadia Terrain
+- **Network-specific layer toggles** -- show/hide Meshtastic (green), Reticulum (purple), AREDN (orange) independently
+- **Space weather overlay** -- solar flux index, Kp index, solar wind speed, HF band condition assessment from NOAA SWPC
+- **Solar terminator** -- real-time day/night boundary overlay
+- **Marker clustering** -- toggleable clustering for dense node areas
+- **Dark theme** -- matches MeshForge core UI (dark CartoDB + cyan accents)
+- **Standalone mode** -- runs independently or as a MeshForge plugin
+
+## Architecture
+
+```
+meshforge-maps/
+├── manifest.json               # MeshForge plugin manifest
+├── src/
+│   ├── main.py                 # Plugin entry point (MeshForge Plugin class)
+│   ├── map_server.py           # HTTP server (Flask-free, stdlib only)
+│   ├── collectors/
+│   │   ├── base.py             # BaseCollector ABC, GeoJSON helpers
+│   │   ├── aggregator.py       # Multi-source merge with dedup
+│   │   ├── meshtastic_collector.py   # meshtasticd API + MQTT cache
+│   │   ├── reticulum_collector.py    # rnstatus + RMAP + node cache
+│   │   ├── hamclock_collector.py     # NOAA SWPC + HamClock API + terminator
+│   │   └── aredn_collector.py        # AREDN sysinfo.json API + cache
+│   └── utils/
+│       └── config.py           # Config management, tile providers, colors
+├── web/
+│   └── meshforge_maps.html     # Leaflet.js frontend (single-file)
+├── config/                     # User config directory
+├── tests/                      # Test suite
+└── docs/                       # Additional documentation
+```
+
+## Data Sources
+
+| Source | Protocol | Data | Status |
+|--------|----------|------|--------|
+| **Meshtastic** | HTTP API (meshtasticd :4403) + MQTT cache | Node positions, telemetry, battery, SNR | Active |
+| **Reticulum/RMAP** | rnstatus --json + node cache | RNS interfaces, node types, transport info | Active |
+| **HamClock/NOAA** | NOAA SWPC REST APIs | Solar flux, Kp index, band conditions, terminator | Active |
+| **AREDN** | sysinfo.json per-node API | Node locations, firmware, link quality | Active |
+
+### Meshtastic
+Nodes from local meshtasticd HTTP API (`localhost:4403/api/v1/nodes`) and MeshForge's MQTT subscriber cache. Supports POSITION_APP, NODEINFO_APP, and TELEMETRY_APP data.
+
+### Reticulum / RMAP
+Local RNS path table via `rnstatus -d --json` and MeshForge node caches. [RMAP.world](https://rmap.world) tracks ~306 Reticulum nodes globally (RNodes, NomadNet, RNSD, TCP, TNC, RetiBBS). See [Discussion #743](https://github.com/markqvist/Reticulum/discussions/743) for RMAP project details. No public API currently -- future integration planned when available.
+
+### HamClock / Propagation
+Space weather from [NOAA SWPC](https://services.swpc.noaa.gov/) public JSON APIs. Optional local HamClock instance on port 8080. [OpenHamClock](https://github.com/accius/openhamclock) is the recommended successor.
+
+### AREDN
+Per-node sysinfo API at `http://<node>.local.mesh/a/sysinfo?lqm=1`. Requires mesh network access. See [AREDN docs](https://docs.arednmesh.org/en/latest/arednHow-toGuides/devtools.html).
+
+## Installation
+
+### As MeshForge Plugin
+```bash
+# Clone into MeshForge plugins directory
+git clone https://github.com/Nursedude/meshforge-maps.git \
+    ~/.config/meshforge/plugins/meshforge-maps/
+
+# MeshForge will auto-discover via manifest.json on next launch
+```
+
+### Standalone
+```bash
+git clone https://github.com/Nursedude/meshforge-maps.git
+cd meshforge-maps
+python -m src.main
+# Opens http://127.0.0.1:8808
+```
+
+No external Python dependencies required -- uses only stdlib (`http.server`, `json`, `urllib`, `subprocess`, `threading`).
+
+## Configuration
+
+Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/settings.json`:
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `default_tile_provider` | choice | `carto_dark` | Map tile style |
+| `enable_meshtastic` | bool | `true` | Enable Meshtastic data source |
+| `enable_reticulum` | bool | `true` | Enable Reticulum/RMAP source |
+| `enable_hamclock` | bool | `true` | Enable HamClock/propagation |
+| `enable_aredn` | bool | `true` | Enable AREDN source |
+| `map_center_lat` | number | `20.0` | Default map center latitude |
+| `map_center_lon` | number | `-100.0` | Default map center longitude |
+| `map_default_zoom` | number | `4` | Default zoom level |
+| `cache_ttl_minutes` | number | `15` | Data cache lifetime |
+| `http_port` | number | `8808` | Map server HTTP port |
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Map HTML page |
+| `/api/nodes/geojson` | GET | All nodes (aggregated GeoJSON) |
+| `/api/nodes/<source>` | GET | Single source GeoJSON |
+| `/api/config` | GET | Current configuration |
+| `/api/tile-providers` | GET | Available tile layers |
+| `/api/sources` | GET | Enabled data sources |
+| `/api/overlay` | GET | Space weather + terminator data |
+| `/api/status` | GET | Server health check |
+
+## Tile Providers
+
+| Key | Name | Best For |
+|-----|------|----------|
+| `carto_dark` | CartoDB Dark Matter | NOC / night operations |
+| `osm_standard` | OpenStreetMap | General reference |
+| `osm_topo` | OpenTopoMap | Terrain / elevation planning |
+| `esri_satellite` | Esri Satellite | RF line-of-sight / terrain |
+| `esri_topo` | Esri Topographic | Field operations |
+| `stadia_terrain` | Stadia Terrain | Landscape overview |
+
+## Contributing
+
+Follow [MeshForge contributing guidelines](https://github.com/Nursedude/meshforge/blob/main/CONTRIBUTING.md):
+
+- Python 3.9+, PEP 8, type hints encouraged
+- Commit convention: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`
+- No `shell=True` in subprocess, no bare `except:`, no `os.system()`
+- Validate all user inputs, HTML-escape all output
+- Network bindings default to `127.0.0.1`
+- PR with summary, changes list, and testing checklist
+
+## License
+
+[GPL-3.0](LICENSE) -- same as MeshForge core.
+
+## Related Projects
+
+- [MeshForge](https://github.com/Nursedude/meshforge) -- Turnkey Mesh Network Operations Center
+- [RMAP.world](https://rmap.world) -- Reticulum Network World Map
+- [OpenHamClock](https://github.com/accius/openhamclock) -- Ham radio dashboard (HamClock successor)
+- [AREDN](https://www.arednmesh.org/) -- Amateur Radio Emergency Data Network
+- [Meshtastic](https://meshtastic.org/) -- LoRa mesh networking platform
+- [Reticulum](https://reticulum.network/) -- Cryptographic mesh networking stack
