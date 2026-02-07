@@ -26,6 +26,7 @@ class DataAggregator:
         self._config = config
         cache_ttl = config.get("cache_ttl_minutes", 15) * 60
         self._collectors = {}
+        self._cached_overlay: Dict[str, Any] = {}
 
         # Initialize live MQTT subscriber for Meshtastic
         self._mqtt_subscriber: Optional[MQTTSubscriber] = None
@@ -90,6 +91,9 @@ class DataAggregator:
                 logger.error("Collector %s failed: %s", name, e)
                 source_counts[name] = 0
 
+        # Cache overlay data so /api/overlay doesn't trigger a full re-collect
+        self._cached_overlay = overlay_data
+
         result = make_feature_collection(all_features, "aggregated")
         result["properties"]["sources"] = source_counts
         result["properties"]["total_nodes"] = len(all_features)
@@ -117,6 +121,39 @@ class DataAggregator:
             return self._mqtt_subscriber.store.get_topology_links()
         return []
 
+    def get_cached_overlay(self) -> Dict[str, Any]:
+        """Return cached overlay data from the last collect_all() call.
+
+        Falls back to collecting from hamclock only if no cache exists,
+        avoiding a full multi-source aggregation.
+        """
+        if self._cached_overlay:
+            return self._cached_overlay
+        # No cache yet -- collect overlay from hamclock only
+        hamclock = self._collectors.get("hamclock")
+        if hamclock:
+            try:
+                fc = hamclock.collect()
+                fc_props = fc.get("properties", {})
+                overlay: Dict[str, Any] = {}
+                for key in ("space_weather", "solar_terminator", "hamclock"):
+                    if key in fc_props:
+                        overlay[key] = fc_props[key]
+                self._cached_overlay = overlay
+                return overlay
+            except Exception as e:
+                logger.error("Overlay-only collection failed: %s", e)
+        return {}
+
     def clear_all_caches(self) -> None:
         for collector in self._collectors.values():
             collector.clear_cache()
+        self._cached_overlay = {}
+
+    def shutdown(self) -> None:
+        """Stop MQTT subscriber and release resources."""
+        if self._mqtt_subscriber:
+            self._mqtt_subscriber.stop()
+            self._mqtt_subscriber = None
+        self._cached_overlay = {}
+        logger.info("DataAggregator shut down")

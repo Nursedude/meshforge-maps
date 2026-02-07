@@ -297,9 +297,13 @@ class MQTTSubscriber:
             else:
                 # Fallback: try JSON (if device has JSON mode enabled)
                 self._decode_json(msg.payload, msg.topic)
-        except Exception as e:
-            # Silently ignore unparseable messages (very common)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            # Unparseable messages are common on the public broker -- expected
             pass
+        except Exception as e:
+            # Log unexpected errors at debug level to aid diagnosis
+            # without flooding logs (the broker sends many messages)
+            logger.debug("MQTT message processing error on %s: %s", msg.topic, e)
 
     def _decode_protobuf(self, payload: bytes, topic: str) -> None:
         """Decode ServiceEnvelope protobuf message."""
