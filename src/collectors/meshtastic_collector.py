@@ -32,7 +32,7 @@ MQTT_CACHE_PATH = Path.home() / ".local" / "share" / "meshforge" / "mqtt_nodes.j
 
 
 class MeshtasticCollector(BaseCollector):
-    """Collects Meshtastic node data from local daemon and MQTT cache."""
+    """Collects Meshtastic node data from local daemon, live MQTT, and MQTT cache."""
 
     source_name = "meshtastic"
 
@@ -41,9 +41,11 @@ class MeshtasticCollector(BaseCollector):
         meshtasticd_host: str = "localhost",
         meshtasticd_port: int = 4403,
         cache_ttl_seconds: int = 900,
+        mqtt_store: Optional[Any] = None,
     ):
         super().__init__(cache_ttl_seconds)
         self._api_base = f"http://{meshtasticd_host}:{meshtasticd_port}"
+        self._mqtt_store = mqtt_store  # MQTTNodeStore instance from mqtt_subscriber
 
     def _fetch(self) -> Dict[str, Any]:
         features: List[Dict[str, Any]] = []
@@ -57,7 +59,15 @@ class MeshtasticCollector(BaseCollector):
                 seen_ids.add(fid)
                 features.append(f)
 
-        # Source 2: MQTT subscriber cache file
+        # Source 2: Live MQTT subscriber (real-time nodes)
+        live_nodes = self._fetch_from_live_mqtt()
+        for f in live_nodes:
+            fid = f["properties"].get("id")
+            if fid and fid not in seen_ids:
+                seen_ids.add(fid)
+                features.append(f)
+
+        # Source 3: MQTT subscriber cache file (fallback)
         mqtt_nodes = self._fetch_from_mqtt_cache()
         for f in mqtt_nodes:
             fid = f["properties"].get("id")
@@ -135,6 +145,23 @@ class MeshtasticCollector(BaseCollector):
             last_seen=last_heard,
             altitude=position.get("altitude"),
         )
+
+    def _fetch_from_live_mqtt(self) -> List[Dict[str, Any]]:
+        """Get nodes from live MQTT subscriber's in-memory store."""
+        if not self._mqtt_store:
+            return []
+        try:
+            nodes = self._mqtt_store.get_all_nodes()
+            features = []
+            for node in nodes:
+                feature = self._parse_mqtt_node(node.get("id", ""), node)
+                if feature:
+                    features.append(feature)
+            logger.debug("Live MQTT returned %d meshtastic nodes", len(features))
+            return features
+        except Exception as e:
+            logger.debug("Live MQTT fetch failed: %s", e)
+            return []
 
     def _fetch_from_mqtt_cache(self) -> List[Dict[str, Any]]:
         """Read cached MQTT node data from meshforge's mqtt_nodes.json."""
