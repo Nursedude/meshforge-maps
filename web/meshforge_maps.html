@@ -308,6 +308,92 @@
             stroke: rgba(255, 193, 7, 0.4);
             stroke-width: 1.5;
         }
+
+        /* Connection status indicator */
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            white-space: nowrap;
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .status-connected .status-dot { background: #66bb6a; }
+        .status-connected { color: #66bb6a; }
+        .status-loading .status-dot { background: #ffa726; animation: pulse 1s infinite; }
+        .status-loading { color: #ffa726; }
+        .status-error .status-dot { background: #ef5350; }
+        .status-error { color: #ef5350; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: rgba(10, 14, 26, 0.95);
+            border: 1px solid rgba(79, 195, 247, 0.3);
+            color: #e0e0e0;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-size: 12px;
+            z-index: 2000;
+            opacity: 0;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .toast.visible {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        .toast.toast-error {
+            border-color: rgba(239, 83, 80, 0.4);
+            color: #ef5350;
+        }
+
+        /* Refresh button states */
+        .refresh-btn {
+            width: 100%;
+            padding: 6px;
+            background: rgba(79, 195, 247, 0.1);
+            border: 1px solid rgba(79, 195, 247, 0.2);
+            color: #4fc3f7;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.2s;
+        }
+
+        .refresh-btn:hover { background: rgba(79, 195, 247, 0.2); }
+
+        .refresh-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Last-updated text */
+        .last-updated {
+            font-size: 10px;
+            color: #546e7a;
+            text-align: center;
+            margin-top: 6px;
+        }
     </style>
 </head>
 <body>
@@ -316,6 +402,10 @@
     <span class="header-title">MeshForge Maps</span>
     <span class="header-subtitle">Multi-Source Mesh Network Map</span>
     <div class="header-stats" id="headerStats">
+        <span class="status-indicator status-loading" id="connStatus">
+            <span class="status-dot"></span>
+            <span id="connLabel">Loading</span>
+        </span>
         <span class="stat-badge">
             <span class="stat-dot" style="background:#66bb6a"></span>
             <span id="statMeshtastic">0</span> Meshtastic
@@ -410,14 +500,15 @@
 
     <div class="panel-section">
         <div class="panel-section-title">Data</div>
-        <button style="width:100%;padding:6px;background:rgba(79,195,247,0.1);border:1px solid rgba(79,195,247,0.2);color:#4fc3f7;border-radius:4px;cursor:pointer;font-size:12px"
-                onclick="refreshData()">
+        <button class="refresh-btn" id="refreshBtn" onclick="refreshData()">
             Refresh All Sources
         </button>
+        <div class="last-updated" id="lastUpdated">Not yet loaded</div>
     </div>
 </div>
 
 <div id="map"></div>
+<div class="toast" id="toast"></div>
 
 <script>
     // =========================================================================
@@ -486,6 +577,9 @@
     let topologyLayer;      // Leaflet layer group for topology links
     let showTopology = false;
     let useClustering = true;
+    let isLoading = false;
+    let lastOverlayData = null;  // cached overlay from last successful fetch
+    let consecutiveErrors = 0;
 
     // Per-network layer groups (for toggle visibility)
     const networkLayers = {
@@ -600,17 +694,64 @@
     }
 
     // =========================================================================
+    // Connection Status & Notifications
+    // =========================================================================
+
+    function setConnectionStatus(status, label) {
+        const el = document.getElementById('connStatus');
+        const labelEl = document.getElementById('connLabel');
+        el.className = 'status-indicator status-' + status;
+        labelEl.textContent = label || status;
+    }
+
+    function showToast(message, isError) {
+        const toast = document.getElementById('toast');
+        toast.textContent = message;
+        toast.className = 'toast' + (isError ? ' toast-error' : '') + ' visible';
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(function() {
+            toast.className = 'toast';
+        }, 3000);
+    }
+
+    function updateLastUpdated() {
+        const el = document.getElementById('lastUpdated');
+        if (el) {
+            el.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+        }
+    }
+
+    // =========================================================================
     // Data Loading
     // =========================================================================
 
     async function loadNodeData() {
+        if (isLoading) return;  // prevent concurrent fetches
+        isLoading = true;
+        setConnectionStatus('loading', 'Loading');
+        const btn = document.getElementById('refreshBtn');
+        if (btn) btn.disabled = true;
+
         try {
             const resp = await fetch(API_BASE + '/api/nodes/geojson');
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             const data = await resp.json();
             processGeoJSON(data);
+            setConnectionStatus('connected', 'Connected');
+            updateLastUpdated();
+            consecutiveErrors = 0;
         } catch (e) {
+            consecutiveErrors++;
             console.error('Failed to load node data:', e);
+            setConnectionStatus('error', 'Error');
+            if (consecutiveErrors === 1) {
+                showToast('Failed to load node data: ' + e.message, true);
+            } else if (consecutiveErrors === 3) {
+                showToast('Server unreachable after 3 attempts', true);
+            }
+        } finally {
+            isLoading = false;
+            if (btn) btn.disabled = false;
         }
     }
 
@@ -674,6 +815,9 @@
 
         // Process overlay data (space weather, terminator)
         const overlayData = data.properties?.overlay_data || {};
+        if (overlayData && Object.keys(overlayData).length > 0) {
+            lastOverlayData = overlayData;
+        }
         updateSpaceWeather(overlayData.space_weather);
         if (document.getElementById('overlayTerminator').checked) {
             updateTerminator(overlayData.solar_terminator);
@@ -783,10 +927,24 @@
         }
     }
 
-    function toggleTerminator() {
+    async function toggleTerminator() {
         const show = document.getElementById('overlayTerminator').checked;
         if (show) {
-            loadNodeData(); // re-fetch to get terminator data
+            // Use cached overlay or fetch from lightweight overlay endpoint
+            if (lastOverlayData && lastOverlayData.solar_terminator) {
+                updateTerminator(lastOverlayData.solar_terminator);
+            } else {
+                try {
+                    const resp = await fetch(API_BASE + '/api/overlay');
+                    if (resp.ok) {
+                        const overlay = await resp.json();
+                        lastOverlayData = overlay;
+                        updateTerminator(overlay.solar_terminator);
+                    }
+                } catch (e) {
+                    console.debug('Overlay fetch failed:', e);
+                }
+            }
         } else if (terminatorLayer) {
             map.removeLayer(terminatorLayer);
             terminatorLayer = null;
@@ -799,7 +957,12 @@
     }
 
     async function refreshData() {
+        showToast('Refreshing all sources...');
         await loadNodeData();
+        if (showTopology) await loadTopologyData();
+        if (consecutiveErrors === 0) {
+            showToast('Data refreshed');
+        }
     }
 
     // =========================================================================
@@ -974,7 +1137,11 @@
     // =========================================================================
 
     setInterval(function() {
-        loadNodeData();
+        loadNodeData().then(function() {
+            if (consecutiveErrors === 0) {
+                showToast('Auto-refreshed');
+            }
+        });
         if (showTopology) loadTopologyData();
     }, 5 * 60 * 1000); // Refresh every 5 minutes
 

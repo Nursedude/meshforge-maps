@@ -331,6 +331,71 @@ class TestDataAggregator:
         assert result["properties"]["total_nodes"] == 3
 
 
+    @patch.object(MeshtasticCollector, "collect")
+    @patch.object(ReticulumCollector, "collect")
+    @patch.object(HamClockCollector, "collect")
+    @patch.object(AREDNCollector, "collect")
+    def test_collect_all_caches_overlay_data(self, mock_aredn, mock_ham, mock_ret, mock_mesh):
+        mock_mesh.return_value = make_feature_collection([], "meshtastic")
+        mock_ret.return_value = make_feature_collection([], "reticulum")
+        mock_aredn.return_value = make_feature_collection([], "aredn")
+        # HamClock returns overlay in properties
+        ham_fc = make_feature_collection([], "hamclock")
+        ham_fc["properties"]["space_weather"] = {"solar_flux": 150}
+        ham_fc["properties"]["solar_terminator"] = {"subsolar_lat": 10}
+        mock_ham.return_value = ham_fc
+
+        agg = DataAggregator(dict(DEFAULT_CONFIG_SUBSET))
+        result = agg.collect_all()
+        assert result["properties"]["overlay_data"]["space_weather"]["solar_flux"] == 150
+        # Cached overlay should now be populated
+        cached = agg.get_cached_overlay()
+        assert cached["space_weather"]["solar_flux"] == 150
+        assert cached["solar_terminator"]["subsolar_lat"] == 10
+
+    def test_get_cached_overlay_empty_initially(self):
+        agg = DataAggregator({
+            "enable_meshtastic": False, "enable_reticulum": False,
+            "enable_hamclock": False, "enable_aredn": False,
+        })
+        assert agg.get_cached_overlay() == {}
+
+    def test_shutdown_is_safe(self):
+        agg = DataAggregator({
+            "enable_meshtastic": False, "enable_reticulum": False,
+            "enable_hamclock": False, "enable_aredn": False,
+        })
+        agg.shutdown()  # Should not raise
+        assert agg._mqtt_subscriber is None
+
+    def test_clear_all_caches_resets_overlay(self):
+        agg = DataAggregator({
+            "enable_meshtastic": False, "enable_reticulum": False,
+            "enable_hamclock": False, "enable_aredn": False,
+        })
+        agg._cached_overlay = {"test": True}
+        agg.clear_all_caches()
+        assert agg._cached_overlay == {}
+
+    @patch.object(MeshtasticCollector, "collect")
+    @patch.object(ReticulumCollector, "collect")
+    @patch.object(HamClockCollector, "collect")
+    @patch.object(AREDNCollector, "collect")
+    def test_collector_failure_doesnt_crash(self, mock_aredn, mock_ham, mock_ret, mock_mesh):
+        mock_mesh.side_effect = RuntimeError("connection failed")
+        mock_ret.return_value = make_feature_collection(
+            [make_feature("r1", 5.0, 6.0, "reticulum")], "reticulum"
+        )
+        mock_ham.return_value = make_feature_collection([], "hamclock")
+        mock_aredn.return_value = make_feature_collection([], "aredn")
+
+        agg = DataAggregator(dict(DEFAULT_CONFIG_SUBSET))
+        result = agg.collect_all()
+        assert result["properties"]["sources"]["meshtastic"] == 0
+        assert result["properties"]["sources"]["reticulum"] == 1
+        assert result["properties"]["total_nodes"] == 1
+
+
 # Helper config for aggregator tests
 DEFAULT_CONFIG_SUBSET = {
     "enable_meshtastic": True,

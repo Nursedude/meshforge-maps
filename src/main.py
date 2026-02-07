@@ -87,11 +87,19 @@ class MeshForgeMapsPlugin(Plugin):
 
         # Start the HTTP map server
         self._server = MapServer(self._config)
-        self._server.start()
+        started = self._server.start()
 
-        # Register with MeshForge if available
+        if not started:
+            logger.error("MeshForge Maps plugin failed to start map server")
+            if hasattr(context, "notify"):
+                context.notify(
+                    "MeshForge Maps",
+                    "Failed to start map server -- check port availability",
+                )
+            return
+
+        # Register with MeshForge TUI if available
         if hasattr(context, "register_panel"):
-            port = self._config.get("http_port", 8808)
             context.register_panel(
                 panel_id="meshforge_maps",
                 panel_class=None,
@@ -106,6 +114,12 @@ class MeshForgeMapsPlugin(Plugin):
                 name="Refresh Map Data",
                 description="Force refresh all map data sources",
             )
+            context.register_tool(
+                tool_id="meshforge_maps_status",
+                tool_func=self._get_status,
+                name="Map Status",
+                description="Show map server status and node counts",
+            )
 
         # Subscribe to node events for live updates
         if hasattr(context, "subscribe"):
@@ -113,18 +127,19 @@ class MeshForgeMapsPlugin(Plugin):
             context.subscribe("config_changed", self._on_config_changed)
 
         if hasattr(context, "notify"):
-            port = self._config.get("http_port", 8808)
+            port = self._server.port
             context.notify(
                 "MeshForge Maps",
                 f"Map server started on http://127.0.0.1:{port}",
             )
 
-        logger.info("MeshForge Maps plugin activated")
+        logger.info("MeshForge Maps plugin activated on port %d", self._server.port)
 
     def deactivate(self) -> None:
-        """Stop the map server and clean up."""
+        """Stop the map server and clean up all resources."""
         if self._server:
             self._server.stop()
+            self._server = None
         if self._config:
             self._config.save()
         logger.info("MeshForge Maps plugin deactivated")
@@ -135,16 +150,47 @@ class MeshForgeMapsPlugin(Plugin):
             self._server.aggregator.clear_all_caches()
             data = self._server.aggregator.collect_all()
             count = data.get("properties", {}).get("total_nodes", 0)
-            return f"Refreshed: {count} nodes from {data['properties'].get('sources', {})}"
+            sources = data.get("properties", {}).get("sources", {})
+            return f"Refreshed: {count} nodes from {sources}"
         return "Server not running"
 
+    def _get_status(self) -> str:
+        """Return current server status for MeshForge TUI display."""
+        if not self._server:
+            return "Map server is not running"
+        agg = self._server.aggregator
+        mqtt_status = "unavailable"
+        if agg._mqtt_subscriber:
+            mqtt_status = "connected" if agg._mqtt_subscriber._running else "stopped"
+        sources = list(agg._collectors.keys())
+        return (
+            f"Port: {self._server.port} | "
+            f"Sources: {', '.join(sources)} | "
+            f"MQTT: {mqtt_status}"
+        )
+
     def _on_node_discovered(self, data: Any) -> None:
-        """Handle new node discovery events from MeshForge core."""
-        logger.debug("Node discovered event: %s", data)
+        """Handle new node discovery events from MeshForge core.
+
+        Clears relevant collector caches so the next API request
+        picks up fresh data that may include the new node.
+        """
+        if self._server:
+            self._server.aggregator.clear_all_caches()
+            logger.debug("Node discovered, caches cleared: %s", data)
 
     def _on_config_changed(self, data: Any) -> None:
-        """Handle configuration change events."""
-        logger.debug("Config changed event: %s", data)
+        """Handle configuration change events from MeshForge TUI.
+
+        Applies setting changes (e.g. toggling sources) without
+        requiring a restart.
+        """
+        if self._config and isinstance(data, dict):
+            self._config.update(data)
+            self._config.save()
+            logger.info("Config updated from MeshForge: %s", data)
+        else:
+            logger.debug("Config changed event (unhandled format): %s", data)
 
 
 # Factory function for MeshForge plugin loader
@@ -161,10 +207,12 @@ def main() -> None:
 
     config = MapsConfig()
     server = MapServer(config)
-    server.start()
 
-    port = config.get("http_port", 8808)
-    print(f"MeshForge Maps running at http://127.0.0.1:{port}")
+    if not server.start():
+        print("ERROR: Failed to start map server. Check if the port is available.")
+        sys.exit(1)
+
+    print(f"MeshForge Maps running at http://127.0.0.1:{server.port}")
     print("Press Ctrl+C to stop")
 
     try:
