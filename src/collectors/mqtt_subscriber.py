@@ -22,6 +22,7 @@ Reference: https://meshtastic.org/docs/software/integrations/mqtt/
 
 import json
 import logging
+import random
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -44,6 +45,12 @@ PORTNUM_MAP_REPORT = 73
 
 # How long before a node is considered stale (seconds)
 NODE_STALE_THRESHOLD = 3600  # 1 hour
+
+# How long before a node is removed from the store entirely (seconds)
+NODE_REMOVE_THRESHOLD = 259200  # 72 hours
+
+# Maximum nodes to keep in memory to prevent unbounded growth
+MAX_NODES = 10000
 
 
 def _try_import_paho():
@@ -70,6 +77,32 @@ def _try_import_meshtastic():
         return None
 
 
+def _safe_float(value: Any, low: float, high: float) -> Optional[float]:
+    """Validate and clamp a numeric value to a range. Returns None if invalid."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+        if not (low <= v <= high):
+            return None
+        return v
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_int(value: Any, low: int, high: int) -> Optional[int]:
+    """Validate and clamp an integer value to a range. Returns None if invalid."""
+    if value is None:
+        return None
+    try:
+        v = int(value)
+        if not (low <= v <= high):
+            return None
+        return v
+    except (ValueError, TypeError):
+        return None
+
+
 class MQTTNodeStore:
     """Thread-safe in-memory store for live MQTT node data.
 
@@ -77,15 +110,21 @@ class MQTTNodeStore:
     Each entry contains position, identity, telemetry, and topology links.
     """
 
-    def __init__(self, stale_seconds: int = NODE_STALE_THRESHOLD):
+    def __init__(self, stale_seconds: int = NODE_STALE_THRESHOLD,
+                 remove_seconds: int = NODE_REMOVE_THRESHOLD,
+                 max_nodes: int = MAX_NODES):
         self._nodes: Dict[str, Dict[str, Any]] = {}
         self._neighbors: Dict[str, List[Dict[str, Any]]] = {}  # node_id -> [{neighbor_id, snr}]
         self._lock = threading.Lock()
         self._stale_seconds = stale_seconds
+        self._remove_seconds = remove_seconds
+        self._max_nodes = max_nodes
 
     def update_position(self, node_id: str, lat: float, lon: float,
                         altitude: Optional[int] = None, timestamp: Optional[int] = None) -> None:
         with self._lock:
+            if node_id not in self._nodes and len(self._nodes) >= self._max_nodes:
+                self._evict_oldest_locked()
             node = self._nodes.setdefault(node_id, {"id": node_id})
             node["latitude"] = lat
             node["longitude"] = lon
@@ -173,6 +212,37 @@ class MQTTNodeStore:
         with self._lock:
             return len(self._nodes)
 
+    def cleanup_stale_nodes(self) -> int:
+        """Remove nodes not seen for longer than remove_seconds.
+
+        Returns the number of nodes removed.
+        """
+        now = int(time.time())
+        removed = 0
+        with self._lock:
+            stale_ids = [
+                nid for nid, node in self._nodes.items()
+                if (now - node.get("last_seen", 0)) > self._remove_seconds
+            ]
+            for nid in stale_ids:
+                del self._nodes[nid]
+                self._neighbors.pop(nid, None)
+                removed += 1
+        if removed:
+            logger.debug("Cleaned up %d stale nodes from MQTT store", removed)
+        return removed
+
+    def _evict_oldest_locked(self) -> None:
+        """Evict the oldest node to make room. Must be called with lock held."""
+        if not self._nodes:
+            return
+        oldest_id = min(
+            self._nodes,
+            key=lambda nid: self._nodes[nid].get("last_seen", 0),
+        )
+        del self._nodes[oldest_id]
+        self._neighbors.pop(oldest_id, None)
+
 
 class MQTTSubscriber:
     """Live MQTT subscriber for Meshtastic network.
@@ -254,33 +324,52 @@ class MQTTSubscriber:
             return False
 
     def stop(self) -> None:
-        """Stop the MQTT subscriber."""
+        """Stop the MQTT subscriber gracefully."""
         self._running = False
-        if self._client:
+        client = self._client
+        if client:
             try:
-                self._client.disconnect()
+                client.disconnect()
+                # Use loop_stop with a timeout thread to avoid hanging
+                stop_thread = threading.Thread(
+                    target=client.loop_stop, daemon=True
+                )
+                stop_thread.start()
+                stop_thread.join(timeout=5)
             except Exception:
                 pass
         self._client = None
         logger.info("MQTT subscriber stopped")
 
     def _run_loop(self) -> None:
-        """Connection loop with reconnect logic."""
+        """Connection loop with reconnect logic and periodic stale node cleanup."""
         backoff = 2
+        last_cleanup = time.time()
         while self._running:
             try:
                 self._client.connect(self._broker, self._port, keepalive=60)
+                backoff = 2  # Reset backoff on successful connection
                 self._client.loop_forever()
             except Exception as e:
                 if not self._running:
                     break
-                logger.warning("MQTT connection lost: %s, reconnecting in %ds", e, backoff)
-                time.sleep(backoff)
+                # Add jitter to prevent thundering herd on reconnect
+                jitter = random.uniform(0, backoff * 0.25)
+                wait = backoff + jitter
+                logger.warning("MQTT connection lost: %s, reconnecting in %.1fs", e, wait)
+                time.sleep(wait)
                 backoff = min(backoff * 2, 60)
+
+            # Periodic stale node cleanup (every 30 minutes)
+            now = time.time()
+            if (now - last_cleanup) > 1800:
+                self._store.cleanup_stale_nodes()
+                last_cleanup = now
 
     def _on_connect(self, client: Any, userdata: Any, flags: Any,
                     rc: Any, *args: Any) -> None:
-        logger.info("MQTT connected to %s (rc=%s)", self._broker, rc)
+        logger.info("MQTT connected to %s (rc=%s), store has %d nodes",
+                    self._broker, rc, self._store.node_count)
         client.subscribe(self._topic)
 
     def _on_disconnect(self, client: Any, userdata: Any, rc: Any,
@@ -304,6 +393,15 @@ class MQTTSubscriber:
             # Log unexpected errors at debug level to aid diagnosis
             # without flooding logs (the broker sends many messages)
             logger.debug("MQTT message processing error on %s: %s", msg.topic, e)
+
+    def _notify_update(self, node_id: str, update_type: str) -> None:
+        """Safely invoke the on_node_update callback."""
+        cb = self._on_node_update
+        if cb:
+            try:
+                cb(node_id, update_type)
+            except Exception as e:
+                logger.debug("on_node_update callback error: %s", e)
 
     def _decode_protobuf(self, payload: bytes, topic: str) -> None:
         """Decode ServiceEnvelope protobuf message."""
@@ -344,10 +442,9 @@ class MQTTSubscriber:
         lon = pos.longitude_i / 1e7 if pos.longitude_i else None
 
         if lat is not None and lon is not None and (-90 <= lat <= 90) and (-180 <= lon <= 180):
-            alt = pos.altitude if pos.altitude else None
+            alt = _safe_int(pos.altitude, -500, 100000) if pos.altitude else None
             self._store.update_position(node_id, lat, lon, altitude=alt)
-            if self._on_node_update:
-                self._on_node_update(node_id, "position")
+            self._notify_update(node_id, "position")
 
     def _handle_nodeinfo(self, node_id: str, payload: bytes) -> None:
         mesh_pb2 = self._proto["mesh_pb2"]
@@ -369,11 +466,28 @@ class MQTTSubscriber:
 
         if telem.HasField("device_metrics"):
             dm = telem.device_metrics
+            battery = _safe_int(dm.battery_level, 0, 100)
+            voltage = _safe_float(dm.voltage, 0.0, 100.0)
             self._store.update_telemetry(
                 node_id,
-                battery=dm.battery_level if dm.battery_level else None,
-                voltage=dm.voltage if dm.voltage else None,
+                battery=battery,
+                voltage=voltage,
             )
+
+        # Environmental sensors (temperature, humidity, pressure)
+        if telem.HasField("environment_metrics"):
+            em = telem.environment_metrics
+            temperature = _safe_float(
+                getattr(em, "temperature", None), -100.0, 200.0
+            )
+            humidity = _safe_float(
+                getattr(em, "relative_humidity", None), 0.0, 100.0
+            )
+            if temperature is not None or humidity is not None:
+                self._store.update_telemetry(
+                    node_id,
+                    temperature=temperature,
+                )
 
     def _handle_neighborinfo(self, node_id: str, payload: bytes) -> None:
         mesh_pb2 = self._proto["mesh_pb2"]

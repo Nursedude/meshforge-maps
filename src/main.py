@@ -137,11 +137,17 @@ class MeshForgeMapsPlugin(Plugin):
 
     def deactivate(self) -> None:
         """Stop the map server and clean up all resources."""
-        if self._server:
-            self._server.stop()
-            self._server = None
-        if self._config:
-            self._config.save()
+        try:
+            if self._server:
+                self._server.stop()
+                self._server = None
+        except Exception as e:
+            logger.error("Error stopping map server: %s", e)
+        try:
+            if self._config:
+                self._config.save()
+        except Exception as e:
+            logger.error("Error saving config on deactivate: %s", e)
         logger.info("MeshForge Maps plugin deactivated")
 
     def _refresh_data(self) -> str:
@@ -198,6 +204,16 @@ def create_plugin() -> MeshForgeMapsPlugin:
     return MeshForgeMapsPlugin()
 
 
+def _get_error_log_path() -> Path:
+    """Get the path to the error log file."""
+    try:
+        log_dir = Path.home() / ".cache" / "meshforge" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir / "maps_errors.log"
+    except Exception:
+        return Path("/tmp/meshforge_maps_errors.log")
+
+
 def main() -> None:
     """Standalone entry point for running outside MeshForge."""
     logging.basicConfig(
@@ -205,24 +221,53 @@ def main() -> None:
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     )
 
-    config = MapsConfig()
-    server = MapServer(config)
-
-    if not server.start():
-        print("ERROR: Failed to start map server. Check if the port is available.")
-        sys.exit(1)
-
-    print(f"MeshForge Maps running at http://127.0.0.1:{server.port}")
-    print("Press Ctrl+C to stop")
-
+    server = None
+    exit_code = 0
     try:
+        config = MapsConfig()
+        server = MapServer(config)
+
+        if not server.start():
+            print("ERROR: Failed to start map server. Check if the port is available.")
+            sys.exit(1)
+
+        print(f"MeshForge Maps running at http://127.0.0.1:{server.port}")
+        print("Press Ctrl+C to stop")
+
         import time
 
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         print("\nShutting down...")
-        server.stop()
+    except Exception as e:
+        # Log full traceback to error log file
+        import datetime
+        import traceback
+
+        error_log = _get_error_log_path()
+        try:
+            with open(error_log, "a") as f:
+                f.write(f"\n{'=' * 60}\n")
+                f.write(f"[{datetime.datetime.now().isoformat()}] FATAL ERROR\n")
+                f.write(traceback.format_exc())
+                f.write(f"{'=' * 60}\n")
+        except Exception:
+            pass
+
+        print(f"\nMeshForge Maps encountered a fatal error:\n")
+        print(f"  {type(e).__name__}: {e}\n")
+        print(f"Full error details saved to:\n  {error_log}\n")
+        print("To report this issue:")
+        print("  https://github.com/Nursedude/meshforge-maps/issues\n")
+        exit_code = 1
+    finally:
+        if server:
+            try:
+                server.stop()
+            except Exception:
+                pass
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":

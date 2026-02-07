@@ -120,11 +120,13 @@ class MeshtasticCollector(BaseCollector):
         hardware = user.get("hwModel", "")
         role = user.get("role", "")
 
-        device_metrics = node.get("deviceMetrics", {})
+        device_metrics = node.get("deviceMetrics", {}) or {}
         battery = device_metrics.get("batteryLevel")
+        voltage = device_metrics.get("voltage")
 
         snr = node.get("snr")
         last_heard = node.get("lastHeard")
+        hops_away = node.get("hopsAway")
         is_online = None
         if last_heard:
             age_seconds = time.time() - last_heard
@@ -140,8 +142,12 @@ class MeshtasticCollector(BaseCollector):
             hardware=hardware,
             role=role,
             battery=battery,
+            voltage=voltage,
             snr=snr,
             is_online=is_online,
+            is_local=hops_away == 0 if hops_away is not None else None,
+            is_gateway=role in ("ROUTER", "ROUTER_CLIENT") if role else None,
+            hops_away=hops_away,
             last_seen=last_heard,
             altitude=position.get("altitude"),
         )
