@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MeshForge Maps</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, system-ui, sans-serif;
+            background: #0a0e1a;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+
+        #map { width: 100vw; height: 100vh; z-index: 1; }
+
+        /* Header bar */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 48px;
+            background: rgba(10, 14, 26, 0.92);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(79, 195, 247, 0.15);
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            z-index: 1000;
+            gap: 16px;
+        }
+
+        .header-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #4fc3f7;
+            white-space: nowrap;
+        }
+
+        .header-subtitle {
+            font-size: 11px;
+            color: #78909c;
+            white-space: nowrap;
+        }
+
+        .header-stats {
+            margin-left: auto;
+            display: flex;
+            gap: 16px;
+            font-size: 12px;
+            color: #90a4ae;
+        }
+
+        .stat-badge {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .stat-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        /* Control panel */
+        .control-panel {
+            position: fixed;
+            top: 60px;
+            right: 12px;
+            width: 260px;
+            background: rgba(10, 14, 26, 0.94);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(79, 195, 247, 0.12);
+            border-radius: 8px;
+            z-index: 1000;
+            padding: 12px;
+            max-height: calc(100vh - 80px);
+            overflow-y: auto;
+        }
+
+        .panel-section {
+            margin-bottom: 14px;
+        }
+
+        .panel-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: #4fc3f7;
+            letter-spacing: 0.8px;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid rgba(79, 195, 247, 0.1);
+        }
+
+        /* Layer toggles */
+        .layer-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 0;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .layer-toggle input[type="checkbox"] {
+            accent-color: #4fc3f7;
+            width: 14px;
+            height: 14px;
+        }
+
+        .layer-color {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .layer-label {
+            font-size: 13px;
+            flex: 1;
+        }
+
+        .layer-count {
+            font-size: 11px;
+            color: #78909c;
+        }
+
+        /* Map style selector */
+        .map-style-select {
+            width: 100%;
+            padding: 6px 8px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(79, 195, 247, 0.15);
+            border-radius: 4px;
+            color: #e0e0e0;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .map-style-select option {
+            background: #1a1f2e;
+            color: #e0e0e0;
+        }
+
+        /* Space weather widget */
+        .weather-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+
+        .weather-item {
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 4px;
+            padding: 6px 8px;
+            text-align: center;
+        }
+
+        .weather-value {
+            font-size: 16px;
+            font-weight: 600;
+            color: #4fc3f7;
+        }
+
+        .weather-label {
+            font-size: 10px;
+            color: #78909c;
+            text-transform: uppercase;
+        }
+
+        .band-conditions {
+            text-align: center;
+            padding: 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-top: 6px;
+        }
+
+        .band-excellent { background: rgba(102, 187, 106, 0.2); color: #66bb6a; }
+        .band-good { background: rgba(102, 187, 106, 0.15); color: #81c784; }
+        .band-fair { background: rgba(255, 167, 38, 0.2); color: #ffa726; }
+        .band-poor { background: rgba(239, 83, 80, 0.2); color: #ef5350; }
+        .band-unknown { background: rgba(120, 144, 156, 0.2); color: #78909c; }
+
+        /* Leaflet popup overrides for dark theme */
+        .leaflet-popup-content-wrapper {
+            background: rgba(10, 14, 26, 0.95) !important;
+            color: #e0e0e0 !important;
+            border: 1px solid rgba(79, 195, 247, 0.2) !important;
+            border-radius: 6px !important;
+        }
+
+        .leaflet-popup-tip {
+            background: rgba(10, 14, 26, 0.95) !important;
+            border: 1px solid rgba(79, 195, 247, 0.2) !important;
+        }
+
+        .leaflet-popup-content {
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .popup-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .popup-network {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        .popup-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 0;
+        }
+
+        .popup-key { color: #78909c; }
+        .popup-val { color: #e0e0e0; font-weight: 500; }
+
+        /* Override marker cluster colors */
+        .marker-cluster-small {
+            background-color: rgba(79, 195, 247, 0.3) !important;
+        }
+        .marker-cluster-small div {
+            background-color: rgba(79, 195, 247, 0.6) !important;
+            color: #fff !important;
+        }
+        .marker-cluster-medium {
+            background-color: rgba(79, 195, 247, 0.4) !important;
+        }
+        .marker-cluster-medium div {
+            background-color: rgba(79, 195, 247, 0.7) !important;
+            color: #fff !important;
+        }
+        .marker-cluster-large {
+            background-color: rgba(79, 195, 247, 0.5) !important;
+        }
+        .marker-cluster-large div {
+            background-color: rgba(79, 195, 247, 0.8) !important;
+            color: #fff !important;
+        }
+
+        /* Toggle panel button (mobile) */
+        .toggle-panel-btn {
+            display: none;
+            position: fixed;
+            top: 56px;
+            right: 12px;
+            z-index: 1001;
+            background: rgba(10, 14, 26, 0.9);
+            border: 1px solid rgba(79, 195, 247, 0.2);
+            color: #4fc3f7;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        @media (max-width: 768px) {
+            .control-panel { display: none; }
+            .toggle-panel-btn { display: block; }
+            .control-panel.visible { display: block; width: calc(100vw - 24px); }
+        }
+
+        /* Leaflet control overrides */
+        .leaflet-control-zoom a {
+            background: rgba(10, 14, 26, 0.9) !important;
+            color: #4fc3f7 !important;
+            border-color: rgba(79, 195, 247, 0.2) !important;
+        }
+
+        .leaflet-control-attribution {
+            background: rgba(10, 14, 26, 0.8) !important;
+            color: #546e7a !important;
+            font-size: 10px !important;
+        }
+
+        .leaflet-control-attribution a {
+            color: #78909c !important;
+        }
+
+        /* Solar terminator overlay */
+        .terminator-overlay {
+            fill: rgba(0, 0, 0, 0.35);
+            stroke: rgba(255, 193, 7, 0.4);
+            stroke-width: 1.5;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <span class="header-title">MeshForge Maps</span>
+    <span class="header-subtitle">Multi-Source Mesh Network Map</span>
+    <div class="header-stats" id="headerStats">
+        <span class="stat-badge">
+            <span class="stat-dot" style="background:#66bb6a"></span>
+            <span id="statMeshtastic">0</span> Meshtastic
+        </span>
+        <span class="stat-badge">
+            <span class="stat-dot" style="background:#ab47bc"></span>
+            <span id="statReticulum">0</span> RNS
+        </span>
+        <span class="stat-badge">
+            <span class="stat-dot" style="background:#ff7043"></span>
+            <span id="statAredn">0</span> AREDN
+        </span>
+    </div>
+</div>
+
+<button class="toggle-panel-btn" onclick="togglePanel()">Controls</button>
+
+<div class="control-panel" id="controlPanel">
+    <div class="panel-section">
+        <div class="panel-section-title">Map Style</div>
+        <select class="map-style-select" id="tileSelect" onchange="changeTileLayer()">
+            <!-- Populated dynamically -->
+        </select>
+    </div>
+
+    <div class="panel-section">
+        <div class="panel-section-title">Network Layers</div>
+        <label class="layer-toggle">
+            <input type="checkbox" id="layerMeshtastic" checked onchange="toggleLayer('meshtastic')">
+            <span class="layer-color" style="background:#66bb6a"></span>
+            <span class="layer-label">Meshtastic</span>
+            <span class="layer-count" id="countMeshtastic">0</span>
+        </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="layerReticulum" checked onchange="toggleLayer('reticulum')">
+            <span class="layer-color" style="background:#ab47bc"></span>
+            <span class="layer-label">Reticulum / RMAP</span>
+            <span class="layer-count" id="countReticulum">0</span>
+        </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="layerAredn" checked onchange="toggleLayer('aredn')">
+            <span class="layer-color" style="background:#ff7043"></span>
+            <span class="layer-label">AREDN</span>
+            <span class="layer-count" id="countAredn">0</span>
+        </label>
+    </div>
+
+    <div class="panel-section">
+        <div class="panel-section-title">Overlays</div>
+        <label class="layer-toggle">
+            <input type="checkbox" id="overlayTerminator" checked onchange="toggleTerminator()">
+            <span class="layer-color" style="background:#ffc107"></span>
+            <span class="layer-label">Solar Terminator</span>
+        </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="overlayClustering" checked onchange="toggleClustering()">
+            <span class="layer-color" style="background:#4fc3f7"></span>
+            <span class="layer-label">Marker Clustering</span>
+        </label>
+    </div>
+
+    <div class="panel-section" id="weatherSection">
+        <div class="panel-section-title">Space Weather</div>
+        <div class="weather-grid">
+            <div class="weather-item">
+                <div class="weather-value" id="wxSFI">--</div>
+                <div class="weather-label">SFI</div>
+            </div>
+            <div class="weather-item">
+                <div class="weather-value" id="wxKp">--</div>
+                <div class="weather-label">Kp Index</div>
+            </div>
+            <div class="weather-item">
+                <div class="weather-value" id="wxWind">--</div>
+                <div class="weather-label">Solar Wind</div>
+            </div>
+            <div class="weather-item">
+                <div class="weather-value" id="wxBand">--</div>
+                <div class="weather-label">HF Cond.</div>
+            </div>
+        </div>
+        <div class="band-conditions band-unknown" id="bandBar">
+            Band Conditions: Loading...
+        </div>
+    </div>
+
+    <div class="panel-section">
+        <div class="panel-section-title">Data</div>
+        <button style="width:100%;padding:6px;background:rgba(79,195,247,0.1);border:1px solid rgba(79,195,247,0.2);color:#4fc3f7;border-radius:4px;cursor:pointer;font-size:12px"
+                onclick="refreshData()">
+            Refresh All Sources
+        </button>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<script>
+    // =========================================================================
+    // MeshForge Maps - Leaflet Frontend
+    // =========================================================================
+
+    const API_BASE = window.location.origin;
+
+    // Network colors (matches meshforge core palette)
+    const NETWORK_COLORS = {
+        meshtastic: '#66bb6a',
+        reticulum: '#ab47bc',
+        aredn:     '#ff7043',
+        hamclock:  '#42a5f5',
+    };
+
+    // Tile provider definitions (loaded from server, with fallback)
+    let TILE_PROVIDERS = {
+        carto_dark: {
+            name: 'CartoDB Dark Matter',
+            url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+            attribution: '&copy; OSM &copy; CARTO',
+            max_zoom: '20',
+        },
+        osm_standard: {
+            name: 'OpenStreetMap',
+            url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            attribution: '&copy; OpenStreetMap contributors',
+            max_zoom: '19',
+        },
+        osm_topo: {
+            name: 'OpenTopoMap',
+            url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+            attribution: '&copy; OpenTopoMap (CC-BY-SA)',
+            max_zoom: '17',
+        },
+        esri_satellite: {
+            name: 'Esri Satellite',
+            url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            attribution: '&copy; Esri, Maxar, Earthstar',
+            max_zoom: '19',
+        },
+        esri_topo: {
+            name: 'Esri Topographic',
+            url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+            attribution: '&copy; Esri, HERE, Garmin',
+            max_zoom: '19',
+        },
+        stadia_terrain: {
+            name: 'Stadia Terrain',
+            url: 'https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}.png',
+            attribution: '&copy; Stadia Maps &copy; Stamen Design',
+            max_zoom: '18',
+        },
+    };
+
+    // =========================================================================
+    // State
+    // =========================================================================
+
+    let map;
+    let currentTileLayer;
+    let clusterGroup;
+    let directGroup;        // non-clustered layer group
+    let terminatorLayer;
+    let useClustering = true;
+
+    // Per-network layer groups (for toggle visibility)
+    const networkLayers = {
+        meshtastic: [],
+        reticulum: [],
+        aredn: [],
+    };
+    const networkVisible = {
+        meshtastic: true,
+        reticulum: true,
+        aredn: true,
+    };
+    let allFeatures = [];
+
+    // =========================================================================
+    // Initialization
+    // =========================================================================
+
+    function initMap() {
+        map = L.map('map', {
+            center: [20, -100],
+            zoom: 4,
+            zoomControl: true,
+            attributionControl: true,
+        });
+
+        // Default tile layer
+        currentTileLayer = L.tileLayer(TILE_PROVIDERS.carto_dark.url, {
+            attribution: TILE_PROVIDERS.carto_dark.attribution,
+            maxZoom: parseInt(TILE_PROVIDERS.carto_dark.max_zoom),
+        }).addTo(map);
+
+        // Cluster group
+        clusterGroup = L.markerClusterGroup({
+            maxClusterRadius: 50,
+            spiderfyOnMaxZoom: true,
+            showCoverageOnHover: false,
+            zoomToBoundsOnClick: true,
+            iconCreateFunction: function(cluster) {
+                const count = cluster.getChildCount();
+                let size = 'small';
+                if (count > 50) size = 'large';
+                else if (count > 10) size = 'medium';
+                return L.divIcon({
+                    html: '<div>' + count + '</div>',
+                    className: 'marker-cluster marker-cluster-' + size,
+                    iconSize: L.point(40, 40),
+                });
+            },
+        }).addTo(map);
+
+        directGroup = L.layerGroup();
+
+        // Populate tile selector
+        populateTileSelector();
+
+        // Load configuration from server
+        loadConfig();
+
+        // Load node data
+        loadNodeData();
+
+        // Shift map down for header
+        map.getContainer().style.marginTop = '48px';
+        map.getContainer().style.height = 'calc(100vh - 48px)';
+        map.invalidateSize();
+    }
+
+    async function loadConfig() {
+        try {
+            const resp = await fetch(API_BASE + '/api/tile-providers');
+            if (resp.ok) {
+                const providers = await resp.json();
+                if (Object.keys(providers).length > 0) {
+                    TILE_PROVIDERS = providers;
+                    populateTileSelector();
+                }
+            }
+        } catch (e) {
+            console.debug('Using built-in tile providers');
+        }
+
+        try {
+            const resp = await fetch(API_BASE + '/api/config');
+            if (resp.ok) {
+                const config = await resp.json();
+                if (config.map_center_lat && config.map_center_lon) {
+                    map.setView(
+                        [config.map_center_lat, config.map_center_lon],
+                        config.map_default_zoom || 4
+                    );
+                }
+                if (config.default_tile_provider && TILE_PROVIDERS[config.default_tile_provider]) {
+                    document.getElementById('tileSelect').value = config.default_tile_provider;
+                    changeTileLayer();
+                }
+            }
+        } catch (e) {
+            console.debug('Using default config');
+        }
+    }
+
+    function populateTileSelector() {
+        const select = document.getElementById('tileSelect');
+        select.innerHTML = '';
+        for (const [key, provider] of Object.entries(TILE_PROVIDERS)) {
+            const opt = document.createElement('option');
+            opt.value = key;
+            opt.textContent = provider.name;
+            select.appendChild(opt);
+        }
+    }
+
+    // =========================================================================
+    // Data Loading
+    // =========================================================================
+
+    async function loadNodeData() {
+        try {
+            const resp = await fetch(API_BASE + '/api/nodes/geojson');
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            processGeoJSON(data);
+        } catch (e) {
+            console.error('Failed to load node data:', e);
+        }
+    }
+
+    function processGeoJSON(data) {
+        // Clear existing markers
+        clusterGroup.clearLayers();
+        directGroup.clearLayers();
+        allFeatures = data.features || [];
+
+        const counts = { meshtastic: 0, reticulum: 0, aredn: 0 };
+        networkLayers.meshtastic = [];
+        networkLayers.reticulum = [];
+        networkLayers.aredn = [];
+
+        for (const feature of allFeatures) {
+            const props = feature.properties || {};
+            const coords = feature.geometry?.coordinates;
+            if (!coords || coords.length < 2) continue;
+
+            const lat = coords[1];
+            const lon = coords[0];
+            const network = props.network || 'unknown';
+            const color = NETWORK_COLORS[network] || '#78909c';
+
+            // Create marker with custom icon
+            const marker = L.circleMarker([lat, lon], {
+                radius: 7,
+                fillColor: color,
+                color: props.is_online ? color : '#546e7a',
+                weight: props.is_online ? 2 : 1,
+                opacity: props.is_online ? 1.0 : 0.5,
+                fillOpacity: props.is_online === false ? 0.3 : 0.7,
+            });
+
+            // Bind popup
+            marker.bindPopup(buildPopup(props, color));
+
+            // Track by network
+            if (counts.hasOwnProperty(network)) {
+                counts[network]++;
+                networkLayers[network].push(marker);
+            }
+
+            // Add to appropriate layer
+            if (networkVisible[network] !== false) {
+                if (useClustering) {
+                    clusterGroup.addLayer(marker);
+                } else {
+                    directGroup.addLayer(marker);
+                }
+            }
+        }
+
+        // Update counts in UI
+        document.getElementById('countMeshtastic').textContent = counts.meshtastic;
+        document.getElementById('countReticulum').textContent = counts.reticulum;
+        document.getElementById('countAredn').textContent = counts.aredn;
+        document.getElementById('statMeshtastic').textContent = counts.meshtastic;
+        document.getElementById('statReticulum').textContent = counts.reticulum;
+        document.getElementById('statAredn').textContent = counts.aredn;
+
+        // Process overlay data (space weather, terminator)
+        const overlayData = data.properties?.overlay_data || {};
+        updateSpaceWeather(overlayData.space_weather);
+        if (document.getElementById('overlayTerminator').checked) {
+            updateTerminator(overlayData.solar_terminator);
+        }
+    }
+
+    function buildPopup(props, color) {
+        const rows = [];
+
+        if (props.node_type) {
+            rows.push(`<div class="popup-row"><span class="popup-key">Type</span><span class="popup-val">${esc(props.node_type)}</span></div>`);
+        }
+        if (props.hardware) {
+            rows.push(`<div class="popup-row"><span class="popup-key">Hardware</span><span class="popup-val">${esc(props.hardware)}</span></div>`);
+        }
+        if (props.role) {
+            rows.push(`<div class="popup-row"><span class="popup-key">Role</span><span class="popup-val">${esc(props.role)}</span></div>`);
+        }
+        if (props.battery != null) {
+            rows.push(`<div class="popup-row"><span class="popup-key">Battery</span><span class="popup-val">${props.battery}%</span></div>`);
+        }
+        if (props.snr != null) {
+            rows.push(`<div class="popup-row"><span class="popup-key">SNR</span><span class="popup-val">${props.snr} dB</span></div>`);
+        }
+        if (props.altitude != null) {
+            rows.push(`<div class="popup-row"><span class="popup-key">Altitude</span><span class="popup-val">${props.altitude}m</span></div>`);
+        }
+        if (props.firmware) {
+            rows.push(`<div class="popup-row"><span class="popup-key">Firmware</span><span class="popup-val">${esc(props.firmware)}</span></div>`);
+        }
+        if (props.description) {
+            rows.push(`<div class="popup-row"><span class="popup-key">Info</span><span class="popup-val">${esc(props.description)}</span></div>`);
+        }
+
+        const onlineStr = props.is_online === true ? 'Online' :
+                          props.is_online === false ? 'Offline' : 'Unknown';
+        const onlineColor = props.is_online === true ? '#66bb6a' :
+                            props.is_online === false ? '#ef5350' : '#78909c';
+
+        return `
+            <div class="popup-title" style="color:${color}">${esc(props.name || props.id || 'Unknown')}</div>
+            <div class="popup-network" style="color:${color}">${esc(props.network || '')} <span style="color:${onlineColor}">${onlineStr}</span></div>
+            ${rows.join('')}
+            <div class="popup-row" style="margin-top:4px;font-size:10px;color:#546e7a">
+                <span>ID: ${esc(props.id || '')}</span>
+            </div>
+        `;
+    }
+
+    function esc(str) {
+        if (!str) return '';
+        const div = document.createElement('div');
+        div.textContent = String(str);
+        return div.innerHTML;
+    }
+
+    // =========================================================================
+    // UI Controls
+    // =========================================================================
+
+    function changeTileLayer() {
+        const key = document.getElementById('tileSelect').value;
+        const provider = TILE_PROVIDERS[key];
+        if (!provider) return;
+
+        if (currentTileLayer) {
+            map.removeLayer(currentTileLayer);
+        }
+        currentTileLayer = L.tileLayer(provider.url, {
+            attribution: provider.attribution,
+            maxZoom: parseInt(provider.max_zoom) || 19,
+        }).addTo(map);
+    }
+
+    function toggleLayer(network) {
+        const checkbox = document.getElementById('layer' + network.charAt(0).toUpperCase() + network.slice(1));
+        networkVisible[network] = checkbox.checked;
+        rebuildMarkers();
+    }
+
+    function toggleClustering() {
+        useClustering = document.getElementById('overlayClustering').checked;
+        rebuildMarkers();
+    }
+
+    function rebuildMarkers() {
+        clusterGroup.clearLayers();
+        directGroup.clearLayers();
+
+        if (useClustering) {
+            if (map.hasLayer(directGroup)) map.removeLayer(directGroup);
+            if (!map.hasLayer(clusterGroup)) map.addLayer(clusterGroup);
+        } else {
+            if (map.hasLayer(clusterGroup)) map.removeLayer(clusterGroup);
+            if (!map.hasLayer(directGroup)) map.addLayer(directGroup);
+        }
+
+        for (const network of Object.keys(networkLayers)) {
+            if (!networkVisible[network]) continue;
+            for (const marker of networkLayers[network]) {
+                if (useClustering) {
+                    clusterGroup.addLayer(marker);
+                } else {
+                    directGroup.addLayer(marker);
+                }
+            }
+        }
+    }
+
+    function toggleTerminator() {
+        const show = document.getElementById('overlayTerminator').checked;
+        if (show) {
+            loadNodeData(); // re-fetch to get terminator data
+        } else if (terminatorLayer) {
+            map.removeLayer(terminatorLayer);
+            terminatorLayer = null;
+        }
+    }
+
+    function togglePanel() {
+        const panel = document.getElementById('controlPanel');
+        panel.classList.toggle('visible');
+    }
+
+    async function refreshData() {
+        await loadNodeData();
+    }
+
+    // =========================================================================
+    // Space Weather Display
+    // =========================================================================
+
+    function updateSpaceWeather(weather) {
+        if (!weather) return;
+
+        const sfiEl = document.getElementById('wxSFI');
+        const kpEl = document.getElementById('wxKp');
+        const windEl = document.getElementById('wxWind');
+        const bandEl = document.getElementById('wxBand');
+        const bandBar = document.getElementById('bandBar');
+
+        if (weather.solar_flux) sfiEl.textContent = weather.solar_flux;
+        if (weather.kp_index != null) kpEl.textContent = Number(weather.kp_index).toFixed(1);
+        if (weather.solar_wind_speed) windEl.textContent = weather.solar_wind_speed;
+
+        const cond = weather.band_conditions || 'unknown';
+        bandEl.textContent = cond.charAt(0).toUpperCase() + cond.slice(1);
+
+        bandBar.className = 'band-conditions band-' + cond;
+        bandBar.textContent = 'Band Conditions: ' + cond.charAt(0).toUpperCase() + cond.slice(1);
+    }
+
+    // =========================================================================
+    // Solar Terminator
+    // =========================================================================
+
+    function updateTerminator(termData) {
+        if (!termData) return;
+        if (terminatorLayer) {
+            map.removeLayer(terminatorLayer);
+        }
+
+        // Calculate terminator polygon from subsolar point
+        const subLat = termData.subsolar_lat;
+        const subLon = termData.subsolar_lon;
+        const points = [];
+
+        // Build the night-side polygon
+        for (let lng = -180; lng <= 180; lng += 2) {
+            const lngRad = lng * Math.PI / 180;
+            const subLatRad = subLat * Math.PI / 180;
+            const subLonRad = subLon * Math.PI / 180;
+
+            // Solar zenith angle = 90 deg at terminator
+            // latitude where sun is at horizon for this longitude
+            const dLng = (lng - subLon) * Math.PI / 180;
+            const terminatorLat = Math.atan(-Math.cos(dLng) / Math.tan(subLatRad)) * 180 / Math.PI;
+
+            points.push([terminatorLat, lng]);
+        }
+
+        // Close the polygon on the dark side
+        // Determine which pole is dark
+        const darkPole = subLat > 0 ? -90 : 90;
+        const nightPoly = [];
+
+        // Top/bottom edge
+        nightPoly.push([darkPole, -180]);
+        for (const p of points) {
+            nightPoly.push(p);
+        }
+        nightPoly.push([darkPole, 180]);
+        nightPoly.push([darkPole, -180]);
+
+        terminatorLayer = L.polygon(nightPoly, {
+            color: 'rgba(255, 193, 7, 0.4)',
+            fillColor: 'rgba(0, 0, 0, 0.3)',
+            fillOpacity: 0.3,
+            weight: 1.5,
+            interactive: false,
+        }).addTo(map);
+    }
+
+    // =========================================================================
+    // Auto-refresh
+    // =========================================================================
+
+    setInterval(function() {
+        loadNodeData();
+    }, 5 * 60 * 1000); // Refresh every 5 minutes
+
+    // =========================================================================
+    // Init
+    // =========================================================================
+
+    document.addEventListener('DOMContentLoaded', initMap);
+</script>
+
+</body>
+</html>

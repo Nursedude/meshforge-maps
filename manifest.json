@@ -1,0 +1,91 @@
+{
+    "id": "org.meshforge.extension.maps",
+    "name": "MeshForge Maps",
+    "version": "0.1.0",
+    "description": "Unified multi-source mesh network map aggregating Meshtastic, Reticulum/RMAP, HamClock, and AREDN data with configurable tile layers",
+    "author": "MeshForge Community",
+    "type": "extension",
+    "entry_point": "src/main.py",
+    "min_meshforge_version": "0.4.0",
+    "homepage": "https://github.com/Nursedude/meshforge-maps",
+    "license": "GPL-3.0",
+    "icon": "map-symbolic",
+    "category": "Maps",
+    "tags": [
+        "map",
+        "meshtastic",
+        "reticulum",
+        "rns",
+        "rmap",
+        "hamclock",
+        "aredn",
+        "leaflet",
+        "geojson",
+        "noc"
+    ],
+    "dependencies": [],
+    "permissions": [
+        "network_access"
+    ],
+    "premium": false,
+    "settings_schema": {
+        "default_tile_provider": {
+            "type": "choice",
+            "choices": [
+                "carto_dark",
+                "osm_standard",
+                "osm_topo",
+                "esri_satellite",
+                "esri_topo",
+                "stadia_terrain"
+            ],
+            "default": "carto_dark",
+            "label": "Default Map Style"
+        },
+        "enable_meshtastic": {
+            "type": "boolean",
+            "default": true,
+            "label": "Enable Meshtastic Layer"
+        },
+        "enable_reticulum": {
+            "type": "boolean",
+            "default": true,
+            "label": "Enable Reticulum/RMAP Layer"
+        },
+        "enable_hamclock": {
+            "type": "boolean",
+            "default": true,
+            "label": "Enable HamClock Layer"
+        },
+        "enable_aredn": {
+            "type": "boolean",
+            "default": true,
+            "label": "Enable AREDN Layer"
+        },
+        "map_center_lat": {
+            "type": "number",
+            "default": 20.0,
+            "label": "Default Center Latitude"
+        },
+        "map_center_lon": {
+            "type": "number",
+            "default": -100.0,
+            "label": "Default Center Longitude"
+        },
+        "map_default_zoom": {
+            "type": "number",
+            "default": 4,
+            "label": "Default Zoom Level"
+        },
+        "cache_ttl_minutes": {
+            "type": "number",
+            "default": 15,
+            "label": "Data Cache TTL (minutes)"
+        },
+        "http_port": {
+            "type": "number",
+            "default": 8808,
+            "label": "Map Server HTTP Port"
+        }
+    }
+}
