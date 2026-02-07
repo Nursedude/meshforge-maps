@@ -27,6 +27,8 @@ class DataAggregator:
         cache_ttl = config.get("cache_ttl_minutes", 15) * 60
         self._collectors = {}
         self._cached_overlay: Dict[str, Any] = {}
+        self._last_collect_time: float = 0
+        self._last_collect_counts: Dict[str, int] = {}
 
         # Initialize live MQTT subscriber for Meshtastic
         self._mqtt_subscriber: Optional[MQTTSubscriber] = None
@@ -74,6 +76,8 @@ class DataAggregator:
                 source_counts[name] = len(features)
 
                 for feature in features:
+                    if feature is None:
+                        continue
                     fid = feature.get("properties", {}).get("id")
                     if fid and fid not in seen_ids:
                         seen_ids.add(fid)
@@ -93,6 +97,8 @@ class DataAggregator:
 
         # Cache overlay data so /api/overlay doesn't trigger a full re-collect
         self._cached_overlay = overlay_data
+        self._last_collect_time = time.time()
+        self._last_collect_counts = dict(source_counts)
 
         result = make_feature_collection(all_features, "aggregated")
         result["properties"]["sources"] = source_counts
@@ -144,6 +150,17 @@ class DataAggregator:
             except Exception as e:
                 logger.error("Overlay-only collection failed: %s", e)
         return {}
+
+    @property
+    def last_collect_age_seconds(self) -> Optional[float]:
+        """Seconds since last successful collect_all(), or None if never collected."""
+        if self._last_collect_time == 0:
+            return None
+        return time.time() - self._last_collect_time
+
+    @property
+    def last_collect_counts(self) -> Dict[str, int]:
+        return dict(self._last_collect_counts)
 
     def clear_all_caches(self) -> None:
         for collector in self._collectors.values():

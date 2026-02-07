@@ -172,7 +172,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"links": links, "link_count": len(links)})
 
     def _serve_status(self) -> None:
-        """Serve server health status with uptime and node store stats."""
+        """Serve server health status with uptime, data age, and node store stats."""
         import time as _time
         aggregator = self._get_aggregator()
         config = self._get_config()
@@ -181,16 +181,34 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if aggregator and aggregator._mqtt_subscriber:
             mqtt_status = "connected" if aggregator._mqtt_subscriber._running else "stopped"
             mqtt_nodes = aggregator._mqtt_subscriber.store.node_count
+
         start_time = getattr(self.server, "_mf_start_time", None)
         uptime = int(_time.time() - start_time) if start_time else None
+
+        # Data age and staleness indicators (upstream improvement)
+        data_age = None
+        data_stale = False
+        source_counts = {}
+        if aggregator:
+            data_age = aggregator.last_collect_age_seconds
+            if data_age is not None:
+                data_age = int(data_age)
+                # Data older than 2x cache TTL is considered stale
+                cache_ttl = (config.get("cache_ttl_minutes", 15) if config else 15) * 60
+                data_stale = data_age > (cache_ttl * 2)
+            source_counts = aggregator.last_collect_counts
+
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
-            "version": "0.2.0-beta",
+            "version": "0.3.0-beta",
             "sources": config.get_enabled_sources() if config else [],
+            "source_counts": source_counts,
             "mqtt_live": mqtt_status,
             "mqtt_node_count": mqtt_nodes,
             "uptime_seconds": uptime,
+            "data_age_seconds": data_age,
+            "data_stale": data_stale,
         })
 
     def _send_json(self, data: Any, status: int = 200) -> None:
