@@ -79,13 +79,29 @@ class AREDNCollector(BaseCollector):
         return make_feature_collection(features, self.source_name)
 
     def _fetch_from_node(self, target: str) -> List[Dict[str, Any]]:
-        """Query a single AREDN node's sysinfo API with LQM data."""
+        """Query a single AREDN node's sysinfo API with LQM data.
+
+        Validates the HTTP response contains expected AREDN JSON fields
+        (node, sysinfo, or meshrf) to confirm this is a real AREDN node
+        and not some other HTTP service on the same port.
+        """
         features = []
         url = f"http://{target}/a/sysinfo?lqm=1"
         try:
-            req = Request(url, headers={"Accept": "application/json"})
+            req = Request(url, headers={
+                "Accept": "application/json",
+                "User-Agent": "MeshForge/1.0",
+            })
             with urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode())
+
+            # Validate this is actually an AREDN node response
+            if not isinstance(data, dict):
+                logger.debug("AREDN node %s: response is not a JSON object", target)
+                return features
+            if not ("node" in data or "sysinfo" in data or "meshrf" in data):
+                logger.debug("AREDN node %s: missing expected AREDN fields", target)
+                return features
 
             # Parse the queried node itself
             feature = self._parse_sysinfo(data, target)
@@ -94,10 +110,11 @@ class AREDNCollector(BaseCollector):
 
             # Parse neighbor nodes from LQM data
             lqm = data.get("lqm", [])
-            for neighbor in lqm:
-                nf = self._parse_lqm_neighbor(neighbor)
-                if nf:
-                    features.append(nf)
+            if isinstance(lqm, list):
+                for neighbor in lqm:
+                    nf = self._parse_lqm_neighbor(neighbor)
+                    if nf:
+                        features.append(nf)
 
             logger.debug("AREDN node %s returned %d entries", target, len(features))
         except (URLError, OSError, json.JSONDecodeError) as e:
@@ -125,10 +142,10 @@ class AREDNCollector(BaseCollector):
         firmware = data.get("firmware_version", "")
         api_version = data.get("api_version", "")
 
-        # System metrics
-        sysinfo = data.get("sysinfo", {})
+        # System metrics (with empty-sequence guards)
+        sysinfo = data.get("sysinfo", {}) or {}
         uptime = sysinfo.get("uptime", "")
-        loads = sysinfo.get("loads", [])
+        loads = sysinfo.get("loads", []) or []
 
         return make_feature(
             node_id=node_name,
