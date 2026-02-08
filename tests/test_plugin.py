@@ -179,3 +179,157 @@ class TestPluginEventHandlers:
     def test_get_status_when_not_running(self):
         plugin = MeshForgeMapsPlugin()
         assert "not running" in plugin._get_status()
+
+    # --- HamClock TUI tools ---
+
+    def test_get_propagation_when_not_running(self):
+        plugin = MeshForgeMapsPlugin()
+        assert plugin._get_propagation() == "Server not running"
+
+    @patch("src.main.MapServer")
+    @patch("src.main.MapsConfig")
+    def test_get_propagation_no_hamclock(self, MockConfig, MockServer):
+        mock_server = MockServer.return_value
+        mock_server.start.return_value = True
+        mock_server.port = 8808
+        mock_server.aggregator._collectors = {}
+
+        context = MagicMock()
+        context.settings = {}
+
+        plugin = MeshForgeMapsPlugin()
+        plugin.activate(context)
+        assert "not enabled" in plugin._get_propagation()
+
+    @patch("src.main.MapServer")
+    @patch("src.main.MapsConfig")
+    def test_get_propagation_with_data(self, MockConfig, MockServer):
+        mock_server = MockServer.return_value
+        mock_server.start.return_value = True
+        mock_server.port = 8808
+
+        mock_hc = MagicMock()
+        mock_hc.get_hamclock_data.return_value = {
+            "source": "HamClock API",
+            "available": True,
+            "space_weather": {"solar_flux": "150", "kp_index": "2", "band_conditions": "good"},
+            "voacap": {"bands": {"20m": {"reliability": 90, "status": "excellent"}}, "best_band": "20m"},
+        }
+        mock_server.aggregator._collectors = {"hamclock": mock_hc}
+
+        context = MagicMock()
+        context.settings = {}
+
+        plugin = MeshForgeMapsPlugin()
+        plugin.activate(context)
+        result = plugin._get_propagation()
+        assert "HamClock API" in result
+        assert "SFI: 150" in result
+        assert "20m" in result
+        assert "90%" in result
+
+    def test_get_dxspots_when_not_running(self):
+        plugin = MeshForgeMapsPlugin()
+        assert plugin._get_dxspots() == "Server not running"
+
+    @patch("src.main.MapServer")
+    @patch("src.main.MapsConfig")
+    def test_get_dxspots_with_spots(self, MockConfig, MockServer):
+        mock_server = MockServer.return_value
+        mock_server.start.return_value = True
+        mock_server.port = 8808
+
+        mock_hc = MagicMock()
+        mock_hc.get_hamclock_data.return_value = {
+            "available": True,
+            "dxspots": [
+                {"dx_call": "JA1ABC", "freq_khz": "14250", "de_call": "W6XYZ", "utc": "1430"},
+            ],
+        }
+        mock_server.aggregator._collectors = {"hamclock": mock_hc}
+
+        context = MagicMock()
+        context.settings = {}
+
+        plugin = MeshForgeMapsPlugin()
+        plugin.activate(context)
+        result = plugin._get_dxspots()
+        assert "JA1ABC" in result
+        assert "14250" in result
+
+    @patch("src.main.MapServer")
+    @patch("src.main.MapsConfig")
+    def test_get_dxspots_unavailable(self, MockConfig, MockServer):
+        mock_server = MockServer.return_value
+        mock_server.start.return_value = True
+        mock_server.port = 8808
+
+        mock_hc = MagicMock()
+        mock_hc.get_hamclock_data.return_value = {"available": False}
+        mock_server.aggregator._collectors = {"hamclock": mock_hc}
+
+        context = MagicMock()
+        context.settings = {}
+
+        plugin = MeshForgeMapsPlugin()
+        plugin.activate(context)
+        assert "not available" in plugin._get_dxspots()
+
+    def test_get_hamclock_status_when_not_running(self):
+        plugin = MeshForgeMapsPlugin()
+        assert plugin._get_hamclock_status() == "Server not running"
+
+    @patch("src.main.MapServer")
+    @patch("src.main.MapsConfig")
+    def test_get_hamclock_status_connected(self, MockConfig, MockServer):
+        mock_server = MockServer.return_value
+        mock_server.start.return_value = True
+        mock_server.port = 8808
+
+        mock_hc = MagicMock()
+        mock_hc.get_hamclock_data.return_value = {
+            "available": True,
+            "host": "192.168.1.50",
+            "port": 8080,
+            "source": "HamClock API",
+            "de_station": {"call": "WH6GXZ", "grid": "BL11"},
+            "dx_station": {"call": "F5ABC", "grid": "JN18"},
+            "dxspots": [{"dx_call": "JA1ABC"}],
+        }
+        mock_server.aggregator._collectors = {"hamclock": mock_hc}
+        mock_server.aggregator.get_circuit_breaker_states.return_value = {
+            "hamclock": {"state": "CLOSED", "failure_count": 0},
+        }
+
+        context = MagicMock()
+        context.settings = {}
+
+        plugin = MeshForgeMapsPlugin()
+        plugin.activate(context)
+        result = plugin._get_hamclock_status()
+        assert "CONNECTED" in result
+        assert "192.168.1.50" in result
+        assert "WH6GXZ" in result
+        assert "F5ABC" in result
+        assert "1 active" in result
+        assert "CLOSED" in result
+
+    @patch("src.main.MapServer")
+    @patch("src.main.MapsConfig")
+    def test_activate_registers_hamclock_tools(self, MockConfig, MockServer):
+        mock_server = MockServer.return_value
+        mock_server.start.return_value = True
+        mock_server.port = 8808
+
+        context = MagicMock()
+        context.settings = {}
+
+        plugin = MeshForgeMapsPlugin()
+        plugin.activate(context)
+
+        # Should register 5 tools total (2 original + 3 new HamClock tools)
+        assert context.register_tool.call_count == 5
+        tool_ids = [call[1]["tool_id"] for call in context.register_tool.call_args_list]
+        assert "meshforge_maps_propagation" in tool_ids
+        assert "meshforge_maps_dxspots" in tool_ids
+        assert "meshforge_maps_hamclock_status" in tool_ids

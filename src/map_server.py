@@ -60,6 +60,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "/api/overlay": self._serve_overlay,
             "/api/topology": self._serve_topology,
             "/api/status": self._serve_status,
+            "/api/hamclock": self._serve_hamclock,
         }
 
         handler = routes.get(path)
@@ -177,6 +178,23 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         links = aggregator.get_topology_links()
         self._send_json({"links": links, "link_count": len(links)})
 
+    def _serve_hamclock(self) -> None:
+        """Serve HamClock-specific data (propagation, bands, DE/DX, spots).
+
+        Returns all available HamClock data from the collector directly,
+        using cached data if fresh.
+        """
+        aggregator = self._get_aggregator()
+        if not aggregator:
+            self._send_json({"error": "Aggregator not initialized"}, 503)
+            return
+        hamclock_collector = aggregator._collectors.get("hamclock")
+        if not hamclock_collector:
+            self._send_json({"error": "HamClock source not enabled", "available": False}, 404)
+            return
+        data = hamclock_collector.get_hamclock_data()
+        self._send_json(data)
+
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
         aggregator = self._get_aggregator()
@@ -217,12 +235,18 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if aggregator:
             event_bus_stats = aggregator.event_bus.stats
 
+        # Per-source health (last error, success counts, etc.)
+        source_health = {}
+        if aggregator:
+            source_health = aggregator.get_source_health()
+
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
             "version": "0.3.0-beta",
             "sources": config.get_enabled_sources() if config else [],
             "source_counts": source_counts,
+            "source_health": source_health,
             "mqtt_live": mqtt_status,
             "mqtt_node_count": mqtt_nodes,
             "uptime_seconds": uptime,

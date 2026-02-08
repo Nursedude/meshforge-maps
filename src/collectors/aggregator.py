@@ -210,6 +210,13 @@ class DataAggregator:
         """Return circuit breaker stats for all registered sources."""
         return self._circuit_breaker_registry.get_all_states()
 
+    def get_source_health(self) -> Dict[str, Any]:
+        """Return per-source health info for all collectors."""
+        health: Dict[str, Any] = {}
+        for name, collector in self._collectors.items():
+            health[name] = collector.health_info
+        return health
+
     def clear_all_caches(self) -> None:
         for collector in self._collectors.values():
             collector.clear_cache()
