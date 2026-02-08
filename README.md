@@ -2,11 +2,11 @@
 
 > **Read the white paper:** [Building MeshForge Maps -- AI-Assisted Mesh Network Cartography](https://nursedude.substack.com/p/building-meshforge-maps)
 
-![Version](https://img.shields.io/badge/version-0.2.0--beta-blue)
+![Version](https://img.shields.io/badge/version-0.3.0--beta-blue)
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-111%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-272%20passing-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
 **Maps extension for [MeshForge](https://github.com/Nursedude/meshforge)** -- a unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, HamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, and offline tile caching.
@@ -202,6 +202,43 @@ pip install paho-mqtt meshtastic
 
 No external Python dependencies required for core functionality -- uses only stdlib (`http.server`, `json`, `urllib`, `subprocess`, `threading`).
 
+## Supported Hardware
+
+MeshForge Maps runs on any platform with Python 3.9+. It is lightweight (stdlib only, in-memory storage) and well suited for single-board computers commonly used in mesh networking deployments.
+
+### Raspberry Pi
+
+| Model | SoC | RAM | Status | Notes |
+|-------|-----|-----|--------|-------|
+| **Raspberry Pi 5** | BCM2712 (Cortex-A76) | 2/4/8 GB | Recommended | Best performance for multi-source collection + MQTT |
+| **Raspberry Pi 4 Model B** | BCM2711 (Cortex-A72) | 1/2/4/8 GB | Recommended | Most common deployment target |
+| **Raspberry Pi 400** | BCM2711 (Cortex-A72) | 4 GB | Supported | Keyboard form factor, same SoC as Pi 4 |
+| **Raspberry Pi 3 Model B+** | BCM2837B0 (Cortex-A53) | 1 GB | Supported | Adequate for single-source or cached operation |
+| **Raspberry Pi 3 Model B** | BCM2837 (Cortex-A53) | 1 GB | Supported | Adequate for single-source or cached operation |
+| **Raspberry Pi Zero 2 W** | RP3A0 (Cortex-A53) | 512 MB | Supported | Quad-core; suitable for headless/field deployments |
+| **Raspberry Pi Zero W** | BCM2835 (ARM1176) | 512 MB | Limited | Single-core; functional but slow with live MQTT |
+
+> **Minimum:** 512 MB RAM, ARMv7+ (armhf) or ARM64 (aarch64). Any Pi with a quad-core SoC handles all four collectors + live MQTT comfortably.
+
+### Supported Operating Systems
+
+| OS | Version | Python | Status |
+|----|---------|--------|--------|
+| **Raspberry Pi OS (Bookworm)** | Debian 12 based | 3.11 | Recommended |
+| **Raspberry Pi OS (Bullseye)** | Debian 11 based | 3.9 | Supported |
+| **Ubuntu Server** | 22.04 / 24.04 LTS (ARM64) | 3.10 / 3.12 | Supported |
+| **DietPi** | Latest (Bookworm based) | 3.11 | Supported |
+| **Armbian** | Bookworm / Jammy | 3.11 / 3.10 | Supported |
+| **Debian** | 12 Bookworm+ (x86_64/ARM) | 3.11 | Supported |
+| **macOS** | 13+ (Ventura) | 3.9+ (Homebrew/system) | Supported |
+| **Windows** | 10/11 | 3.9+ (python.org) | Supported |
+
+> **Not supported:** Raspberry Pi OS Legacy (Buster / Debian 10) ships Python 3.7 which is below the 3.9 minimum. Upgrade to Bookworm or install Python 3.9+ manually.
+
+### Desktop / Server
+
+MeshForge Maps also runs on any x86_64 or ARM64 machine with Python 3.9+. No OS-specific dependencies -- Linux, macOS, and Windows are all supported for development and deployment.
+
 ## Configuration
 
 Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/settings.json`:
@@ -267,9 +304,11 @@ flowchart LR
 
 ```bash
 python -m pytest tests/ -v
-# 111 tests covering: base helpers, config, all 4 collectors,
+# 272 tests covering: base helpers, config, all 4 collectors,
 # aggregator deduplication, MQTT node store, topology links,
-# map server startup/port fallback, plugin lifecycle/events
+# map server startup/port fallback, plugin lifecycle/events,
+# circuit breaker, reconnect strategy, event bus, WebSocket server,
+# real-time pipeline, OpenHamClock detection, health endpoint
 ```
 
 ## Contributing
