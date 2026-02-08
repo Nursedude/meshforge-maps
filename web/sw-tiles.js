@@ -18,7 +18,9 @@
 
 const CACHE_NAME = 'meshforge-maps-tiles-v1';
 const STATIC_CACHE = 'meshforge-maps-static-v1';
+const API_CACHE = 'meshforge-maps-api-v1';
 const MAX_TILE_CACHE_ITEMS = 2000;  // LRU eviction threshold
+const API_CACHE_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes for API responses
 
 // Tile domains to cache
 const TILE_DOMAINS = [
@@ -109,11 +111,12 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
+    const KEEP_CACHES = [CACHE_NAME, STATIC_CACHE, API_CACHE];
     event.waitUntil(
         caches.keys().then((names) => {
             return Promise.all(
                 names
-                    .filter((name) => name !== CACHE_NAME && name !== STATIC_CACHE)
+                    .filter((name) => !KEEP_CACHES.includes(name))
                     .map((name) => caches.delete(name))
             );
         }).then(() => self.clients.claim())
@@ -134,8 +137,8 @@ self.addEventListener('fetch', (event) => {
         // CDN ASSETS: Cache-first (Leaflet, D3, etc.)
         event.respondWith(cacheFirst(event.request, STATIC_CACHE));
     } else if (isAPIRequest(url)) {
-        // API: Network-first, falling back to cache
-        event.respondWith(networkFirst(event.request, STATIC_CACHE));
+        // API: Network-first, falling back to cache (dedicated API cache)
+        event.respondWith(networkFirst(event.request, API_CACHE));
     } else {
         // Everything else: stale-while-revalidate
         event.respondWith(staleWhileRevalidate(event.request, STATIC_CACHE));
@@ -214,7 +217,9 @@ async function staleWhileRevalidate(request, cacheName) {
 // ---------------------------------------------------------------------------
 
 self.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'CLEAR_TILE_CACHE') {
+    if (!event.data || !event.data.type) return;
+
+    if (event.data.type === 'CLEAR_TILE_CACHE') {
         event.waitUntil(
             caches.delete(CACHE_NAME).then(() => {
                 event.ports[0]?.postMessage({ cleared: true });
@@ -222,15 +227,112 @@ self.addEventListener('message', (event) => {
         );
     }
 
-    if (event.data && event.data.type === 'CACHE_STATS') {
+    if (event.data.type === 'CLEAR_ALL_CACHES') {
         event.waitUntil(
-            caches.open(CACHE_NAME).then(async (cache) => {
-                const keys = await cache.keys();
+            Promise.all([
+                caches.delete(CACHE_NAME),
+                caches.delete(API_CACHE),
+            ]).then(() => {
+                event.ports[0]?.postMessage({ cleared: true });
+            })
+        );
+    }
+
+    if (event.data.type === 'CACHE_STATS') {
+        event.waitUntil(
+            Promise.all([
+                caches.open(CACHE_NAME).then(c => c.keys()),
+                caches.open(API_CACHE).then(c => c.keys()).catch(() => []),
+                caches.open(STATIC_CACHE).then(c => c.keys()).catch(() => []),
+            ]).then(([tileKeys, apiKeys, staticKeys]) => {
                 event.ports[0]?.postMessage({
-                    tileCount: keys.length,
+                    tileCount: tileKeys.length,
+                    apiCount: apiKeys.length,
+                    staticCount: staticKeys.length,
                     maxTiles: MAX_TILE_CACHE_ITEMS,
                 });
             })
         );
     }
+
+    if (event.data.type === 'PRECACHE_REGION') {
+        // Pre-cache tiles for a geographic region at specified zoom levels.
+        // Message format: { type: 'PRECACHE_REGION', tileUrlTemplate, bounds, minZoom, maxZoom }
+        // bounds: { north, south, east, west }
+        event.waitUntil(precacheRegion(event.data, event.ports[0]));
+    }
 });
+
+// ---------------------------------------------------------------------------
+// Region pre-caching for offline use
+// ---------------------------------------------------------------------------
+
+/**
+ * Calculate tile coordinates for a lat/lon at a given zoom level.
+ */
+function latLonToTile(lat, lon, zoom) {
+    const n = Math.pow(2, zoom);
+    const x = Math.floor((lon + 180) / 360 * n);
+    const latRad = lat * Math.PI / 180;
+    const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+    return { x: Math.max(0, Math.min(n - 1, x)), y: Math.max(0, Math.min(n - 1, y)) };
+}
+
+/**
+ * Pre-cache tiles for a geographic region.
+ * Rate-limited to avoid overloading tile servers.
+ */
+async function precacheRegion(data, port) {
+    const { tileUrlTemplate, bounds, minZoom, maxZoom } = data;
+    if (!tileUrlTemplate || !bounds) {
+        port?.postMessage({ error: 'Missing tileUrlTemplate or bounds' });
+        return;
+    }
+
+    const cache = await caches.open(CACHE_NAME);
+    let cached = 0;
+    let skipped = 0;
+    let failed = 0;
+    const maxTiles = 500; // Safety limit per precache request
+    let total = 0;
+
+    const effectiveMinZoom = minZoom || 1;
+    const effectiveMaxZoom = Math.min(maxZoom || 12, 14); // Cap at z14
+
+    for (let z = effectiveMinZoom; z <= effectiveMaxZoom && total < maxTiles; z++) {
+        const topLeft = latLonToTile(bounds.north, bounds.west, z);
+        const bottomRight = latLonToTile(bounds.south, bounds.east, z);
+
+        for (let x = topLeft.x; x <= bottomRight.x && total < maxTiles; x++) {
+            for (let y = topLeft.y; y <= bottomRight.y && total < maxTiles; y++) {
+                total++;
+                const url = tileUrlTemplate
+                    .replace('{z}', z)
+                    .replace('{x}', x)
+                    .replace('{y}', y)
+                    .replace('{s}', 'a'); // Use subdomain 'a' for precaching
+                try {
+                    const existing = await cache.match(url);
+                    if (existing) {
+                        skipped++;
+                        continue;
+                    }
+                    const response = await fetch(url);
+                    if (response.ok) {
+                        await cache.put(url, response);
+                        cached++;
+                    } else {
+                        failed++;
+                    }
+                    // Rate limit: small delay between fetches
+                    await new Promise(r => setTimeout(r, 50));
+                } catch {
+                    failed++;
+                }
+            }
+        }
+    }
+
+    await enforceCacheLimit(CACHE_NAME, MAX_TILE_CACHE_ITEMS);
+    port?.postMessage({ cached, skipped, failed, total });
+}

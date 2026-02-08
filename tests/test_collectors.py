@@ -616,11 +616,17 @@ class TestAREDNCollector:
         c = AREDNCollector()
         assert c._parse_sysinfo({"node": "X", "lat": "abc", "lon": "def"}, "X") is None
 
-    def test_parse_lqm_neighbor_returns_none(self):
+    def test_parse_lqm_neighbor_parses_link(self):
         c = AREDNCollector()
-        # Currently returns None (no coords in LQM)
-        assert c._parse_lqm_neighbor({"name": "Neighbor1"}) is None
-        assert c._parse_lqm_neighbor({}) is None
+        # Valid neighbor returns a topology link dict
+        result = c._parse_lqm_neighbor({"name": "Neighbor1", "snr": 20}, "Source")
+        assert result is not None
+        assert result["source"] == "Source"
+        assert result["target"] == "Neighbor1"
+        assert result["snr"] == 20.0
+        # Empty name or missing name returns None
+        assert c._parse_lqm_neighbor({}, "Source") is None
+        assert c._parse_lqm_neighbor({"name": ""}, "Source") is None
 
 
 # ==========================================================================

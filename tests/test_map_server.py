@@ -218,3 +218,50 @@ class TestMapServerHTTPEndpoints:
         for component in data["components"].values():
             assert "score" in component
             assert "max" in component
+
+    # --- Phase 3 endpoints ---
+
+    def test_topology_geojson_endpoint(self):
+        data = self._get_json("/api/topology/geojson")
+        assert data["type"] == "FeatureCollection"
+        assert "features" in data
+        assert isinstance(data["features"], list)
+        assert "properties" in data
+        assert "link_count" in data["properties"]
+
+    def test_trajectory_endpoint_empty(self):
+        data = self._get_json("/api/nodes/!nonexistent/trajectory")
+        assert data["type"] == "FeatureCollection"
+        assert data["features"] == []
+
+    def test_node_history_endpoint_empty(self):
+        data = self._get_json("/api/nodes/!nonexistent/history")
+        assert data["node_id"] == "!nonexistent"
+        assert data["observations"] == []
+        assert data["count"] == 0
+
+    def test_snapshot_endpoint(self):
+        data = self._get_json("/api/snapshot/1700000000")
+        assert data["type"] == "FeatureCollection"
+        assert isinstance(data["features"], list)
+
+    def test_tracked_nodes_endpoint(self):
+        data = self._get_json("/api/history/nodes")
+        assert "nodes" in data
+        assert isinstance(data["nodes"], list)
+        assert "total_nodes" in data
+        assert "total_observations" in data
+
+    def test_core_health_endpoint(self):
+        data = self._get_json("/api/core-health")
+        assert "available" in data
+        # Core won't be running in tests, so available should be False
+        assert isinstance(data["available"], bool)
+
+    def test_trajectory_with_query_params(self):
+        data = self._get_json("/api/nodes/!test/trajectory?since=1000&until=2000")
+        assert data["type"] == "FeatureCollection"
+
+    def test_node_history_with_limit(self):
+        data = self._get_json("/api/nodes/!test/history?limit=10")
+        assert "observations" in data
