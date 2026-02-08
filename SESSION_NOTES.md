@@ -2,7 +2,7 @@
 
 ---
 
-## Session 7: Phase 3 — Node History, Topology GeoJSON, Cross-Process Health
+## Session 8: Phase 3 — Node History, Topology GeoJSON, Cross-Process Health
 
 **Date:** 2026-02-08
 **Branch:** `claude/node-history-offline-caching-xAOm4`
@@ -124,6 +124,33 @@
 - Session stayed focused and systematic throughout all 5 Phase 3 items
 - No entropy detected — all features implemented, tested, and integrated
 - Clean boundary: all tests green, code compiles, ready for Phase 4
+
+---
+
+## Session 7: README Update -- Supported Hardware, OS, Version Sync
+
+**Date:** 2026-02-08
+**Branch:** `claude/update-readme-hardware-TtMOJ`
+**Scope:** Documentation update -- add supported Raspberry Pi hardware and OS tables, fix stale version/test badges
+
+### Changes Made
+
+**README.md:**
+1. **Version badge fix:** `0.2.0-beta` → `0.3.0-beta` (was out of sync with `manifest.json` and `src/__init__.__version__` since Session 4)
+2. **Test count badge fix:** `111` → `272` (was stale since Session 1; sessions 2-6 added 161 tests)
+3. **New "Supported Hardware" section:** Raspberry Pi compatibility matrix (Pi 5, Pi 4, Pi 400, Pi 3 B+, Pi 3 B, Zero 2 W, Zero W) with SoC, RAM, status, and deployment notes
+4. **New "Supported Operating Systems" table:** RPi OS Bookworm/Bullseye, Ubuntu Server 22.04/24.04, DietPi, Armbian, Debian, macOS, Windows -- with Python versions and status
+5. **Buster not-supported callout:** Debian 10 ships Python 3.7, below the 3.9 minimum
+6. **Updated Testing section:** Expanded test coverage description to include circuit breaker, reconnect, event bus, WebSocket, OpenHamClock, and health endpoint tests
+
+### Files Modified (1)
+- `README.md` -- all changes above (43 insertions, 4 deletions)
+
+### Test Results
+- No code changes; test suite unchanged at 272 passed, 22 skipped
+
+### Session Entropy Watch
+Minimal session -- single focused documentation task. No entropy.
 
 ---
 
