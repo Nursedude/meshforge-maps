@@ -22,6 +22,8 @@ from urllib.parse import parse_qs, urlparse
 
 from .collectors.aggregator import DataAggregator
 from .utils.config import NETWORK_COLORS, TILE_PROVIDERS, MapsConfig
+from .utils.event_bus import Event, EventBus, EventType, NodeEvent
+from .utils.websocket_server import MapWebSocketServer
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +134,10 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
         cfg = config.to_dict()
         cfg["network_colors"] = NETWORK_COLORS
+        # Include WebSocket port so frontend can connect
+        ws_server = getattr(self.server, "_mf_ws_server", None)
+        if ws_server:
+            cfg["ws_port"] = ws_server.port
         self._send_json(cfg)
 
     def _serve_tile_providers(self) -> None:
@@ -202,6 +208,15 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if aggregator:
             circuit_breaker_states = aggregator.get_circuit_breaker_states()
 
+        # WebSocket server stats
+        ws_server = getattr(self.server, "_mf_ws_server", None)
+        websocket_stats = ws_server.stats if ws_server else None
+
+        # Event bus stats
+        event_bus_stats = None
+        if aggregator:
+            event_bus_stats = aggregator.event_bus.stats
+
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
@@ -214,6 +229,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "data_age_seconds": data_age,
             "data_stale": data_stale,
             "circuit_breakers": circuit_breaker_states,
+            "websocket": websocket_stats,
+            "event_bus": event_bus_stats,
         })
 
     def _send_json(self, data: Any, status: int = 200) -> None:
@@ -255,6 +272,10 @@ class MapServer:
         self._port: int = 0  # Actual bound port
         self._web_dir = str(Path(__file__).parent.parent / "web")
 
+        # WebSocket broadcast server for real-time updates
+        self._ws_server: Optional[MapWebSocketServer] = None
+        self._ws_port: int = 0
+
     def start(self) -> bool:
         """Start the HTTP server in a background thread.
 
@@ -289,6 +310,9 @@ class MapServer:
                     )
                 else:
                     logger.info("MeshForge Maps server started on http://127.0.0.1:%d", port)
+
+                # Start WebSocket server on adjacent port
+                self._start_websocket(port + 1)
                 return True
             except OSError as e:
                 last_error = e
@@ -301,8 +325,50 @@ class MapServer:
         )
         return False
 
+    def _start_websocket(self, ws_port: int) -> None:
+        """Start the WebSocket server and wire it to the event bus."""
+        self._ws_server = MapWebSocketServer(
+            host="127.0.0.1",
+            port=ws_port,
+            history_size=50,
+        )
+        if self._ws_server.start():
+            self._ws_port = ws_port
+            # Subscribe to all node events and forward to WebSocket clients
+            self._aggregator.event_bus.subscribe(
+                None, self._forward_to_websocket,
+            )
+            # Attach WS server ref so status handler can report stats
+            if self._server:
+                self._server._mf_ws_server = self._ws_server  # type: ignore[attr-defined]
+        else:
+            logger.info("WebSocket server not started (optional dependency)")
+            self._ws_server = None
+
+    def _forward_to_websocket(self, event: Event) -> None:
+        """Bridge an event bus event to WebSocket broadcast."""
+        if not self._ws_server:
+            return
+        msg: Dict[str, Any] = {
+            "type": event.event_type.value,
+            "timestamp": event.timestamp,
+            "source": event.source,
+        }
+        if isinstance(event, NodeEvent):
+            msg["node_id"] = event.node_id
+            if event.lat is not None:
+                msg["lat"] = event.lat
+            if event.lon is not None:
+                msg["lon"] = event.lon
+        if event.data:
+            msg["data"] = event.data
+        self._ws_server.broadcast(msg)
+
     def stop(self) -> None:
-        """Stop the HTTP server and clean up the aggregator."""
+        """Stop the HTTP server, WebSocket server, and clean up the aggregator."""
+        if self._ws_server:
+            self._ws_server.shutdown()
+            self._ws_server = None
         if self._server:
             self._server.shutdown()
             logger.info("MeshForge Maps server stopped")
@@ -314,6 +380,11 @@ class MapServer:
     def port(self) -> int:
         """The actual port the server bound to (0 if not started)."""
         return self._port
+
+    @property
+    def ws_port(self) -> int:
+        """The WebSocket server port (0 if not started)."""
+        return self._ws_port
 
     @property
     def aggregator(self) -> DataAggregator:

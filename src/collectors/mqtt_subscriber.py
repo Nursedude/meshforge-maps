@@ -273,12 +273,14 @@ class MQTTSubscriber:
         topic: str = DEFAULT_TOPIC,
         node_store: Optional[MQTTNodeStore] = None,
         on_node_update: Optional[Callable] = None,
+        event_bus: Optional[Any] = None,
     ):
         self._broker = broker
         self._port = port
         self._topic = topic
         self._store = node_store or MQTTNodeStore()
         self._on_node_update = on_node_update
+        self._event_bus = event_bus
         self._client = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -410,14 +412,34 @@ class MQTTSubscriber:
             # without flooding logs (the broker sends many messages)
             logger.debug("MQTT message processing error on %s: %s", msg.topic, e)
 
-    def _notify_update(self, node_id: str, update_type: str) -> None:
-        """Safely invoke the on_node_update callback."""
+    def _notify_update(self, node_id: str, update_type: str, **kwargs) -> None:
+        """Safely invoke the on_node_update callback and publish to event bus."""
         cb = self._on_node_update
         if cb:
             try:
                 cb(node_id, update_type)
             except Exception as e:
                 logger.debug("on_node_update callback error: %s", e)
+
+        bus = self._event_bus
+        if bus:
+            self._emit_event(bus, node_id, update_type, **kwargs)
+
+    def _emit_event(self, bus, node_id: str, update_type: str, **kwargs) -> None:
+        """Publish a typed event to the event bus."""
+        try:
+            from ..utils.event_bus import NodeEvent
+            factories = {
+                "position": NodeEvent.position,
+                "nodeinfo": NodeEvent.info,
+                "telemetry": NodeEvent.telemetry,
+                "topology": NodeEvent.topology,
+            }
+            factory = factories.get(update_type)
+            if factory:
+                bus.publish(factory(node_id, source="mqtt", **kwargs))
+        except Exception as e:
+            logger.debug("Event bus publish error: %s", e)
 
     def _decode_protobuf(self, payload: bytes, topic: str) -> None:
         """Decode ServiceEnvelope protobuf message."""
@@ -459,7 +481,7 @@ class MQTTSubscriber:
         if lat is not None and lon is not None and (-90 <= lat <= 90) and (-180 <= lon <= 180):
             alt = _safe_int(pos.altitude, -500, 100000) if pos.altitude else None
             self._store.update_position(node_id, lat, lon, altitude=alt)
-            self._notify_update(node_id, "position")
+            self._notify_update(node_id, "position", lat=lat, lon=lon)
 
     def _handle_nodeinfo(self, node_id: str, payload: bytes) -> None:
         mesh_pb2 = self._proto["mesh_pb2"]
@@ -472,6 +494,11 @@ class MQTTSubscriber:
             short_name=info.short_name,
             hw_model=str(info.hw_model) if info.hw_model else "",
             role=str(info.role) if info.role else "",
+        )
+        self._notify_update(
+            node_id, "nodeinfo",
+            long_name=info.long_name,
+            short_name=info.short_name,
         )
 
     def _handle_telemetry(self, node_id: str, payload: bytes) -> None:
@@ -504,6 +531,8 @@ class MQTTSubscriber:
                     temperature=temperature,
                 )
 
+        self._notify_update(node_id, "telemetry")
+
     def _handle_neighborinfo(self, node_id: str, payload: bytes) -> None:
         mesh_pb2 = self._proto["mesh_pb2"]
         ni = mesh_pb2.NeighborInfo()
@@ -516,6 +545,7 @@ class MQTTSubscriber:
                 "snr": n.snr if n.snr else None,
             })
         self._store.update_neighbors(node_id, neighbors)
+        self._notify_update(node_id, "topology", neighbor_count=len(neighbors))
 
     def _decode_json(self, payload: bytes, topic: str) -> None:
         """Fallback: try to decode as JSON (when device has JSON MQTT enabled)."""
