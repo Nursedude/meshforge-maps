@@ -32,8 +32,12 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .base import BaseCollector, make_feature_collection
+from .. import __version__
 
 logger = logging.getLogger(__name__)
+
+# User-Agent string for HTTP requests
+_USER_AGENT = f"MeshForge-Maps/{__version__}"
 
 # NOAA SWPC endpoints (fallback when HamClock is unavailable)
 SWPC_SOLAR_FLUX = "https://services.swpc.noaa.gov/products/summary/10cm-flux.json"
@@ -56,30 +60,69 @@ class HamClockCollector(BaseCollector):
 
     API-only architecture: tries HamClock REST API first, falls back
     to NOAA SWPC if HamClock is unavailable.
+
+    Port auto-detection:
+        1. Configured port (default 8080, original HamClock)
+        2. OpenHamClock port (default 3000, MIT successor)
     """
 
     source_name = "hamclock"
+
+    # OpenHamClock default port (community successor, MIT license)
+    OPENHAMCLOCK_DEFAULT_PORT = 3000
 
     def __init__(
         self,
         hamclock_host: str = "localhost",
         hamclock_port: int = 8080,
+        openhamclock_port: int = OPENHAMCLOCK_DEFAULT_PORT,
         cache_ttl_seconds: int = 900,
     ):
         super().__init__(cache_ttl_seconds)
         self._hamclock_host = hamclock_host
         self._hamclock_port = hamclock_port
+        self._openhamclock_port = openhamclock_port
         self._hamclock_api = f"http://{hamclock_host}:{hamclock_port}"
         self._hamclock_available: Optional[bool] = None
+        # Tracks which variant was detected ("hamclock", "openhamclock", or None)
+        self._detected_variant: Optional[str] = None
 
     # ==================== Public API ====================
 
     def is_hamclock_available(self) -> bool:
-        """Test if HamClock REST API is reachable."""
-        raw = self._fetch_text(f"{self._hamclock_api}/get_sys.txt")
-        available = raw is not None and len(raw) > 0
-        self._hamclock_available = available
-        return available
+        """Test if HamClock or OpenHamClock REST API is reachable.
+
+        Tries the configured port first (default 8080, original HamClock),
+        then falls back to OpenHamClock port (default 3000).
+        Updates _hamclock_api to whichever responds.
+        """
+        # Try configured port first (HamClock legacy)
+        primary_url = f"http://{self._hamclock_host}:{self._hamclock_port}"
+        raw = self._fetch_text(f"{primary_url}/get_sys.txt")
+        if raw is not None and len(raw) > 0:
+            self._hamclock_api = primary_url
+            self._hamclock_available = True
+            self._detected_variant = "hamclock"
+            return True
+
+        # Try OpenHamClock port (community successor)
+        if self._openhamclock_port != self._hamclock_port:
+            fallback_url = f"http://{self._hamclock_host}:{self._openhamclock_port}"
+            raw = self._fetch_text(f"{fallback_url}/get_sys.txt")
+            if raw is not None and len(raw) > 0:
+                self._hamclock_api = fallback_url
+                self._hamclock_available = True
+                self._detected_variant = "openhamclock"
+                logger.info(
+                    "OpenHamClock detected on port %d (HamClock port %d unavailable)",
+                    self._openhamclock_port,
+                    self._hamclock_port,
+                )
+                return True
+
+        self._hamclock_available = False
+        self._detected_variant = None
+        return False
 
     # ==================== Core Fetch ====================
 
@@ -114,11 +157,23 @@ class HamClockCollector(BaseCollector):
         fc["properties"]["space_weather"] = space_weather
         fc["properties"]["solar_terminator"] = terminator
 
+        # Determine source label based on detected variant
+        if hamclock_up and self._detected_variant == "openhamclock":
+            source_label = "OpenHamClock API"
+            active_port = self._openhamclock_port
+        elif hamclock_up:
+            source_label = "HamClock API"
+            active_port = self._hamclock_port
+        else:
+            source_label = "NOAA SWPC"
+            active_port = self._hamclock_port
+
         hamclock_data: Dict[str, Any] = {
             "available": hamclock_up,
-            "source": "HamClock API" if hamclock_up else "NOAA SWPC",
+            "source": source_label,
+            "variant": self._detected_variant,
             "host": self._hamclock_host,
-            "port": self._hamclock_port,
+            "port": active_port,
         }
         if band_conditions:
             hamclock_data["band_conditions"] = band_conditions
@@ -451,7 +506,7 @@ class HamClockCollector(BaseCollector):
         try:
             req = Request(
                 url,
-                headers={"User-Agent": "MeshForge-Maps/0.3"},
+                headers={"User-Agent": _USER_AGENT},
             )
             with urlopen(req, timeout=10) as resp:
                 return resp.read().decode("utf-8")
@@ -466,7 +521,7 @@ class HamClockCollector(BaseCollector):
                 url,
                 headers={
                     "Accept": "application/json",
-                    "User-Agent": "MeshForge-Maps/0.3",
+                    "User-Agent": _USER_AGENT,
                 },
             )
             with urlopen(req, timeout=10) as resp:

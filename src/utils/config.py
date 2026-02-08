@@ -20,6 +20,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_aredn": True,
     "hamclock_host": "localhost",
     "hamclock_port": 8080,
+    "openhamclock_port": 3000,
     "map_center_lat": 20.0,
     "map_center_lon": -100.0,
     "map_default_zoom": 4,
