@@ -188,7 +188,7 @@ class EventBus:
             if wildcard:
                 targets.extend(wildcard)
 
-        self._stats.total_published += 1
+        self._stats.inc_published()
 
         for callback in targets:
             self._safe_call(callback, event)
@@ -197,9 +197,9 @@ class EventBus:
         """Call a subscriber, catching and logging any exception."""
         try:
             callback(event)
-            self._stats.total_delivered += 1
+            self._stats.inc_delivered()
         except Exception:
-            self._stats.total_errors += 1
+            self._stats.inc_errors()
             logger.exception(
                 "Event bus subscriber %s failed on %s",
                 getattr(callback, "__name__", repr(callback)),
@@ -229,8 +229,36 @@ class EventBus:
 
 
 class _BusStats:
-    """Simple counters for event bus diagnostics."""
+    """Thread-safe counters for event bus diagnostics."""
     def __init__(self) -> None:
-        self.total_published = 0
-        self.total_delivered = 0
-        self.total_errors = 0
+        self._lock = threading.Lock()
+        self._total_published = 0
+        self._total_delivered = 0
+        self._total_errors = 0
+
+    def inc_published(self) -> None:
+        with self._lock:
+            self._total_published += 1
+
+    def inc_delivered(self) -> None:
+        with self._lock:
+            self._total_delivered += 1
+
+    def inc_errors(self) -> None:
+        with self._lock:
+            self._total_errors += 1
+
+    @property
+    def total_published(self) -> int:
+        with self._lock:
+            return self._total_published
+
+    @property
+    def total_delivered(self) -> int:
+        with self._lock:
+            return self._total_delivered
+
+    @property
+    def total_errors(self) -> int:
+        with self._lock:
+            return self._total_errors

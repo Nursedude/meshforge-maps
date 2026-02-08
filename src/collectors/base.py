@@ -177,9 +177,12 @@ class BaseCollector(ABC):
                 return self._cache
             return make_feature_collection([], self.source_name)
 
-        # Retry loop with backoff
+        # Retry loop with backoff (single strategy instance preserves escalating delays)
+        from ..utils.reconnect import ReconnectStrategy
+
         last_error: Optional[Exception] = None
         attempts = 1 + self._max_retries
+        strategy = ReconnectStrategy.for_collector()
 
         for attempt in range(attempts):
             try:
@@ -206,9 +209,7 @@ class BaseCollector(ABC):
             except Exception as e:
                 last_error = e
                 if attempt < self._max_retries:
-                    from ..utils.reconnect import ReconnectStrategy
-
-                    delay = ReconnectStrategy.for_collector().next_delay()
+                    delay = strategy.next_delay()
                     logger.debug(
                         "%s: attempt %d failed (%s), retrying in %.1fs",
                         self.source_name,
