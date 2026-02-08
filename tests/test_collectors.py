@@ -383,6 +383,75 @@ class TestHamClockCollector:
         assert result["lat"] == "48.85"
         assert result["grid"] == "JN18"
 
+    # --- DX Spots ---
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_dxspots_parses_spots(self, mock_fetch):
+        mock_fetch.return_value = "Spot0=JA1ABC 14250 W6XYZ 1430 CQ\nSpot1=VK3DEF 7015 K1ZZ 1432\n"
+        c = HamClockCollector()
+        result = c._fetch_dxspots()
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["dx_call"] == "JA1ABC"
+        assert result[0]["freq_khz"] == "14250"
+        assert result[0]["de_call"] == "W6XYZ"
+        assert result[0]["utc"] == "1430"
+        assert result[0]["comment"] == "CQ"
+        assert result[1]["dx_call"] == "VK3DEF"
+        assert result[1]["freq_khz"] == "7015"
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_dxspots_returns_none_when_empty(self, mock_fetch):
+        mock_fetch.return_value = "count=0\n"
+        c = HamClockCollector()
+        assert c._fetch_dxspots() is None
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_dxspots_returns_none_when_unavailable(self, mock_fetch):
+        mock_fetch.return_value = None
+        c = HamClockCollector()
+        assert c._fetch_dxspots() is None
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_dxspots_handles_short_lines(self, mock_fetch):
+        mock_fetch.return_value = "Spot0=JA1ABC 14250 W6XYZ\n"
+        c = HamClockCollector()
+        result = c._fetch_dxspots()
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["dx_call"] == "JA1ABC"
+        assert "utc" not in result[0]
+
+    # --- get_hamclock_data ---
+
+    @patch.object(HamClockCollector, "is_hamclock_available", return_value=True)
+    @patch.object(HamClockCollector, "_fetch_space_weather_hamclock")
+    @patch.object(HamClockCollector, "_fetch_band_conditions_hamclock")
+    @patch.object(HamClockCollector, "_fetch_voacap")
+    @patch.object(HamClockCollector, "_fetch_de")
+    @patch.object(HamClockCollector, "_fetch_dx")
+    @patch.object(HamClockCollector, "_fetch_dxspots")
+    def test_get_hamclock_data_returns_all(
+        self, mock_spots, mock_dx, mock_de, mock_voacap, mock_bc, mock_wx, mock_avail
+    ):
+        mock_wx.return_value = {"source": "HamClock API", "solar_flux": "150", "band_conditions": "good"}
+        mock_bc.return_value = {"bands": {"80m-40m": "Good"}}
+        mock_voacap.return_value = {"bands": {"20m": {"reliability": 90}}}
+        mock_de.return_value = {"call": "WH6GXZ", "grid": "BL11"}
+        mock_dx.return_value = {"call": "F5ABC", "grid": "JN18"}
+        mock_spots.return_value = [{"dx_call": "JA1ABC", "freq_khz": "14250"}]
+
+        c = HamClockCollector()
+        data = c.get_hamclock_data()
+        assert data["available"] is True
+        assert data["source"] == "HamClock API"
+        assert data["space_weather"]["solar_flux"] == "150"
+        assert data["band_conditions"]["bands"]["80m-40m"] == "Good"
+        assert data["voacap"]["bands"]["20m"]["reliability"] == 90
+        assert data["de_station"]["call"] == "WH6GXZ"
+        assert data["dx_station"]["call"] == "F5ABC"
+        assert data["dxspots"][0]["dx_call"] == "JA1ABC"
+
     # --- Full _fetch: HamClock up ---
 
     @patch.object(HamClockCollector, "is_hamclock_available", return_value=True)
@@ -391,14 +460,16 @@ class TestHamClockCollector:
     @patch.object(HamClockCollector, "_fetch_voacap")
     @patch.object(HamClockCollector, "_fetch_de")
     @patch.object(HamClockCollector, "_fetch_dx")
+    @patch.object(HamClockCollector, "_fetch_dxspots")
     def test_fetch_uses_hamclock_when_available(
-        self, mock_dx, mock_de, mock_voacap, mock_bc, mock_wx, mock_avail
+        self, mock_spots, mock_dx, mock_de, mock_voacap, mock_bc, mock_wx, mock_avail
     ):
         mock_wx.return_value = {"source": "HamClock API", "solar_flux": "150", "band_conditions": "excellent"}
         mock_bc.return_value = {"bands": {"80m-40m": "Good"}}
         mock_voacap.return_value = {"bands": {"20m": {"reliability": 90}}}
         mock_de.return_value = {"call": "WH6GXZ"}
         mock_dx.return_value = {"call": "F5ABC"}
+        mock_spots.return_value = [{"dx_call": "JA1ABC", "freq_khz": "14250"}]
 
         c = HamClockCollector()
         fc = c._fetch()
@@ -410,6 +481,7 @@ class TestHamClockCollector:
         assert fc["properties"]["hamclock"]["voacap"]["bands"]["20m"]["reliability"] == 90
         assert fc["properties"]["hamclock"]["de_station"]["call"] == "WH6GXZ"
         assert fc["properties"]["hamclock"]["dx_station"]["call"] == "F5ABC"
+        assert fc["properties"]["hamclock"]["dxspots"][0]["dx_call"] == "JA1ABC"
         assert "solar_terminator" in fc["properties"]
 
     # --- Full _fetch: HamClock down (NOAA fallback) ---
@@ -425,10 +497,11 @@ class TestHamClockCollector:
         assert fc["properties"]["space_weather"]["source"] == "NOAA SWPC"
         assert fc["properties"]["hamclock"]["available"] is False
         assert fc["properties"]["hamclock"]["source"] == "NOAA SWPC"
-        # No band_conditions, voacap, de, dx keys when HamClock is down
+        # No band_conditions, voacap, de, dx, dxspots keys when HamClock is down
         assert "band_conditions" not in fc["properties"]["hamclock"]
         assert "voacap" not in fc["properties"]["hamclock"]
         assert "de_station" not in fc["properties"]["hamclock"]
+        assert "dxspots" not in fc["properties"]["hamclock"]
 
     # --- Reliability to status ---
 
@@ -596,6 +669,26 @@ class TestDataAggregator:
         agg._cached_overlay = {"test": True}
         agg.clear_all_caches()
         assert agg._cached_overlay == {}
+
+    def test_get_source_health_returns_per_collector(self):
+        config = dict(DEFAULT_CONFIG_SUBSET)
+        agg = DataAggregator(config)
+        health = agg.get_source_health()
+        assert "meshtastic" in health
+        assert "reticulum" in health
+        assert "hamclock" in health
+        assert "aredn" in health
+        for name, info in health.items():
+            assert info["source"] == name
+            assert info["total_collections"] == 0
+            assert info["total_errors"] == 0
+
+    def test_get_source_health_empty_when_no_sources(self):
+        agg = DataAggregator({
+            "enable_meshtastic": False, "enable_reticulum": False,
+            "enable_hamclock": False, "enable_aredn": False,
+        })
+        assert agg.get_source_health() == {}
 
     @patch.object(MeshtasticCollector, "collect")
     @patch.object(ReticulumCollector, "collect")

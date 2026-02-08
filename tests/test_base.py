@@ -181,3 +181,35 @@ class TestBaseCollector:
         c.clear_cache()
         assert c._cache is None
         assert c._cache_time == 0
+
+    def test_health_info_initial(self):
+        c = ConcreteCollector()
+        info = c.health_info
+        assert info["source"] == "test"
+        assert info["total_collections"] == 0
+        assert info["total_errors"] == 0
+        assert info["has_cache"] is False
+        assert "last_error" not in info
+
+    def test_health_info_after_success(self):
+        c = ConcreteCollector()
+        c.collect()
+        info = c.health_info
+        assert info["total_collections"] == 1
+        assert info["total_errors"] == 0
+        assert info["has_cache"] is True
+        assert "last_success_age_seconds" in info
+        assert info["last_success_age_seconds"] >= 0
+
+    def test_health_info_after_error(self):
+        calls = [0]
+        def fetch():
+            calls[0] += 1
+            raise ConnectionError("test failure")
+        c = ConcreteCollector(fetch_func=fetch)
+        c.collect()  # Will fail and return empty
+        info = c.health_info
+        assert info["total_collections"] == 0
+        assert info["total_errors"] == 1
+        assert info["last_error"] == "test failure"
+        assert "last_error_age_seconds" in info

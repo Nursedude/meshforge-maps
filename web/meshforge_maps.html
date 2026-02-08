@@ -200,6 +200,103 @@
         .band-poor { background: rgba(239, 83, 80, 0.2); color: #ef5350; }
         .band-unknown { background: rgba(120, 144, 156, 0.2); color: #78909c; }
 
+        /* VOACAP band prediction bars */
+        .voacap-band-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 0;
+            font-size: 11px;
+        }
+        .voacap-band-label {
+            width: 32px;
+            color: #90a4ae;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        .voacap-bar-bg {
+            flex: 1;
+            height: 14px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 3px;
+            overflow: hidden;
+            position: relative;
+        }
+        .voacap-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+        .voacap-bar-text {
+            width: 32px;
+            text-align: right;
+            flex-shrink: 0;
+            font-size: 10px;
+            color: #78909c;
+        }
+        .voacap-fill-excellent { background: #66bb6a; }
+        .voacap-fill-good { background: #81c784; }
+        .voacap-fill-fair { background: #ffa726; }
+        .voacap-fill-poor { background: #ef5350; }
+        .voacap-fill-closed { background: #546e7a; }
+
+        /* DE/DX station info */
+        .station-info {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 11px;
+        }
+        .station-box {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 4px;
+            padding: 6px 8px;
+            text-align: center;
+        }
+        .station-label {
+            font-size: 9px;
+            color: #78909c;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .station-call {
+            font-size: 13px;
+            font-weight: 600;
+            color: #42a5f5;
+        }
+        .station-grid {
+            font-size: 10px;
+            color: #90a4ae;
+        }
+
+        /* DX spots list */
+        .dxspot-list {
+            max-height: 120px;
+            overflow-y: auto;
+            font-size: 10px;
+        }
+        .dxspot-row {
+            display: flex;
+            gap: 4px;
+            padding: 2px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        }
+        .dxspot-call { color: #42a5f5; font-weight: 600; min-width: 60px; }
+        .dxspot-freq { color: #ffa726; min-width: 50px; }
+        .dxspot-de { color: #90a4ae; min-width: 50px; }
+        .dxspot-time { color: #546e7a; }
+
+        /* HamClock source indicator */
+        .hamclock-source {
+            font-size: 10px;
+            color: #546e7a;
+            text-align: center;
+            margin-top: 4px;
+        }
+        .hamclock-source-active { color: #42a5f5; }
+        .hamclock-source-fallback { color: #ffa726; }
+
         /* Leaflet popup overrides for dark theme */
         .leaflet-popup-content-wrapper {
             background: rgba(10, 14, 26, 0.95) !important;
@@ -504,6 +601,28 @@
         </div>
     </div>
 
+    <div class="panel-section" id="hamclockSection" style="display:none">
+        <div class="panel-section-title">HamClock Propagation</div>
+        <div class="station-info" id="stationInfo" style="display:none">
+            <div class="station-box">
+                <div class="station-label">DE (Home)</div>
+                <div class="station-call" id="deCall">--</div>
+                <div class="station-grid" id="deGrid">--</div>
+            </div>
+            <div class="station-box">
+                <div class="station-label">DX (Target)</div>
+                <div class="station-call" id="dxCall">--</div>
+                <div class="station-grid" id="dxGrid">--</div>
+            </div>
+        </div>
+        <div id="voacapBands" style="margin-top:6px"></div>
+        <div id="dxspotContainer" style="margin-top:8px;display:none">
+            <div style="font-size:10px;color:#78909c;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">DX Spots</div>
+            <div class="dxspot-list" id="dxspotList"></div>
+        </div>
+        <div class="hamclock-source" id="hamclockSource">--</div>
+    </div>
+
     <div class="panel-section">
         <div class="panel-section-title">Data</div>
         <button class="refresh-btn" id="refreshBtn" onclick="refreshData()">
@@ -773,6 +892,8 @@
             setConnectionStatus('connected', 'Connected');
             updateLastUpdated();
             consecutiveErrors = 0;
+            // Load HamClock propagation data (non-blocking)
+            loadHamClockData();
         } catch (e) {
             consecutiveErrors++;
             console.error('Failed to load node data:', e);
@@ -1062,6 +1183,114 @@
 
         bandBar.className = 'band-conditions band-' + cond;
         bandBar.textContent = 'Band Conditions: ' + cond.charAt(0).toUpperCase() + cond.slice(1);
+    }
+
+    // =========================================================================
+    // HamClock Propagation Panel
+    // =========================================================================
+
+    async function loadHamClockData() {
+        try {
+            var resp = await fetch(API_BASE + '/api/hamclock');
+            if (!resp.ok) {
+                document.getElementById('hamclockSection').style.display = 'none';
+                return;
+            }
+            var data = await resp.json();
+            updateHamClockPanel(data);
+        } catch (e) {
+            console.debug('HamClock data unavailable:', e);
+            document.getElementById('hamclockSection').style.display = 'none';
+        }
+    }
+
+    function updateHamClockPanel(data) {
+        var section = document.getElementById('hamclockSection');
+        if (!data) { section.style.display = 'none'; return; }
+        section.style.display = '';
+
+        // Source indicator
+        var srcEl = document.getElementById('hamclockSource');
+        if (data.available) {
+            srcEl.textContent = 'Source: HamClock API (' + esc(data.host) + ':' + data.port + ')';
+            srcEl.className = 'hamclock-source hamclock-source-active';
+        } else {
+            srcEl.textContent = 'Source: NOAA SWPC (HamClock unavailable)';
+            srcEl.className = 'hamclock-source hamclock-source-fallback';
+        }
+
+        // DE/DX Station info
+        var stationEl = document.getElementById('stationInfo');
+        if (data.de_station || data.dx_station) {
+            stationEl.style.display = '';
+            if (data.de_station) {
+                document.getElementById('deCall').textContent = data.de_station.call || '--';
+                document.getElementById('deGrid').textContent = data.de_station.grid || '--';
+            }
+            if (data.dx_station) {
+                document.getElementById('dxCall').textContent = data.dx_station.call || '--';
+                document.getElementById('dxGrid').textContent = data.dx_station.grid || '--';
+            }
+        } else {
+            stationEl.style.display = 'none';
+        }
+
+        // VOACAP bands
+        var voacapEl = document.getElementById('voacapBands');
+        if (data.voacap && data.voacap.bands && Object.keys(data.voacap.bands).length > 0) {
+            var html = '';
+            var bandOrder = ['80m', '40m', '30m', '20m', '17m', '15m', '12m', '10m'];
+            var bands = data.voacap.bands;
+            for (var i = 0; i < bandOrder.length; i++) {
+                var band = bandOrder[i];
+                if (!bands[band]) continue;
+                var info = bands[band];
+                var rel = info.reliability || 0;
+                var status = info.status || 'closed';
+                html += '<div class="voacap-band-row">' +
+                    '<span class="voacap-band-label">' + esc(band) + '</span>' +
+                    '<div class="voacap-bar-bg"><div class="voacap-bar-fill voacap-fill-' + status + '" style="width:' + rel + '%"></div></div>' +
+                    '<span class="voacap-bar-text">' + rel + '%</span>' +
+                    '</div>';
+            }
+            if (data.voacap.best_band) {
+                html += '<div style="font-size:10px;color:#42a5f5;text-align:center;margin-top:4px">Best: ' + esc(data.voacap.best_band) + ' (' + (data.voacap.best_reliability || 0) + '%)</div>';
+            }
+            voacapEl.innerHTML = html;
+        } else if (data.band_conditions && data.band_conditions.bands) {
+            var html = '';
+            var bc = data.band_conditions.bands;
+            for (var key in bc) {
+                html += '<div class="voacap-band-row">' +
+                    '<span class="voacap-band-label">' + esc(key) + '</span>' +
+                    '<span style="font-size:11px;color:#90a4ae">' + esc(bc[key]) + '</span>' +
+                    '</div>';
+            }
+            voacapEl.innerHTML = html;
+        } else {
+            voacapEl.innerHTML = '';
+        }
+
+        // DX Spots
+        var dxContainer = document.getElementById('dxspotContainer');
+        var dxList = document.getElementById('dxspotList');
+        if (data.dxspots && data.dxspots.length > 0) {
+            dxContainer.style.display = '';
+            var html = '';
+            var spots = data.dxspots.slice(0, 10); // Show latest 10
+            for (var i = 0; i < spots.length; i++) {
+                var s = spots[i];
+                html += '<div class="dxspot-row">' +
+                    '<span class="dxspot-call">' + esc(s.dx_call) + '</span>' +
+                    '<span class="dxspot-freq">' + esc(s.freq_khz) + '</span>' +
+                    '<span class="dxspot-de">' + esc(s.de_call || '') + '</span>' +
+                    '<span class="dxspot-time">' + esc(s.utc || '') + '</span>' +
+                    '</div>';
+            }
+            dxList.innerHTML = html;
+        } else {
+            dxContainer.style.display = 'none';
+        }
     }
 
     // =========================================================================
