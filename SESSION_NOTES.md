@@ -2,6 +2,71 @@
 
 ---
 
+## Session 6: Reliability Hardening + meshforge Core Alignment
+
+**Date:** 2026-02-08
+**Branch:** `claude/improve-reliability-features-qgFyX`
+**Scope:** Bug fixes, reliability improvements, meshforge core feature parity, OpenHamClock readiness
+
+### Changes Made
+
+**Bug Fixes:**
+1. **ReconnectStrategy backoff bug (critical):** `BaseCollector.collect()` created a fresh `ReconnectStrategy.for_collector()` per retry attempt, so delays never escalated (always started at ~1s). Now creates a single strategy per retry loop.
+2. **EventBus stats thread safety:** `_BusStats` counters (`total_published`, `total_delivered`, `total_errors`) were modified outside any lock by concurrent publishers. Now uses per-operation locking with `inc_published()` / `inc_delivered()` / `inc_errors()` methods and `@property` read accessors.
+3. **Version string consistency:** Removed hardcoded `"0.3.0-beta"` from `map_server.py` and `"MeshForge-Maps/0.3"` User-Agent from `hamclock_collector.py`. Both now import from `src/__init__.__version__`.
+
+**New Features:**
+4. **OpenHamClock port 3000 auto-detection:** HamClock (WB0OEW, SK) ceases operation June 2026. OpenHamClock (MIT, port 3000) is the community successor. `HamClockCollector.is_hamclock_available()` now tries configured port first (default 8080), then falls back to OpenHamClock port (default 3000). Reports detected variant ("hamclock" or "openhamclock") in API responses.
+5. **`/api/health` endpoint:** Composite health scoring (0-100) with three components:
+   - Freshness (40 pts): data age vs cache TTL
+   - Source availability (30 pts): proportion of sources returning data
+   - Circuit breaker health (30 pts): proportion of CLOSED breakers
+   - Maps score to status: healthy/fair/degraded/critical
+6. **Graceful SIGTERM/SIGINT handling:** Standalone mode (`main.py`) now uses `signal.signal()` + `threading.Event.wait()` instead of `while True: sleep(1)`. Proper shutdown for systemd/Docker/containers.
+7. **WebSocket port fallback:** Tries up to 5 adjacent ports (matching HTTP server fallback pattern) instead of giving up on first bind failure.
+8. **5-tier SNR topology link colors:** Aligned with meshforge core `topology_visualizer.py` quality tiers (Excellent/Good/Marginal/Poor/Bad with green→red gradient). Link popups now show quality label.
+
+**Frontend:**
+9. Health check now uses `/api/health` instead of `/api/status` for degradation/critical alerts.
+
+### Test Results
+- **Before:** 264 passed, 22 skipped
+- **After:** 272 passed, 22 skipped, 0 failures
+- New tests: 7 OpenHamClock detection + 1 health endpoint = 8 new tests
+
+### Architecture Notes
+- `HamClockCollector` now tracks `_detected_variant` and `_openhamclock_port`
+- `_BusStats` is now a proper thread-safe counter class (not a bare data holder)
+- `MapRequestHandler` routes `/api/health` -> `_serve_health()` with weighted scoring
+- Config `DEFAULT_CONFIG` now includes `openhamclock_port: 3000`
+
+### Files Modified (8)
+- `src/collectors/base.py` - ReconnectStrategy fix
+- `src/collectors/hamclock_collector.py` - OpenHamClock support + version consistency
+- `src/collectors/aggregator.py` - Pass openhamclock_port config
+- `src/map_server.py` - /api/health endpoint + version import + WS port fallback
+- `src/main.py` - Signal handling (SIGTERM/SIGINT)
+- `src/utils/config.py` - openhamclock_port default
+- `src/utils/event_bus.py` - Thread-safe _BusStats
+- `web/meshforge_maps.html` - 5-tier link colors + health check
+- `tests/test_collectors.py` - 7 new OpenHamClock tests
+- `tests/test_map_server.py` - 1 new health endpoint test
+
+### What Still Needs Work (Phase 3 Roadmap)
+1. **Node history DB** with `get_trajectory_geojson()` - track movement over time
+2. **Topology visualization** with full SNR-based edge coloring server-side (current is client-side only)
+3. **Shared health state reader** for cross-process visibility (MeshForge core integration)
+4. **Service worker** for offline tile caching (sw-tiles.js registered but not yet implemented)
+5. **AREDN LQM neighbor resolution** - currently `_parse_lqm_neighbor` returns None
+6. **OpenHamClock API differences** - may need endpoint mapping if API diverges from original
+
+### Session Entropy Notes
+- Session stayed focused and systematic throughout
+- No entropy detected - stopping at a clean boundary with all tests green
+- Next session should start from Phase 3 roadmap items above
+
+---
+
 ## Session 5: HamClock API + TUI Improvements
 
 **Date:** 2026-02-08
