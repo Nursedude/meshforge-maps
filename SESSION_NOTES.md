@@ -1,4 +1,92 @@
-# Session Notes: MeshForge Core Feature & Reliability Analysis
+# Session Notes
+
+---
+
+## Session 2: Phase 1 Reliability Foundation Implementation
+
+**Date:** 2026-02-08
+**Branch:** `claude/session-notes-setup-lFNhH`
+**Scope:** Implement Phase 1 (Reliability Foundation) from the roadmap below
+
+### What Was Done
+
+#### New Modules Created
+1. **`src/utils/circuit_breaker.py`** -- CircuitBreaker + CircuitBreakerRegistry
+   - Per-source CLOSED/OPEN/HALF_OPEN state machine
+   - Configurable failure_threshold (default 5) and recovery_timeout (default 60s)
+   - Thread-safe (all state behind Lock)
+   - Full stats: total_successes, total_failures, total_rejected, timestamps
+   - Registry for named breakers with lazy creation
+
+2. **`src/utils/reconnect.py`** -- ReconnectStrategy
+   - Exponential backoff: `base * multiplier^attempt`
+   - Jitter: `uniform(0, delay * jitter_factor)` to prevent thundering herd
+   - Factory methods: `.for_mqtt()` (2s-120s, unlimited) and `.for_collector()` (1s-10s, 3 retries)
+   - Attempt tracking persists across resets for diagnostics
+
+#### Modules Modified
+3. **`src/collectors/base.py`** -- BaseCollector enhanced
+   - Optional `circuit_breaker` parameter (backward-compatible, defaults to None)
+   - Optional `max_retries` parameter (default 0 = no retries, preserving old behavior)
+   - Retry loop with backoff before cache fallback
+   - Circuit breaker check before fetch (OPEN -> skip, return cache)
+   - Records success/failure on circuit breaker after all retries exhausted
+
+4. **`src/collectors/aggregator.py`** -- DataAggregator wired up
+   - Creates `CircuitBreakerRegistry` with default thresholds
+   - Assigns a circuit breaker to each enabled collector
+   - Sets `max_retries=2` on all collectors
+   - Exposes `get_circuit_breaker_states()` for API consumption
+
+5. **`src/collectors/mqtt_subscriber.py`** -- MQTT reconnect upgraded
+   - Replaced inline backoff math with `ReconnectStrategy.for_mqtt()`
+   - Removed `import random` (now handled by strategy)
+   - Logs attempt number for diagnostics
+
+6. **`src/map_server.py`** -- `/api/status` enriched
+   - New `circuit_breakers` field with per-source stats
+
+#### Tests Written
+7. **`tests/test_circuit_breaker.py`** -- 26 tests
+   - State transitions (CLOSED->OPEN->HALF_OPEN->CLOSED)
+   - Reset behavior, stats tracking, thread safety (concurrent operations)
+   - Registry: creation, dedup, get_all_states, reset_all
+
+8. **`tests/test_reconnect.py`** -- 19 tests
+   - Exponential growth, max cap, jitter bounds
+   - Attempt counting, retry limits, reset behavior
+   - Factory methods (mqtt vs collector presets)
+
+9. **`tests/test_reliability.py`** -- 19 tests
+   - BaseCollector + circuit breaker integration
+   - BaseCollector + retry integration (with time.sleep mocked)
+   - DataAggregator + registry wiring
+
+### Test Results
+- **Before:** 125 tests passing
+- **After:** 189 tests passing (+64 new, 0 regressions)
+
+### Design Decisions
+- **Backward compatible:** All new params are optional with defaults that preserve old behavior
+- **Circuit breaker is external to retry:** CB check happens before retry loop. CB failure recorded only after all retries exhausted. This prevents a flaky-but-recoverable source from tripping the circuit.
+- **Fresh ReconnectStrategy per collect():** Each collect() creates a new strategy for retry backoff. The MQTT subscriber uses a persistent strategy across its connection loop.
+- **No sleep in tests:** All retry tests mock `time.sleep` to keep suite fast (8.75s total)
+
+### Session Entropy Watch
+Session remained focused and systematic. No entropy detected:
+- Clear task list maintained throughout
+- Each module implemented, tested, then committed
+- Zero regressions at every checkpoint
+
+### Next Session: Phase 2 (Real-Time Architecture)
+1. WebSocket server on adjacent port
+2. MQTT subscriber events -> WebSocket broadcast
+3. Frontend WebSocket client alongside polling
+4. Event bus for decoupled collector-to-server communication
+
+---
+
+## Session 1: MeshForge Core Feature & Reliability Analysis
 
 **Date:** 2026-02-08
 **Branch:** `claude/analyze-meshforge-features-Wf1G7`

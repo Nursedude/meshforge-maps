@@ -9,7 +9,10 @@ import logging
 import math
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from ..utils.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -119,35 +122,103 @@ def make_feature_collection(
 
 
 class BaseCollector(ABC):
-    """Abstract base for data source collectors."""
+    """Abstract base for data source collectors.
+
+    Supports optional circuit breaker integration and retry with
+    exponential backoff before falling back to stale cache.
+    """
 
     source_name: str = "unknown"
 
-    def __init__(self, cache_ttl_seconds: int = 900):
+    def __init__(
+        self,
+        cache_ttl_seconds: int = 900,
+        circuit_breaker: Optional["CircuitBreaker"] = None,
+        max_retries: int = 0,
+    ):
         self._cache: Optional[Dict[str, Any]] = None
         self._cache_time: float = 0
         self._cache_ttl = cache_ttl_seconds
+        self._circuit_breaker = circuit_breaker
+        self._max_retries = max_retries
+
+    @property
+    def circuit_breaker(self) -> Optional["CircuitBreaker"]:
+        return self._circuit_breaker
+
+    @circuit_breaker.setter
+    def circuit_breaker(self, cb: Optional["CircuitBreaker"]) -> None:
+        self._circuit_breaker = cb
 
     def collect(self) -> Dict[str, Any]:
-        """Collect data, using cache if fresh enough."""
+        """Collect data, using cache if fresh enough.
+
+        If a circuit breaker is attached and OPEN, skips the fetch entirely
+        and returns cached data. Retries with exponential backoff before
+        falling back to stale cache.
+        """
         now = time.time()
         if self._cache and (now - self._cache_time) < self._cache_ttl:
             logger.debug("%s: returning cached data", self.source_name)
             return self._cache
 
-        try:
-            data = self._fetch()
-            self._cache = data
-            self._cache_time = now
-            count = len(data.get("features", []))
-            logger.info("%s: collected %d nodes", self.source_name, count)
-            return data
-        except Exception as e:
-            logger.error("%s: collection failed: %s", self.source_name, e)
+        # Circuit breaker check: skip fetch if circuit is open
+        cb = self._circuit_breaker
+        if cb and not cb.can_execute():
+            logger.debug(
+                "%s: circuit breaker OPEN, skipping fetch", self.source_name
+            )
             if self._cache:
-                logger.warning("%s: returning stale cache", self.source_name)
                 return self._cache
             return make_feature_collection([], self.source_name)
+
+        # Retry loop with backoff
+        last_error: Optional[Exception] = None
+        attempts = 1 + self._max_retries
+
+        for attempt in range(attempts):
+            try:
+                data = self._fetch()
+                self._cache = data
+                self._cache_time = time.time()
+                count = len(data.get("features", []))
+                if cb:
+                    cb.record_success()
+                if attempt > 0:
+                    logger.info(
+                        "%s: collected %d nodes (after %d retries)",
+                        self.source_name,
+                        count,
+                        attempt,
+                    )
+                else:
+                    logger.info(
+                        "%s: collected %d nodes", self.source_name, count
+                    )
+                return data
+            except Exception as e:
+                last_error = e
+                if attempt < self._max_retries:
+                    from ..utils.reconnect import ReconnectStrategy
+
+                    delay = ReconnectStrategy.for_collector().next_delay()
+                    logger.debug(
+                        "%s: attempt %d failed (%s), retrying in %.1fs",
+                        self.source_name,
+                        attempt + 1,
+                        e,
+                        delay,
+                    )
+                    time.sleep(delay)
+
+        # All attempts failed
+        if cb:
+            cb.record_failure()
+        logger.error("%s: collection failed: %s", self.source_name, last_error)
+        if self._cache:
+            logger.warning("%s: returning stale cache", self.source_name)
+            return self._cache
+        return make_feature_collection([], self.source_name)
 
     @abstractmethod
     def _fetch(self) -> Dict[str, Any]:

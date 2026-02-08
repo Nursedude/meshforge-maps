@@ -15,8 +15,12 @@ from .hamclock_collector import HamClockCollector
 from .meshtastic_collector import MeshtasticCollector
 from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
 from .reticulum_collector import ReticulumCollector
+from ..utils.circuit_breaker import CircuitBreakerRegistry
 
 logger = logging.getLogger(__name__)
+
+# Default retry count for collectors (before cache fallback)
+DEFAULT_COLLECTOR_RETRIES = 2
 
 
 class DataAggregator:
@@ -29,6 +33,14 @@ class DataAggregator:
         self._cached_overlay: Dict[str, Any] = {}
         self._last_collect_time: float = 0
         self._last_collect_counts: Dict[str, int] = {}
+
+        # Circuit breaker registry for per-collector failure protection
+        self._circuit_breaker_registry = CircuitBreakerRegistry(
+            default_failure_threshold=5,
+            default_recovery_timeout=60.0,
+        )
+
+        retries = DEFAULT_COLLECTOR_RETRIES
 
         # Initialize live MQTT subscriber for Meshtastic
         self._mqtt_subscriber: Optional[MQTTSubscriber] = None
@@ -46,21 +58,37 @@ class DataAggregator:
                 cache_ttl_seconds=cache_ttl,
                 mqtt_store=mqtt_store,
             )
+            self._collectors["meshtastic"].circuit_breaker = (
+                self._circuit_breaker_registry.get("meshtastic")
+            )
+            self._collectors["meshtastic"]._max_retries = retries
 
         if config.get("enable_reticulum", True):
             self._collectors["reticulum"] = ReticulumCollector(
                 cache_ttl_seconds=cache_ttl
             )
+            self._collectors["reticulum"].circuit_breaker = (
+                self._circuit_breaker_registry.get("reticulum")
+            )
+            self._collectors["reticulum"]._max_retries = retries
 
         if config.get("enable_hamclock", True):
             self._collectors["hamclock"] = HamClockCollector(
                 cache_ttl_seconds=cache_ttl
             )
+            self._collectors["hamclock"].circuit_breaker = (
+                self._circuit_breaker_registry.get("hamclock")
+            )
+            self._collectors["hamclock"]._max_retries = retries
 
         if config.get("enable_aredn", True):
             self._collectors["aredn"] = AREDNCollector(
                 cache_ttl_seconds=cache_ttl
             )
+            self._collectors["aredn"].circuit_breaker = (
+                self._circuit_breaker_registry.get("aredn")
+            )
+            self._collectors["aredn"]._max_retries = retries
 
     def collect_all(self) -> Dict[str, Any]:
         """Collect from all enabled sources and merge into one FeatureCollection."""
@@ -161,6 +189,14 @@ class DataAggregator:
     @property
     def last_collect_counts(self) -> Dict[str, int]:
         return dict(self._last_collect_counts)
+
+    @property
+    def circuit_breaker_registry(self) -> CircuitBreakerRegistry:
+        return self._circuit_breaker_registry
+
+    def get_circuit_breaker_states(self) -> Dict[str, Any]:
+        """Return circuit breaker stats for all registered sources."""
+        return self._circuit_breaker_registry.get_all_states()
 
     def clear_all_caches(self) -> None:
         for collector in self._collectors.values():

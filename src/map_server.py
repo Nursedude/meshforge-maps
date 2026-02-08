@@ -197,6 +197,11 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 data_stale = data_age > (cache_ttl * 2)
             source_counts = aggregator.last_collect_counts
 
+        # Circuit breaker states for per-source health visibility
+        circuit_breaker_states = {}
+        if aggregator:
+            circuit_breaker_states = aggregator.get_circuit_breaker_states()
+
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
@@ -208,6 +213,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "uptime_seconds": uptime,
             "data_age_seconds": data_age,
             "data_stale": data_stale,
+            "circuit_breakers": circuit_breaker_states,
         })
 
     def _send_json(self, data: Any, status: int = 200) -> None:
