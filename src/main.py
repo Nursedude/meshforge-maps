@@ -120,6 +120,24 @@ class MeshForgeMapsPlugin(Plugin):
                 name="Map Status",
                 description="Show map server status and node counts",
             )
+            context.register_tool(
+                tool_id="meshforge_maps_propagation",
+                tool_func=self._get_propagation,
+                name="HF Propagation",
+                description="Show current HF propagation conditions and band predictions",
+            )
+            context.register_tool(
+                tool_id="meshforge_maps_dxspots",
+                tool_func=self._get_dxspots,
+                name="DX Spots",
+                description="Show recent DX cluster spots from HamClock",
+            )
+            context.register_tool(
+                tool_id="meshforge_maps_hamclock_status",
+                tool_func=self._get_hamclock_status,
+                name="HamClock Status",
+                description="Show HamClock connection status and full data summary",
+            )
 
         # Subscribe to node events for live updates
         if hasattr(context, "subscribe"):
@@ -174,6 +192,97 @@ class MeshForgeMapsPlugin(Plugin):
             f"Sources: {', '.join(sources)} | "
             f"MQTT: {mqtt_status}"
         )
+
+    def _get_propagation(self) -> str:
+        """Return current HF propagation conditions for TUI display."""
+        if not self._server:
+            return "Server not running"
+        hc = self._server.aggregator._collectors.get("hamclock")
+        if not hc:
+            return "HamClock source not enabled"
+        data = hc.get_hamclock_data()
+        lines = []
+        lines.append(f"Source: {data.get('source', 'unknown')}")
+        # Space weather summary
+        sw = data.get("space_weather", {})
+        if sw:
+            sfi = sw.get("solar_flux", "--")
+            kp = sw.get("kp_index", "--")
+            cond = sw.get("band_conditions", "unknown")
+            lines.append(f"SFI: {sfi} | Kp: {kp} | Conditions: {cond}")
+        # VOACAP predictions
+        voacap = data.get("voacap")
+        if voacap and voacap.get("bands"):
+            lines.append("VOACAP Band Predictions:")
+            best = voacap.get("best_band")
+            for band, info in voacap["bands"].items():
+                rel = info.get("reliability", 0)
+                status = info.get("status", "?")
+                marker = " <-- BEST" if band == best else ""
+                lines.append(f"  {band}: {rel}% ({status}){marker}")
+        # Band conditions from HamClock
+        bc = data.get("band_conditions")
+        if bc and bc.get("bands"):
+            lines.append("Band Conditions:")
+            for band, cond in bc["bands"].items():
+                lines.append(f"  {band}: {cond}")
+        return "\n".join(lines)
+
+    def _get_dxspots(self) -> str:
+        """Return recent DX spots for TUI display."""
+        if not self._server:
+            return "Server not running"
+        hc = self._server.aggregator._collectors.get("hamclock")
+        if not hc:
+            return "HamClock source not enabled"
+        data = hc.get_hamclock_data()
+        if not data.get("available"):
+            return "HamClock not available -- DX spots require HamClock API"
+        spots = data.get("dxspots")
+        if not spots:
+            return "No DX spots available"
+        lines = [f"DX Spots ({len(spots)} recent):"]
+        lines.append(f"{'DX Call':<10} {'Freq':>8} {'DE Call':<10} {'UTC':<6}")
+        lines.append("-" * 38)
+        for s in spots[:15]:
+            dx = s.get("dx_call", "?")
+            freq = s.get("freq_khz", "?")
+            de = s.get("de_call", "")
+            utc = s.get("utc", "")
+            lines.append(f"{dx:<10} {freq:>8} {de:<10} {utc:<6}")
+        return "\n".join(lines)
+
+    def _get_hamclock_status(self) -> str:
+        """Return full HamClock status for TUI display."""
+        if not self._server:
+            return "Server not running"
+        hc = self._server.aggregator._collectors.get("hamclock")
+        if not hc:
+            return "HamClock source not enabled"
+        data = hc.get_hamclock_data()
+        lines = []
+        available = data.get("available", False)
+        lines.append(f"HamClock: {'CONNECTED' if available else 'UNAVAILABLE'}")
+        lines.append(f"Host: {data.get('host', '?')}:{data.get('port', '?')}")
+        lines.append(f"Data Source: {data.get('source', 'unknown')}")
+        # DE/DX
+        de = data.get("de_station")
+        dx = data.get("dx_station")
+        if de:
+            lines.append(f"DE: {de.get('call', '--')} ({de.get('grid', '--')})")
+        if dx:
+            lines.append(f"DX: {dx.get('call', '--')} ({dx.get('grid', '--')})")
+        # Spot count
+        spots = data.get("dxspots")
+        if spots:
+            lines.append(f"DX Spots: {len(spots)} active")
+        # Circuit breaker state
+        cb_states = self._server.aggregator.get_circuit_breaker_states()
+        hc_state = cb_states.get("hamclock", {})
+        if hc_state:
+            lines.append(f"Circuit Breaker: {hc_state.get('state', '?')} "
+                         f"(failures: {hc_state.get('failure_count', 0)})")
+        return "\n".join(lines)
 
     def _on_node_discovered(self, data: Any) -> None:
         """Handle new node discovery events from MeshForge core.

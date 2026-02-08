@@ -187,3 +187,18 @@ class TestMapServerHTTPEndpoints:
         data = self._get_json("/api/config")
         assert isinstance(data, dict)
         assert "network_colors" in data
+
+    def test_hamclock_endpoint_not_enabled(self):
+        """HamClock endpoint returns 404 when source is disabled."""
+        from urllib.error import HTTPError
+        try:
+            self._get_json("/api/hamclock")
+            # If it returns without error, check the response
+            assert False, "Expected 404"
+        except HTTPError as e:
+            assert e.code == 404
+
+    def test_status_includes_source_health(self):
+        data = self._get_json("/api/status")
+        assert "source_health" in data
+        assert isinstance(data["source_health"], dict)
