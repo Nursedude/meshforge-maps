@@ -98,12 +98,14 @@ class HamClockCollector(BaseCollector):
             voacap = self._fetch_voacap()
             de_info = self._fetch_de()
             dx_info = self._fetch_dx()
+            dxspots = self._fetch_dxspots()
         else:
             space_weather = self._fetch_space_weather_noaa()
             band_conditions = None
             voacap = None
             de_info = None
             dx_info = None
+            dxspots = None
 
         terminator = self._calculate_solar_terminator()
 
@@ -126,6 +128,8 @@ class HamClockCollector(BaseCollector):
             hamclock_data["de_station"] = de_info
         if dx_info:
             hamclock_data["dx_station"] = dx_info
+        if dxspots:
+            hamclock_data["dxspots"] = dxspots
 
         fc["properties"]["hamclock"] = hamclock_data
         return fc
@@ -268,6 +272,73 @@ class HamClockCollector(BaseCollector):
             "grid": parsed.get("grid", ""),
             "call": parsed.get("call", ""),
         }
+
+    def _fetch_dxspots(self) -> Optional[list]:
+        """Fetch DX cluster spots from HamClock (get_dxspots.txt).
+
+        Returns a list of spot dicts with call, freq, de, utc fields,
+        or None if unavailable.
+        """
+        raw = self._fetch_text(f"{self._hamclock_api}/get_dxspots.txt")
+        if not raw:
+            return None
+
+        spots: list = []
+        for line in raw.strip().split("\n"):
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip()
+
+            # DX spots come as indexed entries: Spot0=call freq de utc ...
+            if key.startswith("spot"):
+                parts = value.split()
+                if len(parts) >= 3:
+                    spot: Dict[str, Any] = {
+                        "dx_call": parts[0],
+                        "freq_khz": parts[1],
+                    }
+                    if len(parts) >= 3:
+                        spot["de_call"] = parts[2]
+                    if len(parts) >= 4:
+                        spot["utc"] = parts[3]
+                    if len(parts) >= 5:
+                        spot["comment"] = " ".join(parts[4:])
+                    spots.append(spot)
+
+        return spots if spots else None
+
+    # ==================== Public Query Methods ====================
+
+    def get_hamclock_data(self) -> Dict[str, Any]:
+        """Return the latest HamClock data without a full collection cycle.
+
+        Intended for TUI tools and the /api/hamclock endpoint.
+        Uses cached data if fresh, otherwise performs a lightweight fetch.
+        """
+        fc = self.collect()
+        props = fc.get("properties", {})
+        hamclock = props.get("hamclock", {})
+        result: Dict[str, Any] = {
+            "available": hamclock.get("available", False),
+            "source": hamclock.get("source", "unknown"),
+            "host": self._hamclock_host,
+            "port": self._hamclock_port,
+        }
+        # Space weather
+        sw = props.get("space_weather", {})
+        if sw:
+            result["space_weather"] = sw
+        # Solar terminator
+        term = props.get("solar_terminator", {})
+        if term:
+            result["solar_terminator"] = term
+        # HamClock-specific data
+        for key in ("band_conditions", "voacap", "de_station", "dx_station", "dxspots"):
+            if key in hamclock:
+                result[key] = hamclock[key]
+        return result
 
     # ==================== NOAA Fallback ====================
 

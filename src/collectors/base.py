@@ -141,6 +141,11 @@ class BaseCollector(ABC):
         self._cache_ttl = cache_ttl_seconds
         self._circuit_breaker = circuit_breaker
         self._max_retries = max_retries
+        self._last_error: Optional[str] = None
+        self._last_error_time: float = 0
+        self._last_success_time: float = 0
+        self._total_collections: int = 0
+        self._total_errors: int = 0
 
     @property
     def circuit_breaker(self) -> Optional["CircuitBreaker"]:
@@ -181,6 +186,8 @@ class BaseCollector(ABC):
                 data = self._fetch()
                 self._cache = data
                 self._cache_time = time.time()
+                self._last_success_time = time.time()
+                self._total_collections += 1
                 count = len(data.get("features", []))
                 if cb:
                     cb.record_success()
@@ -214,6 +221,9 @@ class BaseCollector(ABC):
         # All attempts failed
         if cb:
             cb.record_failure()
+        self._last_error = str(last_error) if last_error else "unknown error"
+        self._last_error_time = time.time()
+        self._total_errors += 1
         logger.error("%s: collection failed: %s", self.source_name, last_error)
         if self._cache:
             logger.warning("%s: returning stale cache", self.source_name)
@@ -224,6 +234,23 @@ class BaseCollector(ABC):
     def _fetch(self) -> Dict[str, Any]:
         """Fetch fresh data from the source. Returns a GeoJSON FeatureCollection."""
         ...
+
+    @property
+    def health_info(self) -> Dict[str, Any]:
+        """Return collector health info for status reporting."""
+        now = time.time()
+        info: Dict[str, Any] = {
+            "source": self.source_name,
+            "total_collections": self._total_collections,
+            "total_errors": self._total_errors,
+            "has_cache": self._cache is not None,
+        }
+        if self._last_success_time:
+            info["last_success_age_seconds"] = int(now - self._last_success_time)
+        if self._last_error:
+            info["last_error"] = self._last_error
+            info["last_error_age_seconds"] = int(now - self._last_error_time)
+        return info
 
     def clear_cache(self) -> None:
         self._cache = None

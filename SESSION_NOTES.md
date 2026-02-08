@@ -2,6 +2,83 @@
 
 ---
 
+## Session 5: HamClock API + TUI Improvements
+
+**Date:** 2026-02-08
+**Branch:** `claude/hamclock-api-tui-improvements-XzGWs`
+**Scope:** Expand HamClock API coverage, add TUI tools, frontend propagation panel, per-source health
+
+### What Was Done
+
+#### Modified: `src/collectors/hamclock_collector.py`
+- **New `_fetch_dxspots()`:** Parses DX cluster spots from `get_dxspots.txt` (indexed Spot0=call freq de utc format)
+- **New `get_hamclock_data()`:** Public method for TUI tools and `/api/hamclock` — returns all HamClock data using cached collection
+- **Updated `_fetch()`:** Now also fetches DX spots when HamClock is available; includes `dxspots` key in output
+
+#### Modified: `src/collectors/base.py`
+- **Health tracking:** Added `_last_error`, `_last_error_time`, `_last_success_time`, `_total_collections`, `_total_errors` to BaseCollector
+- **New `health_info` property:** Returns per-collector health dict (success counts, error info, cache status)
+- Updated `collect()` to track success/error timestamps and counts
+
+#### Modified: `src/collectors/aggregator.py`
+- **New `get_source_health()`:** Returns per-source health info from all collectors' `health_info` property
+
+#### Modified: `src/map_server.py`
+- **New `/api/hamclock` route:** Dedicated endpoint serving all HamClock data (propagation, bands, DE/DX, DX spots)
+- **New `_serve_hamclock()`:** Handler that calls `get_hamclock_data()` on the HamClock collector directly
+- **Updated `/api/status`:** Now includes `source_health` dict with per-collector health info
+
+#### Modified: `src/main.py`
+- **3 new TUI tools registered on activate:**
+  - `meshforge_maps_propagation` — Shows HF propagation conditions (SFI, Kp, VOACAP bands, band conditions)
+  - `meshforge_maps_dxspots` — Shows recent DX cluster spots in formatted table
+  - `meshforge_maps_hamclock_status` — Shows HamClock connection status, DE/DX, spot count, circuit breaker state
+- **New methods:** `_get_propagation()`, `_get_dxspots()`, `_get_hamclock_status()`
+
+#### Modified: `web/meshforge_maps.html`
+- **New HamClock Propagation panel section:**
+  - DE/DX station info (callsign + grid square)
+  - VOACAP band prediction bars (80m-10m with color-coded reliability %)
+  - Band conditions display from HamClock
+  - DX Spots list (latest 10 with call, freq, DE, UTC)
+  - Source indicator (HamClock API active vs NOAA fallback)
+- **New CSS:** VOACAP bar charts, station info boxes, DX spot list, source indicator styles
+- **New JS:** `loadHamClockData()` fetches from `/api/hamclock`, `updateHamClockPanel()` renders all sections
+- Panel auto-loads on successful node data fetch, hidden when HamClock unavailable
+
+#### Modified: Tests
+- **test_collectors.py:** +9 tests (DX spots parsing, get_hamclock_data, updated _fetch tests, source_health)
+- **test_base.py:** +3 tests (health_info initial, after success, after error)
+- **test_plugin.py:** +9 tests (propagation, dxspots, hamclock_status TUI tools, tool registration count)
+- **test_map_server.py:** +2 tests (/api/hamclock 404 when disabled, source_health in status)
+
+### Test Results
+- **Before:** 243 passed, 22 skipped
+- **After:** 264 passed (+21 new), 22 skipped, 0 regressions
+
+### New API Endpoints
+| Endpoint | Data | Source |
+|----------|------|--------|
+| `/api/hamclock` | Full HamClock data (weather, VOACAP, bands, DE/DX, spots) | HamClock collector |
+
+### New TUI Tools
+| Tool ID | Name | Description |
+|---------|------|-------------|
+| `meshforge_maps_propagation` | HF Propagation | SFI, Kp, VOACAP bands, band conditions |
+| `meshforge_maps_dxspots` | DX Spots | Recent DX cluster spots table |
+| `meshforge_maps_hamclock_status` | HamClock Status | Connection, DE/DX, spots, circuit breaker |
+
+### Session Entropy Watch
+Session focused. Systematic task list (9 items, all completed). Zero regressions. No scope creep.
+
+### Next Session Suggestions
+1. **OpenHamClock port 3000:** Add auto-detection for OpenHamClock alongside HamClock legacy (port 8080 vs 3000)
+2. **Node history DB:** Phase 3 from roadmap — SQLite node position history for track visualization
+3. **Health scoring:** Per-node health score based on battery, SNR, channel utilization
+4. **Frontend topology enhancement:** D3.js force graph improvements, link quality legend
+
+---
+
 ## Session 4: HamClock API-Only Refactor
 
 **Date:** 2026-02-08
