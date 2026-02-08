@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__
 from .collectors.aggregator import DataAggregator
 from .utils.config import NETWORK_COLORS, TILE_PROVIDERS, MapsConfig
 from .utils.event_bus import Event, EventBus, EventType, NodeEvent
@@ -60,6 +61,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "/api/overlay": self._serve_overlay,
             "/api/topology": self._serve_topology,
             "/api/status": self._serve_status,
+            "/api/health": self._serve_health,
             "/api/hamclock": self._serve_hamclock,
         }
 
@@ -195,6 +197,79 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         data = hamclock_collector.get_hamclock_data()
         self._send_json(data)
 
+    def _serve_health(self) -> None:
+        """Serve composite health score (0-100) with per-source breakdown.
+
+        Scoring factors:
+        - Data freshness: 40 points (full if <cache_ttl, degrades to 0 at 3x TTL)
+        - Source availability: 30 points (proportional to sources with data)
+        - Circuit breaker health: 30 points (proportional to CLOSED breakers)
+        """
+        aggregator = self._get_aggregator()
+        config = self._get_config()
+
+        if not aggregator:
+            self._send_json({
+                "score": 0,
+                "status": "offline",
+                "components": {},
+            })
+            return
+
+        cache_ttl = (config.get("cache_ttl_minutes", 15) if config else 15) * 60
+
+        # Freshness score (0-40): how recent is the data?
+        freshness_score = 0.0
+        data_age = aggregator.last_collect_age_seconds
+        if data_age is not None:
+            if data_age <= cache_ttl:
+                freshness_score = 40.0
+            elif data_age <= cache_ttl * 3:
+                freshness_score = 40.0 * (1.0 - (data_age - cache_ttl) / (cache_ttl * 2))
+            # else: 0
+
+        # Source availability score (0-30): how many sources returned data?
+        source_score = 0.0
+        source_counts = aggregator.last_collect_counts
+        enabled_count = len(aggregator._collectors)
+        if enabled_count > 0:
+            sources_with_data = sum(1 for c in source_counts.values() if c > 0)
+            source_score = 30.0 * (sources_with_data / enabled_count)
+
+        # Circuit breaker score (0-30): how many breakers are CLOSED (healthy)?
+        cb_score = 0.0
+        cb_states = aggregator.get_circuit_breaker_states()
+        if cb_states:
+            closed_count = sum(
+                1 for s in cb_states.values() if s.get("state") == "closed"
+            )
+            cb_score = 30.0 * (closed_count / len(cb_states))
+
+        total_score = int(freshness_score + source_score + cb_score)
+        total_score = max(0, min(100, total_score))
+
+        # Map score to status string
+        if total_score >= 80:
+            status = "healthy"
+        elif total_score >= 60:
+            status = "fair"
+        elif total_score >= 30:
+            status = "degraded"
+        else:
+            status = "critical"
+
+        self._send_json({
+            "score": total_score,
+            "status": status,
+            "components": {
+                "freshness": {"score": round(freshness_score, 1), "max": 40},
+                "sources": {"score": round(source_score, 1), "max": 30},
+                "circuit_breakers": {"score": round(cb_score, 1), "max": 30},
+            },
+            "data_age_seconds": int(data_age) if data_age is not None else None,
+            "sources_reporting": source_counts,
+        })
+
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
         aggregator = self._get_aggregator()
@@ -243,7 +318,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
-            "version": "0.3.0-beta",
+            "version": __version__,
             "sources": config.get_enabled_sources() if config else [],
             "source_counts": source_counts,
             "source_health": source_health,
@@ -350,24 +425,36 @@ class MapServer:
         return False
 
     def _start_websocket(self, ws_port: int) -> None:
-        """Start the WebSocket server and wire it to the event bus."""
-        self._ws_server = MapWebSocketServer(
-            host="127.0.0.1",
-            port=ws_port,
-            history_size=50,
-        )
-        if self._ws_server.start():
-            self._ws_port = ws_port
-            # Subscribe to all node events and forward to WebSocket clients
-            self._aggregator.event_bus.subscribe(
-                None, self._forward_to_websocket,
+        """Start the WebSocket server and wire it to the event bus.
+
+        Tries the given port first, then falls back up to 4 adjacent ports
+        (matching the HTTP server fallback pattern).
+        """
+        for offset in range(5):
+            port = ws_port + offset
+            self._ws_server = MapWebSocketServer(
+                host="127.0.0.1",
+                port=port,
+                history_size=50,
             )
-            # Attach WS server ref so status handler can report stats
-            if self._server:
-                self._server._mf_ws_server = self._ws_server  # type: ignore[attr-defined]
-        else:
-            logger.info("WebSocket server not started (optional dependency)")
-            self._ws_server = None
+            if self._ws_server.start():
+                self._ws_port = port
+                if offset > 0:
+                    logger.warning(
+                        "WebSocket port %d in use, started on ws://127.0.0.1:%d",
+                        ws_port, port,
+                    )
+                # Subscribe to all node events and forward to WebSocket clients
+                self._aggregator.event_bus.subscribe(
+                    None, self._forward_to_websocket,
+                )
+                # Attach WS server ref so status handler can report stats
+                if self._server:
+                    self._server._mf_ws_server = self._ws_server  # type: ignore[attr-defined]
+                return
+        # All ports failed
+        logger.info("WebSocket server not started (optional dependency or ports unavailable)")
+        self._ws_server = None
 
     def _forward_to_websocket(self, event: Event) -> None:
         """Bridge an event bus event to WebSocket broadcast."""

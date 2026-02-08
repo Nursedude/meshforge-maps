@@ -202,3 +202,19 @@ class TestMapServerHTTPEndpoints:
         data = self._get_json("/api/status")
         assert "source_health" in data
         assert isinstance(data["source_health"], dict)
+
+    def test_health_endpoint_returns_score(self):
+        data = self._get_json("/api/health")
+        assert "score" in data
+        assert isinstance(data["score"], int)
+        assert 0 <= data["score"] <= 100
+        assert "status" in data
+        assert data["status"] in ("healthy", "fair", "degraded", "critical")
+        assert "components" in data
+        assert "freshness" in data["components"]
+        assert "sources" in data["components"]
+        assert "circuit_breakers" in data["components"]
+        # Each component has score and max
+        for component in data["components"].values():
+            assert "score" in component
+            assert "max" in component
