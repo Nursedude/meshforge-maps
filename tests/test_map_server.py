@@ -109,3 +109,81 @@ class TestMapServerPort:
         config = MapsConfig(config_path=tmp_path / "settings.json")
         server = MapServer(config)
         assert server.port == 0
+
+
+class TestMapServerHTTPEndpoints:
+    """Integration tests for HTTP API endpoint responses."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_server(self, tmp_path):
+        """Start a real server for HTTP integration testing."""
+        from urllib.request import urlopen, Request
+        self.urlopen = urlopen
+        self.Request = Request
+        config = MapsConfig(config_path=tmp_path / "settings.json")
+        config.set("http_port", 18850)
+        # Disable all collectors to avoid real network calls
+        config.set("enable_meshtastic", False)
+        config.set("enable_reticulum", False)
+        config.set("enable_hamclock", False)
+        config.set("enable_aredn", False)
+        self.server = MapServer(config)
+        assert self.server.start() is True
+        self.base = f"http://127.0.0.1:{self.server.port}"
+        # Allow server thread to start accepting
+        time.sleep(0.1)
+        yield
+        self.server.stop()
+
+    def _get_json(self, path):
+        req = self.Request(self.base + path, headers={"Accept": "application/json"})
+        with self.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode())
+
+    def test_geojson_endpoint_returns_feature_collection(self):
+        data = self._get_json("/api/nodes/geojson")
+        assert data["type"] == "FeatureCollection"
+        assert "features" in data
+        assert isinstance(data["features"], list)
+        assert "properties" in data
+        assert "total_nodes" in data["properties"]
+
+    def test_status_endpoint_returns_health(self):
+        data = self._get_json("/api/status")
+        assert data["status"] == "ok"
+        assert data["extension"] == "meshforge-maps"
+        assert "version" in data
+        assert "uptime_seconds" in data
+        assert isinstance(data["sources"], list)
+        assert "mqtt_live" in data
+
+    def test_topology_endpoint_returns_links(self):
+        data = self._get_json("/api/topology")
+        assert "links" in data
+        assert isinstance(data["links"], list)
+        assert "link_count" in data
+        assert data["link_count"] == len(data["links"])
+
+    def test_sources_endpoint_returns_sources(self):
+        data = self._get_json("/api/sources")
+        assert "sources" in data
+        assert isinstance(data["sources"], list)
+        assert "network_colors" in data
+
+    def test_tile_providers_endpoint(self):
+        data = self._get_json("/api/tile-providers")
+        assert isinstance(data, dict)
+        assert len(data) > 0
+        # Each provider should have required fields
+        for key, provider in data.items():
+            assert "name" in provider
+            assert "url" in provider
+
+    def test_overlay_endpoint_returns_dict(self):
+        data = self._get_json("/api/overlay")
+        assert isinstance(data, dict)
+
+    def test_config_endpoint_returns_settings(self):
+        data = self._get_json("/api/config")
+        assert isinstance(data, dict)
+        assert "network_colors" in data

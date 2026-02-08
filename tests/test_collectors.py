@@ -167,6 +167,32 @@ class TestReticulumCollector:
             features = c._read_cache_file(mock_path)
         assert len(features) == 1
 
+    @patch("src.collectors.reticulum_collector.RNS_CACHE_PATH")
+    def test_read_cache_file_dict_filters_invalid_coords(self, mock_path):
+        """Regression test: _read_cache_file must not append None from make_feature."""
+        cache_data = {
+            "valid_node": {
+                "name": "Good",
+                "latitude": 34.0,
+                "longitude": -118.0,
+                "type": "rnode",
+            },
+            "bad_node": {
+                "name": "Bad",
+                "latitude": 999,
+                "longitude": 999,
+                "type": "tcp",
+            },
+        }
+        c = ReticulumCollector()
+        mock_path.exists.return_value = True
+        with patch("builtins.open", mock_open(read_data=json.dumps(cache_data))):
+            features = c._read_cache_file(mock_path)
+        # bad_node should be filtered out (invalid coords), not produce None
+        assert len(features) == 1
+        assert None not in features
+        assert features[0]["properties"]["name"] == "Good"
+
     @patch("subprocess.run")
     def test_fetch_from_rnstatus_not_found(self, mock_run):
         mock_run.side_effect = FileNotFoundError
@@ -394,6 +420,51 @@ class TestDataAggregator:
         assert result["properties"]["sources"]["meshtastic"] == 0
         assert result["properties"]["sources"]["reticulum"] == 1
         assert result["properties"]["total_nodes"] == 1
+
+    def test_last_collect_age_none_before_collect(self):
+        agg = DataAggregator({
+            "enable_meshtastic": False, "enable_reticulum": False,
+            "enable_hamclock": False, "enable_aredn": False,
+        })
+        assert agg.last_collect_age_seconds is None
+
+    @patch.object(MeshtasticCollector, "collect")
+    @patch.object(ReticulumCollector, "collect")
+    @patch.object(HamClockCollector, "collect")
+    @patch.object(AREDNCollector, "collect")
+    def test_last_collect_age_after_collect(self, mock_aredn, mock_ham, mock_ret, mock_mesh):
+        mock_mesh.return_value = make_feature_collection([], "meshtastic")
+        mock_ret.return_value = make_feature_collection([], "reticulum")
+        mock_ham.return_value = make_feature_collection([], "hamclock")
+        mock_aredn.return_value = make_feature_collection([], "aredn")
+
+        agg = DataAggregator(dict(DEFAULT_CONFIG_SUBSET))
+        agg.collect_all()
+        age = agg.last_collect_age_seconds
+        assert age is not None
+        assert age >= 0
+        assert age < 5  # Should be very recent
+
+    @patch.object(MeshtasticCollector, "collect")
+    @patch.object(ReticulumCollector, "collect")
+    @patch.object(HamClockCollector, "collect")
+    @patch.object(AREDNCollector, "collect")
+    def test_last_collect_counts_populated(self, mock_aredn, mock_ham, mock_ret, mock_mesh):
+        mock_mesh.return_value = make_feature_collection(
+            [make_feature("m1", 1.0, 2.0, "meshtastic")], "meshtastic"
+        )
+        mock_ret.return_value = make_feature_collection([], "reticulum")
+        mock_ham.return_value = make_feature_collection([], "hamclock")
+        mock_aredn.return_value = make_feature_collection([], "aredn")
+
+        agg = DataAggregator(dict(DEFAULT_CONFIG_SUBSET))
+        agg.collect_all()
+        counts = agg.last_collect_counts
+        assert counts["meshtastic"] == 1
+        assert counts["reticulum"] == 0
+        # Verify it's a copy (not mutable reference)
+        counts["meshtastic"] = 999
+        assert agg.last_collect_counts["meshtastic"] == 1
 
 
 # Helper config for aggregator tests
