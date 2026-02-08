@@ -46,10 +46,15 @@ class AREDNCollector(BaseCollector):
     ):
         super().__init__(cache_ttl_seconds)
         self._node_targets = node_targets or list(DEFAULT_AREDN_NODES)
+        # Topology links from LQM data (source_name -> [{neighbor, snr, quality, ...}])
+        self._lqm_links: List[Dict[str, Any]] = []
+        # Known node coordinates for resolving LQM neighbor positions
+        self._node_coords: Dict[str, tuple] = {}  # node_name -> (lat, lon)
 
     def _fetch(self) -> Dict[str, Any]:
         features: List[Dict[str, Any]] = []
         seen_ids: set = set()
+        self._lqm_links = []
 
         # Source 1: Direct AREDN node queries (if on mesh)
         for target in self._node_targets:
@@ -75,6 +80,16 @@ class AREDNCollector(BaseCollector):
             if fid and fid not in seen_ids:
                 seen_ids.add(fid)
                 features.append(f)
+
+        # Build coordinate lookup for all known nodes
+        self._node_coords = {}
+        for f in features:
+            props = f.get("properties", {})
+            geom = f.get("geometry", {})
+            coords = geom.get("coordinates", [])
+            fid = props.get("id")
+            if fid and len(coords) >= 2:
+                self._node_coords[fid] = (coords[1], coords[0])  # lat, lon
 
         return make_feature_collection(features, self.source_name)
 
@@ -110,13 +125,14 @@ class AREDNCollector(BaseCollector):
             if feature:
                 features.append(feature)
 
-            # Parse neighbor nodes from LQM data
+            # Parse LQM neighbor entries for topology links
+            node_name = data.get("node", target)
             lqm = data.get("lqm", [])
             if isinstance(lqm, list):
                 for neighbor in lqm:
-                    nf = self._parse_lqm_neighbor(neighbor)
-                    if nf:
-                        features.append(nf)
+                    link = self._parse_lqm_neighbor(neighbor, node_name)
+                    if link:
+                        self._lqm_links.append(link)
 
             logger.debug("AREDN node %s returned %d entries", target, len(features))
         except (URLError, OSError, json.JSONDecodeError) as e:
@@ -159,17 +175,95 @@ class AREDNCollector(BaseCollector):
             description=f"AREDN {model} - {firmware}",
         )
 
-    def _parse_lqm_neighbor(self, neighbor: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Parse an LQM neighbor entry. Note: neighbors may lack coordinates."""
-        # LQM entries typically don't include lat/lon directly
-        # They contain link quality metrics for topology visualization
+    def _parse_lqm_neighbor(
+        self, neighbor: Dict[str, Any], source_node: str
+    ) -> Optional[Dict[str, Any]]:
+        """Parse an LQM neighbor entry into a topology link.
+
+        AREDN LQM entries contain link quality metrics between nodes:
+          - name: neighbor node hostname
+          - snr: signal-to-noise ratio (dB)
+          - noise: noise floor (dBm)
+          - tx_quality: transmit quality percentage (0-100)
+          - rx_quality: receive quality percentage (0-100)
+          - quality: overall link quality percentage
+          - type: link type (RF, DTD, TUN, etc.)
+          - blocked: whether the link is blocked by LQM
+
+        Returns a topology link dict suitable for visualization,
+        or None if the entry is invalid or blocked.
+        """
         name = neighbor.get("name", "")
         if not name:
             return None
 
-        # Store as a feature without geometry for topology data
-        # (will be resolved to coordinates if the neighbor is also queried)
-        return None  # Skip for now - no coordinates available in LQM
+        # Skip blocked links (LQM has decided this link is unusable)
+        if neighbor.get("blocked"):
+            return None
+
+        # Extract link quality metrics
+        snr = neighbor.get("snr")
+        noise = neighbor.get("noise")
+        quality = neighbor.get("quality")
+        tx_quality = neighbor.get("tx_quality")
+        rx_quality = neighbor.get("rx_quality")
+        link_type = neighbor.get("type", "")
+
+        # Validate SNR if present
+        if snr is not None:
+            try:
+                snr = float(snr)
+            except (ValueError, TypeError):
+                snr = None
+
+        # Validate quality if present
+        if quality is not None:
+            try:
+                quality = int(quality)
+                if not (0 <= quality <= 100):
+                    quality = None
+            except (ValueError, TypeError):
+                quality = None
+
+        link = {
+            "source": source_node,
+            "target": name,
+            "snr": snr,
+            "noise": noise,
+            "quality": quality,
+            "tx_quality": tx_quality,
+            "rx_quality": rx_quality,
+            "link_type": link_type,
+            "network": "aredn",
+        }
+        # Strip None values
+        return {k: v for k, v in link.items() if v is not None}
+
+    def get_topology_links(self) -> List[Dict[str, Any]]:
+        """Return AREDN topology links with coordinates resolved.
+
+        Enriches LQM link data with source/target coordinates from
+        known node positions. Links where both endpoints have known
+        coordinates are returned with full positioning data.
+        """
+        resolved = []
+        for link in self._lqm_links:
+            src = link.get("source", "")
+            tgt = link.get("target", "")
+            src_coords = self._node_coords.get(src)
+            tgt_coords = self._node_coords.get(tgt)
+            if src_coords and tgt_coords:
+                resolved.append({
+                    **link,
+                    "source_lat": src_coords[0],
+                    "source_lon": src_coords[1],
+                    "target_lat": tgt_coords[0],
+                    "target_lon": tgt_coords[1],
+                })
+            else:
+                # Include unresolved links without coordinates
+                resolved.append(link)
+        return resolved
 
     def _fetch_from_cache(self) -> List[Dict[str, Any]]:
         """Read MeshForge's AREDN node cache."""
