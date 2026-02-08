@@ -470,6 +470,77 @@
             filter: grayscale(60%);
         }
 
+        /* Node history panel */
+        .history-panel {
+            position: fixed;
+            bottom: 24px;
+            left: 12px;
+            width: 320px;
+            max-height: 300px;
+            background: rgba(10, 14, 26, 0.94);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(79, 195, 247, 0.12);
+            border-radius: 8px;
+            z-index: 1000;
+            padding: 12px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        .history-panel-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #4fc3f7;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .history-close-btn {
+            background: none;
+            border: none;
+            color: #78909c;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 0 4px;
+        }
+
+        .history-close-btn:hover { color: #ef5350; }
+
+        .history-node-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .history-node-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        .history-node-row:hover { background: rgba(79, 195, 247, 0.06); }
+
+        .history-node-id { color: #42a5f5; font-weight: 500; }
+        .history-node-count { color: #78909c; }
+
+        .trajectory-btn {
+            font-size: 10px;
+            background: rgba(79, 195, 247, 0.15);
+            border: 1px solid rgba(79, 195, 247, 0.3);
+            color: #4fc3f7;
+            padding: 2px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        .trajectory-btn:hover { background: rgba(79, 195, 247, 0.25); }
+        .trajectory-btn.active { background: rgba(79, 195, 247, 0.35); color: #fff; }
+
         /* Refresh button states */
         .refresh-btn {
             width: 100%;
@@ -574,6 +645,11 @@
             <span class="layer-label">Topology Links</span>
             <span class="layer-count" id="countLinks">0</span>
         </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="overlayTrajectory" onchange="toggleTrajectoryPanel()">
+            <span class="layer-color" style="background:#ffc107"></span>
+            <span class="layer-label">Node History</span>
+        </label>
     </div>
 
     <div class="panel-section" id="weatherSection">
@@ -633,6 +709,17 @@
 </div>
 
 <div id="map"></div>
+
+<div class="history-panel" id="historyPanel">
+    <div class="history-panel-title">
+        <span>Node History</span>
+        <button class="history-close-btn" onclick="toggleTrajectoryPanel()">&times;</button>
+    </div>
+    <div class="history-node-list" id="historyNodeList">
+        <div style="color:#546e7a;font-size:11px;text-align:center;padding:12px">Loading tracked nodes...</div>
+    </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -719,7 +806,7 @@
     let clusterGroup;
     let directGroup;        // non-clustered layer group
     let terminatorLayer;
-    let topologyLayer;      // Leaflet layer group for topology links
+    let topologyLayer;      // Leaflet GeoJSON layer for topology links
     let showTopology = false;
     let useClustering = true;
     let isLoading = false;
@@ -728,6 +815,8 @@
     let ws = null;               // WebSocket connection (real-time updates)
     let wsReconnectTimer = null; // Timer for WebSocket reconnect attempts
     let wsReconnectDelay = 2000; // Current reconnect delay (exponential backoff)
+    let trajectoryLayers = {};   // Active trajectory polylines keyed by node_id
+    let historyPanelOpen = false;
 
     // Per-network layer groups (for toggle visibility)
     const networkLayers = {
@@ -1345,7 +1434,7 @@
     }
 
     // =========================================================================
-    // Topology / Link Visualization
+    // Topology / Link Visualization (GeoJSON from server)
     // =========================================================================
 
     function toggleTopology() {
@@ -1361,74 +1450,193 @@
 
     async function loadTopologyData() {
         try {
-            const resp = await fetch(API_BASE + '/api/topology');
+            const resp = await fetch(API_BASE + '/api/topology/geojson');
             if (!resp.ok) return;
-            const data = await resp.json();
-            renderTopologyLinks(data.links || []);
+            const geojson = await resp.json();
+            renderTopologyGeoJSON(geojson);
         } catch (e) {
             console.debug('Topology data unavailable:', e);
         }
     }
 
-    function renderTopologyLinks(links) {
+    function renderTopologyGeoJSON(geojson) {
         if (topologyLayer) {
             map.removeLayer(topologyLayer);
         }
-        topologyLayer = L.layerGroup();
 
-        for (const link of links) {
-            if (link.source_lat == null || link.target_lat == null) continue;
+        topologyLayer = L.geoJSON(geojson, {
+            style: function(feature) {
+                var props = feature.properties || {};
+                var color = props.color || '#6b7280';
+                var quality = props.quality || 'Unknown';
+                var snr = props.snr;
+                var weight = 1.5;
+                var opacity = 0.5;
 
-            // SNR-based 5-tier quality colors (aligned with meshforge core topology_visualizer)
-            const snr = link.snr || 0;
-            let linkColor = '#6b7280';    // Gray - unknown
-            let linkWeight = 1.5;
-            let linkOpacity = 0.5;
-            let qualityLabel = 'Unknown';
+                if (quality === 'Excellent')     { weight = 2.5; opacity = 0.8; }
+                else if (quality === 'Good')     { weight = 2.2; opacity = 0.75; }
+                else if (quality === 'Marginal') { weight = 2.0; opacity = 0.7; }
+                else if (quality === 'Poor')     { weight = 1.8; opacity = 0.65; }
+                else if (quality === 'Bad')      { weight = 1.5; opacity = 0.6; }
 
-            if (snr > 10) {
-                linkColor = '#22c55e'; linkWeight = 2.5; linkOpacity = 0.8;  // Green - Excellent
-                qualityLabel = 'Excellent';
-            } else if (snr > 5) {
-                linkColor = '#84cc16'; linkWeight = 2.2; linkOpacity = 0.75; // Light green - Good
-                qualityLabel = 'Good';
-            } else if (snr > 0) {
-                linkColor = '#eab308'; linkWeight = 2; linkOpacity = 0.7;    // Yellow - Marginal
-                qualityLabel = 'Marginal';
-            } else if (snr > -5) {
-                linkColor = '#f97316'; linkWeight = 1.8; linkOpacity = 0.65; // Orange - Poor
-                qualityLabel = 'Poor';
-            } else if (snr !== 0) {
-                linkColor = '#ef4444'; linkWeight = 1.5; linkOpacity = 0.6;  // Red - Bad
-                qualityLabel = 'Bad';
-            }
-
-            const line = L.polyline(
-                [[link.source_lat, link.source_lon], [link.target_lat, link.target_lon]],
-                {
-                    color: linkColor,
-                    weight: linkWeight,
-                    opacity: linkOpacity,
-                    dashArray: snr > 0 ? null : '4 6',
+                return {
+                    color: color,
+                    weight: weight,
+                    opacity: opacity,
+                    dashArray: (snr != null && snr > 0) ? null : '4 6',
                     interactive: true,
+                };
+            },
+            onEachFeature: function(feature, layer) {
+                var props = feature.properties || {};
+                var color = props.color || '#6b7280';
+                var snr = props.snr;
+                var snrText = (snr != null) ? Number(snr).toFixed(1) + ' dB' : 'unknown';
+                var quality = props.quality || 'Unknown';
+                var network = props.network || '';
+                var linkType = props.link_type || '';
+
+                var popup = '<div class="popup-title" style="color:' + color + '">Mesh Link</div>' +
+                    '<div class="popup-row"><span class="popup-key">From</span><span class="popup-val">' + esc(props.source || '') + '</span></div>' +
+                    '<div class="popup-row"><span class="popup-key">To</span><span class="popup-val">' + esc(props.target || '') + '</span></div>' +
+                    '<div class="popup-row"><span class="popup-key">SNR</span><span class="popup-val">' + snrText + '</span></div>' +
+                    '<div class="popup-row"><span class="popup-key">Quality</span><span class="popup-val" style="color:' + color + '">' + esc(quality) + '</span></div>';
+                if (network) {
+                    popup += '<div class="popup-row"><span class="popup-key">Network</span><span class="popup-val">' + esc(network) + '</span></div>';
                 }
-            );
+                if (linkType) {
+                    popup += '<div class="popup-row"><span class="popup-key">Type</span><span class="popup-val">' + esc(linkType) + '</span></div>';
+                }
+                layer.bindPopup(popup);
+            },
+        }).addTo(map);
 
-            // Popup for link details
-            const snrText = snr ? snr.toFixed(1) + ' dB' : 'unknown';
-            line.bindPopup(
-                `<div class="popup-title" style="color:${linkColor}">Mesh Link</div>` +
-                `<div class="popup-row"><span class="popup-key">From</span><span class="popup-val">${esc(link.source)}</span></div>` +
-                `<div class="popup-row"><span class="popup-key">To</span><span class="popup-val">${esc(link.target)}</span></div>` +
-                `<div class="popup-row"><span class="popup-key">SNR</span><span class="popup-val">${snrText}</span></div>` +
-                `<div class="popup-row"><span class="popup-key">Quality</span><span class="popup-val" style="color:${linkColor}">${qualityLabel}</span></div>`
-            );
+        var linkCount = (geojson.features || []).length;
+        document.getElementById('countLinks').textContent = linkCount;
+    }
 
-            topologyLayer.addLayer(line);
+    // =========================================================================
+    // Node History & Trajectory Visualization
+    // =========================================================================
+
+    function toggleTrajectoryPanel() {
+        historyPanelOpen = !historyPanelOpen;
+        var panel = document.getElementById('historyPanel');
+        var checkbox = document.getElementById('overlayTrajectory');
+        if (historyPanelOpen) {
+            panel.style.display = '';
+            checkbox.checked = true;
+            loadTrackedNodes();
+        } else {
+            panel.style.display = 'none';
+            checkbox.checked = false;
+            clearAllTrajectories();
+        }
+    }
+
+    async function loadTrackedNodes() {
+        var listEl = document.getElementById('historyNodeList');
+        try {
+            var resp = await fetch(API_BASE + '/api/history/nodes');
+            if (!resp.ok) {
+                listEl.innerHTML = '<div style="color:#ef5350;font-size:11px;text-align:center;padding:12px">Node history unavailable</div>';
+                return;
+            }
+            var data = await resp.json();
+            var nodes = data.nodes || [];
+            if (nodes.length === 0) {
+                listEl.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:12px">No tracked nodes yet</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < nodes.length; i++) {
+                var n = nodes[i];
+                var nodeId = n.node_id || n.id || '';
+                var count = n.observation_count || n.count || 0;
+                var isActive = trajectoryLayers[nodeId] ? ' active' : '';
+                html += '<div class="history-node-row" onclick="toggleTrajectory(\'' + esc(nodeId) + '\')">' +
+                    '<span class="history-node-id">' + esc(nodeId) + '</span>' +
+                    '<span class="history-node-count">' + count + ' pts</span>' +
+                    '<button class="trajectory-btn' + isActive + '" data-node="' + esc(nodeId) + '">' +
+                    (isActive ? 'Hide' : 'Show') + '</button>' +
+                    '</div>';
+            }
+            listEl.innerHTML = html;
+        } catch (e) {
+            listEl.innerHTML = '<div style="color:#ef5350;font-size:11px;text-align:center;padding:12px">Failed to load history</div>';
+        }
+    }
+
+    async function toggleTrajectory(nodeId) {
+        if (trajectoryLayers[nodeId]) {
+            // Remove existing trajectory
+            map.removeLayer(trajectoryLayers[nodeId]);
+            delete trajectoryLayers[nodeId];
+            loadTrackedNodes(); // refresh button states
+            return;
         }
 
-        topologyLayer.addTo(map);
-        document.getElementById('countLinks').textContent = links.length;
+        try {
+            var resp = await fetch(API_BASE + '/api/nodes/' + encodeURIComponent(nodeId) + '/trajectory');
+            if (!resp.ok) {
+                showToast('No trajectory data for ' + nodeId, true);
+                return;
+            }
+            var geojson = await resp.json();
+
+            if (!geojson.geometry || !geojson.geometry.coordinates || geojson.geometry.coordinates.length < 2) {
+                showToast('Not enough points for trajectory', true);
+                return;
+            }
+
+            // Render trajectory as a Leaflet polyline with gradient
+            var coords = geojson.geometry.coordinates;
+            var latlngs = coords.map(function(c) { return [c[1], c[0]]; });
+
+            var trajectoryLine = L.polyline(latlngs, {
+                color: '#ffc107',
+                weight: 3,
+                opacity: 0.8,
+                dashArray: '6 4',
+                interactive: true,
+            });
+
+            // Add start/end markers
+            var startMarker = L.circleMarker(latlngs[0], {
+                radius: 5, fillColor: '#66bb6a', color: '#fff', weight: 1, fillOpacity: 0.9,
+            });
+            startMarker.bindPopup('<b>' + esc(nodeId) + '</b><br>Start of trajectory');
+
+            var endMarker = L.circleMarker(latlngs[latlngs.length - 1], {
+                radius: 5, fillColor: '#ef5350', color: '#fff', weight: 1, fillOpacity: 0.9,
+            });
+            endMarker.bindPopup('<b>' + esc(nodeId) + '</b><br>Latest position');
+
+            var props = geojson.properties || {};
+            trajectoryLine.bindPopup(
+                '<div class="popup-title" style="color:#ffc107">Trajectory: ' + esc(nodeId) + '</div>' +
+                '<div class="popup-row"><span class="popup-key">Points</span><span class="popup-val">' + coords.length + '</span></div>' +
+                '<div class="popup-row"><span class="popup-key">Network</span><span class="popup-val">' + esc(props.network || '') + '</span></div>'
+            );
+
+            var group = L.layerGroup([trajectoryLine, startMarker, endMarker]).addTo(map);
+            trajectoryLayers[nodeId] = group;
+
+            // Fit map to trajectory bounds
+            map.fitBounds(trajectoryLine.getBounds().pad(0.2));
+            loadTrackedNodes(); // refresh button states
+        } catch (e) {
+            showToast('Failed to load trajectory: ' + e.message, true);
+        }
+    }
+
+    function clearAllTrajectories() {
+        for (var nodeId in trajectoryLayers) {
+            if (trajectoryLayers.hasOwnProperty(nodeId)) {
+                map.removeLayer(trajectoryLayers[nodeId]);
+            }
+        }
+        trajectoryLayers = {};
     }
 
     // =========================================================================
