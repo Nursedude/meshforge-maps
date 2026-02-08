@@ -23,7 +23,6 @@ Reference: https://meshtastic.org/docs/software/integrations/mqtt/
 import json
 import logging
 import math
-import random
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -355,23 +354,27 @@ class MQTTSubscriber:
         logger.info("MQTT subscriber stopped")
 
     def _run_loop(self) -> None:
-        """Connection loop with reconnect logic and periodic stale node cleanup."""
-        backoff = 2
+        """Connection loop with reconnect strategy and periodic stale node cleanup."""
+        from ..utils.reconnect import ReconnectStrategy
+
+        strategy = ReconnectStrategy.for_mqtt()
         last_cleanup = time.time()
         while self._running:
             try:
                 self._client.connect(self._broker, self._port, keepalive=60)
-                backoff = 2  # Reset backoff on successful connection
+                strategy.reset()  # Reset backoff on successful connection
                 self._client.loop_forever()
             except Exception as e:
                 if not self._running:
                     break
-                # Add jitter to prevent thundering herd on reconnect
-                jitter = random.uniform(0, backoff * 0.25)
-                wait = backoff + jitter
-                logger.warning("MQTT connection lost: %s, reconnecting in %.1fs", e, wait)
-                time.sleep(wait)
-                backoff = min(backoff * 2, 60)
+                delay = strategy.next_delay()
+                logger.warning(
+                    "MQTT connection lost: %s, reconnecting in %.1fs (attempt %d)",
+                    e,
+                    delay,
+                    strategy.attempt,
+                )
+                time.sleep(delay)
 
             # Periodic stale node cleanup (every 30 minutes)
             now = time.time()
