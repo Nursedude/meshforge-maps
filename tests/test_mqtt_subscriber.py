@@ -88,6 +88,42 @@ class TestMQTTNodeStore:
         fresh = store.get_all_nodes()
         assert fresh[0]["latitude"] == 10.0
 
+    def test_eviction_when_max_nodes_reached(self):
+        store = MQTTNodeStore(max_nodes=3)
+        store.update_position("!a", 1.0, 2.0, timestamp=100)
+        store.update_position("!b", 3.0, 4.0, timestamp=200)
+        store.update_position("!c", 5.0, 6.0, timestamp=300)
+        assert store.node_count == 3
+        # Adding a 4th should evict the oldest (!a with timestamp=100)
+        store.update_position("!d", 7.0, 8.0, timestamp=400)
+        assert store.node_count == 3
+        nodes = store.get_all_nodes()
+        node_ids = {n["id"] for n in nodes}
+        assert "!a" not in node_ids
+        assert "!d" in node_ids
+
+    def test_cleanup_stale_nodes(self):
+        store = MQTTNodeStore(remove_seconds=5)
+        now = int(time.time())
+        store.update_position("!fresh", 1.0, 2.0, timestamp=now)
+        store.update_position("!stale", 3.0, 4.0, timestamp=now - 100)
+        removed = store.cleanup_stale_nodes()
+        assert removed == 1
+        assert store.node_count == 1
+        nodes = store.get_all_nodes()
+        assert nodes[0]["id"] == "!fresh"
+
+    def test_cleanup_also_removes_neighbor_data(self):
+        store = MQTTNodeStore(remove_seconds=5)
+        now = int(time.time())
+        store.update_position("!stale", 1.0, 2.0, timestamp=now - 100)
+        store.update_neighbors("!stale", [{"node_id": "!b", "snr": 5.0}])
+        removed = store.cleanup_stale_nodes()
+        assert removed == 1
+        # Neighbor data should also be cleaned
+        links = store.get_topology_links()
+        assert len(links) == 0
+
 
 class TestMQTTSubscriber:
     """Tests for MQTTSubscriber initialization."""
