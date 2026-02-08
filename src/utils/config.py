@@ -18,6 +18,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_reticulum": True,
     "enable_hamclock": True,
     "enable_aredn": True,
+    "hamclock_host": "localhost",
+    "hamclock_port": 8080,
     "map_center_lat": 20.0,
     "map_center_lon": -100.0,
     "map_default_zoom": 4,
