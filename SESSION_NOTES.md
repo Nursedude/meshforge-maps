@@ -2,6 +2,108 @@
 
 ---
 
+## Session 4: HamClock API-Only Refactor
+
+**Date:** 2026-02-08
+**Branch:** `claude/hamclock-api-only-rF99v`
+**Scope:** Refactor HamClockCollector to API-only architecture, aligned with meshforge core
+
+### Context
+
+Nursedude/meshforge underwent a major HamClock decoupling (see `.claude/research/hamclock_decoupling.md`):
+- **Before:** NOAA SWPC was primary, HamClock was a minor optional add-on
+- **After (meshforge core):** NOAA SWPC primary via `commands.propagation`, HamClock/OpenHamClock as optional REST API enhancement
+- **After (meshforge-maps):** HamClock REST API is PRIMARY when running, NOAA SWPC is FALLBACK
+
+Original HamClock (WB0OEW, SK) sunsets June 2026. OpenHamClock (MIT, port 3000) is the community successor.
+
+### What Was Done
+
+#### Modified: `src/collectors/hamclock_collector.py` (complete rewrite)
+- **Architecture:** HamClock REST API primary, NOAA SWPC fallback
+- **New `_fetch_text()` method:** Fetches raw text responses from HamClock
+- **New `_parse_key_value()` function:** Parses HamClock's `key=value` text format
+- **New `is_hamclock_available()`:** Tests connectivity via `get_sys.txt`
+- **New `_fetch_space_weather_hamclock()`:** Gets SFI, Kp, A, X-ray, SSN, proton, aurora via `get_spacewx.txt`
+- **New `_fetch_band_conditions_hamclock()`:** Gets HF band conditions via `get_bc.txt`
+- **New `_fetch_voacap()`:** Gets VOACAP propagation predictions via `get_voacap.txt` with band reliability/SNR parsing
+- **New `_fetch_de()` / `_fetch_dx()`:** Gets home/target location via `get_de.txt` / `get_dx.txt`
+- **Renamed `_fetch_space_weather()` → `_fetch_space_weather_noaa()`:** NOAA fallback path, preserves original SWPC logic
+- **New `_reliability_to_status()`:** Maps VOACAP reliability % → excellent/good/fair/poor/closed
+- **`_fetch()` now branches:** Checks HamClock availability first, falls back gracefully
+- **Removed:** `SWPC_A_INDEX`, `SWPC_XRAY_FLUX` constants (unused in NOAA fallback path)
+- **Removed:** `HAMCLOCK_API` constant (replaced by instance `_hamclock_api`)
+
+#### Modified: `src/utils/config.py`
+- Added `hamclock_host` (default: "localhost") and `hamclock_port` (default: 8080) to `DEFAULT_CONFIG`
+
+#### Modified: `src/collectors/aggregator.py`
+- Passes `hamclock_host` and `hamclock_port` from config to `HamClockCollector` constructor
+
+#### Modified: `tests/test_collectors.py`
+- 26 HamClock tests (8 original + 18 new):
+  - Constructor defaults and custom host/port
+  - `_parse_key_value()` parsing (normal, empty, equals-in-value)
+  - `is_hamclock_available()` true/false paths
+  - HamClock API space weather parsing with key mapping
+  - VOACAP band parsing (reliability, SNR, best band calculation)
+  - Band conditions parsing from HamClock
+  - DE/DX location parsing
+  - Full `_fetch()` with HamClock available (all API endpoints called)
+  - Full `_fetch()` with HamClock down (NOAA fallback path)
+  - `_reliability_to_status()` edge cases
+
+#### Modified: `tests/test_config.py`
+- Added `test_hamclock_host_port_defaults` — verifies new config keys
+
+### Test Results
+- **Before:** 224 passed, 22 skipped
+- **After:** 243 passed (+19 new), 22 skipped, 0 regressions
+
+### Data Flow (New)
+```
+HamClock/OpenHamClock running?
+    |
+    ├── YES → get_spacewx.txt → space_weather (SFI, Kp, A, X-ray, SSN)
+    │         get_bc.txt       → band_conditions (80m-10m)
+    │         get_voacap.txt   → VOACAP predictions (reliability%, SNR)
+    │         get_de.txt       → DE home station (lat, lon, grid, call)
+    │         get_dx.txt       → DX target (lat, lon, grid, call)
+    │
+    └── NO  → NOAA SWPC APIs  → space_weather (SFI, Kp, solar wind)
+              (automatic fallback, always works)
+
+Both paths → _calculate_solar_terminator() (local computation)
+          → FeatureCollection with overlay properties
+```
+
+### HamClock REST API Endpoints Used
+| Endpoint | Data | Format |
+|----------|------|--------|
+| `get_sys.txt` | Version, uptime, DE/DX | key=value |
+| `get_spacewx.txt` | SFI, Kp, A, X-ray, SSN, proton, aurora | key=value |
+| `get_bc.txt` | HF band conditions (80m-10m) | key=value |
+| `get_voacap.txt` | VOACAP propagation (per-band reliability + SNR) | key=value |
+| `get_de.txt` | Home location (lat, lon, grid, callsign) | key=value |
+| `get_dx.txt` | DX target (lat, lon, grid, callsign) | key=value |
+
+### Design Decisions
+- **HamClock primary, NOAA fallback:** Aligns with meshforge core's architecture where HamClock provides richer data (VOACAP, band conditions, DE/DX) than raw NOAA
+- **Availability check per collection cycle:** `is_hamclock_available()` calls `get_sys.txt` once per `_fetch()`, caching the result
+- **Key mapping is case-insensitive:** HamClock may return `SFI`, `sfi`, or `Flux` — the mapper handles all variants
+- **NOAA fallback preserves original behavior:** If HamClock is down, maps works exactly as before with SWPC data
+- **Backward compatible:** Constructor signature unchanged, new params have defaults
+
+### Session Entropy Watch
+Session focused. Systematic task list (7 items, all completed). Zero regressions.
+
+### Next Session Suggestions
+1. **Phase 3 features** from roadmap: Node history DB, health scoring, topology visualization
+2. **OpenHamClock integration:** Add OpenHamClock (port 3000) as a third data source option alongside HamClock legacy and NOAA
+3. **Frontend overlay enhancements:** Display VOACAP data and band conditions in the map UI when HamClock is available
+
+---
+
 ## Session 3: Phase 2 Real-Time Architecture Implementation
 
 **Date:** 2026-02-08
