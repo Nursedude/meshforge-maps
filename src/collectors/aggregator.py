@@ -16,6 +16,7 @@ from .meshtastic_collector import MeshtasticCollector
 from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
 from .reticulum_collector import ReticulumCollector
 from ..utils.circuit_breaker import CircuitBreakerRegistry
+from ..utils.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,9 @@ class DataAggregator:
         self._last_collect_time: float = 0
         self._last_collect_counts: Dict[str, int] = {}
 
+        # Event bus for decoupled real-time communication
+        self._event_bus = EventBus()
+
         # Circuit breaker registry for per-collector failure protection
         self._circuit_breaker_registry = CircuitBreakerRegistry(
             default_failure_threshold=5,
@@ -46,7 +50,9 @@ class DataAggregator:
         self._mqtt_subscriber: Optional[MQTTSubscriber] = None
         mqtt_store: Optional[MQTTNodeStore] = None
         if config.get("enable_meshtastic", True):
-            self._mqtt_subscriber = MQTTSubscriber()
+            self._mqtt_subscriber = MQTTSubscriber(
+                event_bus=self._event_bus,
+            )
             if self._mqtt_subscriber.available:
                 self._mqtt_subscriber.start()
                 mqtt_store = self._mqtt_subscriber.store
@@ -189,6 +195,10 @@ class DataAggregator:
     @property
     def last_collect_counts(self) -> Dict[str, int]:
         return dict(self._last_collect_counts)
+
+    @property
+    def event_bus(self) -> EventBus:
+        return self._event_bus
 
     @property
     def circuit_breaker_registry(self) -> CircuitBreakerRegistry:

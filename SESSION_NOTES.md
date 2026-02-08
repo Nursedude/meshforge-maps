@@ -2,6 +2,147 @@
 
 ---
 
+## Session 3: Phase 2 Real-Time Architecture Implementation
+
+**Date:** 2026-02-08
+**Branch:** `claude/session-entropy-monitoring-b9PJx`
+**Scope:** Implement Phase 2 (Real-Time Architecture) from the roadmap below
+
+### What Was Done
+
+#### New Modules Created
+1. **`src/utils/event_bus.py`** -- EventBus + typed events (NodeEvent, ServiceEvent)
+   - Thread-safe pub/sub with EventType-based filtering
+   - Wildcard subscriptions (subscribe to all events)
+   - Error isolation: `_safe_call()` wraps every callback
+   - Stats tracking: published, delivered, errors
+   - Factory methods: `NodeEvent.position()`, `.info()`, `.telemetry()`, `.topology()`
+   - Factory methods: `ServiceEvent.up()`, `.down()`, `.degraded()`
+
+2. **`src/utils/websocket_server.py`** -- MapWebSocketServer
+   - Async WebSocket broadcast server (uses `websockets` library, optional dependency)
+   - Runs in background thread with own asyncio event loop
+   - 50-message history buffer for newly-connected clients
+   - Thread-safe `broadcast()` callable from any thread (MQTT callbacks, etc.)
+   - Stats: clients_connected, total_connections, total_messages_sent
+   - Graceful fallback if `websockets` not installed
+
+#### Modules Modified
+3. **`src/collectors/mqtt_subscriber.py`** -- Event bus integration
+   - New optional `event_bus` parameter (backward-compatible)
+   - `_notify_update()` now publishes typed events to the bus
+   - Added `_emit_event()` method mapping update_type -> NodeEvent factory
+   - Added `_notify_update()` calls to ALL handlers (was only position before):
+     - `_handle_nodeinfo` -> emits `node.info` with long_name, short_name
+     - `_handle_telemetry` -> emits `node.telemetry`
+     - `_handle_neighborinfo` -> emits `node.topology` with neighbor_count
+     - `_handle_position` -> now includes lat/lon in event
+
+4. **`src/collectors/aggregator.py`** -- EventBus creation and wiring
+   - Creates `EventBus` instance in `__init__`
+   - Passes event_bus to `MQTTSubscriber` constructor
+   - Exposes `event_bus` property for MapServer access
+
+5. **`src/map_server.py`** -- WebSocket server lifecycle + event bridge
+   - Creates `MapWebSocketServer` on adjacent port (http_port + 1)
+   - Subscribes to event bus, forwards all events as JSON to WebSocket clients
+   - `_forward_to_websocket()` serializes Event -> JSON with type, node_id, lat/lon
+   - `/api/status` now includes `websocket` and `event_bus` stats
+   - `/api/config` now includes `ws_port` for frontend discovery
+   - `stop()` shuts down WebSocket server alongside HTTP
+
+6. **`web/meshforge_maps.html`** -- WebSocket client
+   - `connectWebSocket(port)` with exponential backoff reconnect (2s-30s)
+   - Auto-connects after `/api/config` returns ws_port
+   - `handleRealtimeMessage()` processes node.position events
+   - `updateOrAddNode()` moves existing markers or adds temporary new ones
+   - Polling continues as fallback (5-minute interval unchanged)
+   - Connection status indicator shows "Live" when WS connected
+
+#### Tests Written
+7. **`tests/test_event_bus.py`** -- 26 tests
+   - Event construction (NodeEvent, ServiceEvent factories)
+   - Subscribe/publish (basic, multi-subscriber, type filtering, wildcard)
+   - Unsubscribe (specific, wildcard, nonexistent)
+   - Error isolation (bad subscriber doesn't break others)
+   - Stats and subscriber counting
+   - Thread safety (concurrent publish/subscribe, subscribe during publish)
+
+8. **`tests/test_websocket_server.py`** -- 15 tests
+   - Server lifecycle (start, stop, double start)
+   - Client connections (connect, disconnect, multiple clients)
+   - Broadcast (single client, multiple clients, no clients, not running)
+   - History buffer (new client catchup, max size cap)
+   - Stats counting (connections, messages)
+   - Optional dependency handling
+
+9. **`tests/test_realtime.py`** -- 16 tests
+   - Aggregator creates EventBus and passes to MQTT subscriber
+   - MQTT _notify_update emits correct typed events
+   - Both legacy callback and event bus fire simultaneously
+   - Full pipeline: EventBus -> WebSocket broadcast
+   - End-to-end: MQTTSubscriber -> EventBus -> WebSocket client
+   - MapServer starts WebSocket on adjacent port
+   - /api/status includes websocket and event_bus stats
+   - /api/config includes ws_port
+   - Events published on aggregator bus reach WebSocket clients
+
+### Test Results
+- **Before:** 189 tests passing
+- **After:** 246 tests passing (+57 new, 0 regressions)
+
+### Design Decisions
+- **Backward compatible:** event_bus parameter is optional (defaults to None)
+- **Optional websockets dependency:** Follows same pattern as paho-mqtt (graceful fallback)
+- **Event bus is synchronous:** Callbacks run in publisher's thread. MQTT subscriber publishes on its thread; bus forwards to WS server's thread-safe broadcast().
+- **History buffer for late joiners:** New WebSocket clients get the last 50 messages on connect, so they see recent node activity immediately.
+- **Polling preserved alongside WebSocket:** Frontend keeps 5-minute polling as fallback. WebSocket adds real-time layer on top.
+- **Adjacent port convention:** WS runs on http_port + 1 (e.g., 8809 alongside 8808)
+- **All handlers now notify:** Previously only position handler called _notify_update. Now all 4 handlers emit events.
+
+### Data Flow (New)
+```
+MQTT Broker
+    |
+    v
+MQTTSubscriber._handle_position()
+    |
+    ├── MQTTNodeStore.update_position()     (in-memory storage)
+    ├── _notify_update("position", lat, lon)
+    |       |
+    |       ├── on_node_update callback     (legacy, optional)
+    |       └── EventBus.publish(NodeEvent.position(...))
+    |               |
+    |               └── MapServer._forward_to_websocket()
+    |                       |
+    |                       └── MapWebSocketServer.broadcast(JSON)
+    |                               |
+    |                               └── WebSocket clients (real-time)
+    v
+DataAggregator.collect_all()              (polling, every 5 min)
+    |
+    v
+/api/nodes/geojson                        (HTTP polling)
+    |
+    v
+Frontend Leaflet Map                      (renders markers)
+```
+
+### Session Entropy Watch
+Session remained focused and systematic. No entropy detected:
+- Clear task list maintained and tracked (10 items, all completed)
+- Each module implemented, tested, then integrated
+- Zero regressions at every checkpoint (189 -> 230 -> 246)
+- Consistent architecture decisions throughout
+
+### Next Session: Phase 3 (Feature Depth)
+1. Node history DB with `get_trajectory_geojson()`
+2. Health scoring with `/api/health` endpoint
+3. Topology visualization with SNR-based edge coloring
+4. Shared health state reader for cross-process visibility
+
+---
+
 ## Session 2: Phase 1 Reliability Foundation Implementation
 
 **Date:** 2026-02-08

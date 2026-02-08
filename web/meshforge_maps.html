@@ -606,6 +606,9 @@
     let isLoading = false;
     let lastOverlayData = null;  // cached overlay from last successful fetch
     let consecutiveErrors = 0;
+    let ws = null;               // WebSocket connection (real-time updates)
+    let wsReconnectTimer = null; // Timer for WebSocket reconnect attempts
+    let wsReconnectDelay = 2000; // Current reconnect delay (exponential backoff)
 
     // Per-network layer groups (for toggle visibility)
     const networkLayers = {
@@ -701,6 +704,10 @@
                 if (config.default_tile_provider && TILE_PROVIDERS[config.default_tile_provider]) {
                     document.getElementById('tileSelect').value = config.default_tile_provider;
                     changeTileLayer();
+                }
+                // Connect WebSocket for real-time updates
+                if (config.ws_port) {
+                    connectWebSocket(config.ws_port);
                 }
             }
         } catch (e) {
@@ -1197,6 +1204,117 @@
                 .catch(function(err) {
                     console.debug('SW registration skipped:', err.message);
                 });
+        }
+    }
+
+    // =========================================================================
+    // WebSocket Real-Time Client
+    // =========================================================================
+
+    function connectWebSocket(port) {
+        if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+            return; // Already connected or connecting
+        }
+
+        var wsUrl = 'ws://' + window.location.hostname + ':' + port;
+        try {
+            ws = new WebSocket(wsUrl);
+        } catch (e) {
+            console.debug('WebSocket not available:', e);
+            return;
+        }
+
+        ws.onopen = function() {
+            console.log('WebSocket connected to', wsUrl);
+            wsReconnectDelay = 2000; // Reset backoff on success
+            setConnectionStatus('connected', 'Live');
+        };
+
+        ws.onmessage = function(event) {
+            try {
+                var msg = JSON.parse(event.data);
+                handleRealtimeMessage(msg);
+            } catch (e) {
+                console.debug('WebSocket message parse error:', e);
+            }
+        };
+
+        ws.onclose = function() {
+            console.debug('WebSocket closed, reconnecting in', wsReconnectDelay, 'ms');
+            ws = null;
+            scheduleReconnect(port);
+        };
+
+        ws.onerror = function() {
+            // onclose will fire after onerror, so reconnect happens there
+        };
+    }
+
+    function scheduleReconnect(port) {
+        if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = setTimeout(function() {
+            connectWebSocket(port);
+        }, wsReconnectDelay);
+        // Exponential backoff: 2s, 4s, 8s, 16s, max 30s
+        wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
+    }
+
+    function handleRealtimeMessage(msg) {
+        if (msg.type === 'node.position' && msg.lat && msg.lon && msg.node_id) {
+            updateOrAddNode(msg);
+        }
+        // Other event types (node.info, node.telemetry, node.topology)
+        // trigger a lightweight refresh of the affected node's popup if open
+        if (msg.type === 'node.info' || msg.type === 'node.telemetry') {
+            // These don't move markers, but signal data is fresh
+            // Full refresh happens on the next polling cycle
+        }
+    }
+
+    function updateOrAddNode(msg) {
+        var nodeId = msg.node_id;
+        var latlng = L.latLng(msg.lat, msg.lon);
+
+        // Check if this node already exists in our markers
+        var found = false;
+        var groups = [clusterGroup, directGroup];
+        for (var g = 0; g < groups.length; g++) {
+            if (!groups[g]) continue;
+            groups[g].eachLayer(function(layer) {
+                if (layer.feature &&
+                    layer.feature.properties &&
+                    layer.feature.properties.id === nodeId) {
+                    // Move existing marker
+                    if (layer.setLatLng) {
+                        layer.setLatLng(latlng);
+                        found = true;
+                    }
+                }
+            });
+            if (found) break;
+        }
+
+        if (!found) {
+            // New node -- add a temporary marker. Full data comes on next poll.
+            var marker = L.circleMarker(latlng, {
+                radius: 6,
+                fillColor: NETWORK_COLORS.meshtastic,
+                color: '#fff',
+                weight: 1,
+                opacity: 0.9,
+                fillOpacity: 0.8,
+            });
+            marker.feature = {
+                type: 'Feature',
+                properties: { id: nodeId, source: msg.source || 'mqtt' },
+                geometry: { type: 'Point', coordinates: [msg.lon, msg.lat] },
+            };
+            marker.bindPopup('<b>' + nodeId + '</b><br><i>Real-time update</i>');
+            if (useClustering && clusterGroup) {
+                clusterGroup.addLayer(marker);
+            } else if (directGroup) {
+                directGroup.addLayer(marker);
+            }
         }
     }
 
