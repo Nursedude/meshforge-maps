@@ -173,7 +173,6 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
-        import time as _time
         aggregator = self._get_aggregator()
         config = self._get_config()
         mqtt_status = "unavailable"
@@ -183,7 +182,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             mqtt_nodes = aggregator._mqtt_subscriber.store.node_count
 
         start_time = getattr(self.server, "_mf_start_time", None)
-        uptime = int(_time.time() - start_time) if start_time else None
+        uptime = int(time.time() - start_time) if start_time else None
 
         # Data age and staleness indicators (upstream improvement)
         data_age = None

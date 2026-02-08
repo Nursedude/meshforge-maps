@@ -284,18 +284,18 @@ class ReticulumCollector(BaseCollector):
                         lat = node_data.get("latitude")
                         lon = node_data.get("longitude")
                         if lat is not None and lon is not None:
-                            features.append(
-                                make_feature(
-                                    node_id=node_id,
-                                    lat=lat,
-                                    lon=lon,
-                                    network="reticulum",
-                                    name=node_data.get("name", node_id),
-                                    node_type=node_data.get("type", "unknown"),
-                                    is_online=node_data.get("is_online"),
-                                    last_seen=node_data.get("last_seen"),
-                                )
+                            feature = make_feature(
+                                node_id=node_id,
+                                lat=lat,
+                                lon=lon,
+                                network="reticulum",
+                                name=node_data.get("name", node_id),
+                                node_type=node_data.get("type", "unknown"),
+                                is_online=node_data.get("is_online"),
+                                last_seen=node_data.get("last_seen"),
                             )
+                            if feature is not None:
+                                features.append(feature)
             logger.debug("Cache %s returned %d nodes", path.name, len(features))
         except (json.JSONDecodeError, OSError) as e:
             logger.debug("Cache read failed for %s: %s", path.name, e)

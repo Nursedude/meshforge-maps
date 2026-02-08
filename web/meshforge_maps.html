@@ -1141,7 +1141,7 @@
         topologyLayer = L.layerGroup();
 
         for (const link of links) {
-            if (!link.source_lat || !link.target_lat) continue;
+            if (link.source_lat == null || link.target_lat == null) continue;
 
             // SNR-based styling
             const snr = link.snr || 0;

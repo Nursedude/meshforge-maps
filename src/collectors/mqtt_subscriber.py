@@ -428,7 +428,6 @@ class MQTTSubscriber:
             return
 
         packet = env.packet
-        from_id = f"!{packet.id:08x}" if packet.id else None
         from_node = f"!{packet.sender:08x}" if hasattr(packet, "sender") else f"!{getattr(packet, 'from', 0):08x}"
 
         if not hasattr(packet, "decoded") or not packet.decoded:
