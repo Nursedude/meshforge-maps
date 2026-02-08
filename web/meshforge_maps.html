@@ -1379,18 +1379,28 @@
         for (const link of links) {
             if (link.source_lat == null || link.target_lat == null) continue;
 
-            // SNR-based styling
+            // SNR-based 5-tier quality colors (aligned with meshforge core topology_visualizer)
             const snr = link.snr || 0;
-            let linkColor = '#29b6f6';    // default cyan
+            let linkColor = '#6b7280';    // Gray - unknown
             let linkWeight = 1.5;
             let linkOpacity = 0.5;
+            let qualityLabel = 'Unknown';
 
-            if (snr >= 10) {
-                linkColor = '#66bb6a'; linkWeight = 2.5; linkOpacity = 0.8;
-            } else if (snr >= 5) {
-                linkColor = '#ffa726'; linkWeight = 2; linkOpacity = 0.7;
+            if (snr > 10) {
+                linkColor = '#22c55e'; linkWeight = 2.5; linkOpacity = 0.8;  // Green - Excellent
+                qualityLabel = 'Excellent';
+            } else if (snr > 5) {
+                linkColor = '#84cc16'; linkWeight = 2.2; linkOpacity = 0.75; // Light green - Good
+                qualityLabel = 'Good';
             } else if (snr > 0) {
-                linkColor = '#ef5350'; linkWeight = 1.5; linkOpacity = 0.6;
+                linkColor = '#eab308'; linkWeight = 2; linkOpacity = 0.7;    // Yellow - Marginal
+                qualityLabel = 'Marginal';
+            } else if (snr > -5) {
+                linkColor = '#f97316'; linkWeight = 1.8; linkOpacity = 0.65; // Orange - Poor
+                qualityLabel = 'Poor';
+            } else if (snr !== 0) {
+                linkColor = '#ef4444'; linkWeight = 1.5; linkOpacity = 0.6;  // Red - Bad
+                qualityLabel = 'Bad';
             }
 
             const line = L.polyline(
@@ -1407,10 +1417,11 @@
             // Popup for link details
             const snrText = snr ? snr.toFixed(1) + ' dB' : 'unknown';
             line.bindPopup(
-                `<div class="popup-title" style="color:#29b6f6">Mesh Link</div>` +
+                `<div class="popup-title" style="color:${linkColor}">Mesh Link</div>` +
                 `<div class="popup-row"><span class="popup-key">From</span><span class="popup-val">${esc(link.source)}</span></div>` +
                 `<div class="popup-row"><span class="popup-key">To</span><span class="popup-val">${esc(link.target)}</span></div>` +
-                `<div class="popup-row"><span class="popup-key">SNR</span><span class="popup-val">${snrText}</span></div>`
+                `<div class="popup-row"><span class="popup-key">SNR</span><span class="popup-val">${snrText}</span></div>` +
+                `<div class="popup-row"><span class="popup-key">Quality</span><span class="popup-val" style="color:${linkColor}">${qualityLabel}</span></div>`
             );
 
             topologyLayer.addLayer(line);
@@ -1554,12 +1565,15 @@
 
     async function checkDataHealth() {
         try {
-            const resp = await fetch(API_BASE + '/api/status');
+            const resp = await fetch(API_BASE + '/api/health');
             if (!resp.ok) return;
-            const status = await resp.json();
-            if (status.data_stale) {
-                setConnectionStatus('error', 'Stale Data');
-                showToast('Warning: data is stale -- sources may be unreachable', true);
+            const health = await resp.json();
+            if (health.status === 'critical') {
+                setConnectionStatus('error', 'Critical');
+                showToast('Health: critical -- sources may be unreachable', true);
+            } else if (health.status === 'degraded') {
+                setConnectionStatus('error', 'Degraded');
+                showToast('Health: degraded -- some sources failing', true);
             }
         } catch (e) {
             // Silently ignore health check failures

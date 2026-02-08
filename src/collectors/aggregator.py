@@ -82,6 +82,7 @@ class DataAggregator:
             self._collectors["hamclock"] = HamClockCollector(
                 hamclock_host=config.get("hamclock_host", "localhost"),
                 hamclock_port=config.get("hamclock_port", 8080),
+                openhamclock_port=config.get("openhamclock_port", 3000),
                 cache_ttl_seconds=cache_ttl,
             )
             self._collectors["hamclock"].circuit_breaker = (

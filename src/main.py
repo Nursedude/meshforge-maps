@@ -325,6 +325,9 @@ def _get_error_log_path() -> Path:
 
 def main() -> None:
     """Standalone entry point for running outside MeshForge."""
+    import signal
+    import threading
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -332,6 +335,14 @@ def main() -> None:
 
     server = None
     exit_code = 0
+    shutdown_event = threading.Event()
+
+    def _signal_handler(signum: int, frame: Any) -> None:
+        """Handle SIGTERM/SIGINT for graceful shutdown (systemd, containers)."""
+        sig_name = signal.Signals(signum).name
+        print(f"\nReceived {sig_name}, shutting down...")
+        shutdown_event.set()
+
     try:
         config = MapsConfig()
         server = MapServer(config)
@@ -340,13 +351,15 @@ def main() -> None:
             print("ERROR: Failed to start map server. Check if the port is available.")
             sys.exit(1)
 
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGTERM, _signal_handler)
+        signal.signal(signal.SIGINT, _signal_handler)
+
         print(f"MeshForge Maps running at http://127.0.0.1:{server.port}")
         print("Press Ctrl+C to stop")
 
-        import time
-
-        while True:
-            time.sleep(1)
+        # Block until shutdown signal received
+        shutdown_event.wait()
     except KeyboardInterrupt:
         print("\nShutting down...")
     except Exception as e:
