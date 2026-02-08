@@ -298,6 +298,83 @@ class TestHamClockCollector:
         assert c.is_hamclock_available() is False
         assert c._hamclock_available is False
 
+    # --- OpenHamClock auto-detection ---
+
+    def test_constructor_openhamclock_defaults(self):
+        c = HamClockCollector()
+        assert c._openhamclock_port == 3000
+        assert c._detected_variant is None
+
+    def test_constructor_custom_openhamclock_port(self):
+        c = HamClockCollector(openhamclock_port=3001)
+        assert c._openhamclock_port == 3001
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_openhamclock_fallback_when_hamclock_down(self, mock_fetch):
+        """When HamClock port 8080 fails, should try OpenHamClock port 3000."""
+        # First call (port 8080) returns None, second call (port 3000) succeeds
+        mock_fetch.side_effect = [None, "Version=1.0\nUptime=100"]
+        c = HamClockCollector()
+        assert c.is_hamclock_available() is True
+        assert c._detected_variant == "openhamclock"
+        assert c._hamclock_api == "http://localhost:3000"
+        assert mock_fetch.call_count == 2
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_hamclock_primary_preferred_over_openhamclock(self, mock_fetch):
+        """When HamClock port 8080 works, don't try OpenHamClock."""
+        mock_fetch.return_value = "Version=4.21\nUptime=12345"
+        c = HamClockCollector()
+        assert c.is_hamclock_available() is True
+        assert c._detected_variant == "hamclock"
+        assert c._hamclock_api == "http://localhost:8080"
+        # Should only call once (primary port succeeded)
+        assert mock_fetch.call_count == 1
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_both_ports_down(self, mock_fetch):
+        """When both HamClock and OpenHamClock are down, returns False."""
+        mock_fetch.return_value = None
+        c = HamClockCollector()
+        assert c.is_hamclock_available() is False
+        assert c._detected_variant is None
+        # Should try both ports
+        assert mock_fetch.call_count == 2
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_same_port_skips_fallback(self, mock_fetch):
+        """When openhamclock_port == hamclock_port, don't double-check."""
+        mock_fetch.return_value = None
+        c = HamClockCollector(hamclock_port=3000, openhamclock_port=3000)
+        assert c.is_hamclock_available() is False
+        assert mock_fetch.call_count == 1  # Only tried once
+
+    @patch.object(HamClockCollector, "is_hamclock_available", return_value=True)
+    @patch.object(HamClockCollector, "_fetch_space_weather_hamclock")
+    @patch.object(HamClockCollector, "_fetch_band_conditions_hamclock")
+    @patch.object(HamClockCollector, "_fetch_voacap")
+    @patch.object(HamClockCollector, "_fetch_de")
+    @patch.object(HamClockCollector, "_fetch_dx")
+    @patch.object(HamClockCollector, "_fetch_dxspots")
+    def test_fetch_reports_openhamclock_variant(
+        self, mock_spots, mock_dx, mock_de, mock_voacap, mock_bc, mock_wx, mock_avail
+    ):
+        mock_wx.return_value = {"source": "OpenHamClock API"}
+        mock_bc.return_value = None
+        mock_voacap.return_value = None
+        mock_de.return_value = None
+        mock_dx.return_value = None
+        mock_spots.return_value = None
+
+        c = HamClockCollector()
+        c._detected_variant = "openhamclock"
+        c._openhamclock_port = 3000
+        fc = c._fetch()
+
+        assert fc["properties"]["hamclock"]["source"] == "OpenHamClock API"
+        assert fc["properties"]["hamclock"]["variant"] == "openhamclock"
+        assert fc["properties"]["hamclock"]["port"] == 3000
+
     # --- HamClock API space weather ---
 
     @patch.object(HamClockCollector, "_fetch_text")
