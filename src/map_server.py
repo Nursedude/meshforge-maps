@@ -24,6 +24,8 @@ from . import __version__
 from .collectors.aggregator import DataAggregator
 from .utils.config import NETWORK_COLORS, TILE_PROVIDERS, MapsConfig
 from .utils.event_bus import Event, EventBus, EventType, NodeEvent
+from .utils.node_history import NodeHistoryDB
+from .utils.shared_health_state import SharedHealthStateReader
 from .utils.websocket_server import MapWebSocketServer
 
 logger = logging.getLogger(__name__)
@@ -46,9 +48,16 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     def _get_web_dir(self) -> Optional[str]:
         return getattr(self.server, "_mf_web_dir", None)
 
+    def _get_node_history(self) -> Optional[NodeHistoryDB]:
+        return getattr(self.server, "_mf_node_history", None)
+
+    def _get_shared_health(self) -> Optional[SharedHealthStateReader]:
+        return getattr(self.server, "_mf_shared_health", None)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
+        query = parse_qs(parsed.query)
 
         routes = {
             "": self._serve_map,
@@ -60,15 +69,39 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "/api/sources": self._serve_sources,
             "/api/overlay": self._serve_overlay,
             "/api/topology": self._serve_topology,
+            "/api/topology/geojson": self._serve_topology_geojson,
             "/api/status": self._serve_status,
             "/api/health": self._serve_health,
             "/api/hamclock": self._serve_hamclock,
+            "/api/core-health": self._serve_core_health,
+            "/api/history/nodes": self._serve_tracked_nodes,
         }
 
         handler = routes.get(path)
         try:
             if handler:
                 handler()
+            elif path.startswith("/api/nodes/") and path.endswith("/trajectory"):
+                # /api/nodes/<node_id>/trajectory
+                parts = path.split("/")
+                if len(parts) >= 4:
+                    node_id = parts[3]
+                    self._serve_trajectory(node_id, query)
+            elif path.startswith("/api/nodes/") and path.endswith("/history"):
+                # /api/nodes/<node_id>/history
+                parts = path.split("/")
+                if len(parts) >= 4:
+                    node_id = parts[3]
+                    self._serve_node_history(node_id, query)
+            elif path.startswith("/api/snapshot/"):
+                # /api/snapshot/<timestamp>
+                parts = path.split("/")
+                if len(parts) >= 3:
+                    try:
+                        ts = int(parts[-1])
+                        self._serve_snapshot(ts)
+                    except (ValueError, IndexError):
+                        self._send_json({"error": "Invalid timestamp"}, 400)
             elif path.startswith("/api/nodes/"):
                 # /api/nodes/<source_name>
                 source = path.split("/")[-1]
@@ -196,6 +229,97 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
         data = hamclock_collector.get_hamclock_data()
         self._send_json(data)
+
+    def _serve_topology_geojson(self) -> None:
+        """Serve topology as GeoJSON FeatureCollection with SNR-colored edges.
+
+        Each link is a GeoJSON LineString Feature with properties including
+        SNR value, quality tier label, and hex color for direct rendering.
+        """
+        aggregator = self._get_aggregator()
+        if not aggregator:
+            self._send_json({"type": "FeatureCollection", "features": []})
+            return
+        self._send_json(aggregator.get_topology_geojson())
+
+    def _serve_trajectory(self, node_id: str, query: Dict) -> None:
+        """Serve node trajectory as GeoJSON LineString."""
+        history = self._get_node_history()
+        if not history:
+            self._send_json({"error": "Node history not available"}, 503)
+            return
+
+        since = query.get("since", [None])[0]
+        until = query.get("until", [None])[0]
+        try:
+            since = int(since) if since else None
+            until = int(until) if until else None
+        except (ValueError, TypeError):
+            since = None
+            until = None
+
+        data = history.get_trajectory_geojson(node_id, since=since, until=until)
+        self._send_json(data)
+
+    def _serve_node_history(self, node_id: str, query: Dict) -> None:
+        """Serve node observation history as JSON list."""
+        history = self._get_node_history()
+        if not history:
+            self._send_json({"error": "Node history not available"}, 503)
+            return
+
+        since = query.get("since", [None])[0]
+        limit_str = query.get("limit", ["100"])[0]
+        try:
+            since = int(since) if since else None
+            limit = int(limit_str) if limit_str else 100
+        except (ValueError, TypeError):
+            since = None
+            limit = 100
+
+        observations = history.get_node_history(node_id, since=since, limit=limit)
+        self._send_json({
+            "node_id": node_id,
+            "observations": observations,
+            "count": len(observations),
+        })
+
+    def _serve_snapshot(self, timestamp: int) -> None:
+        """Serve historical network snapshot at a point in time."""
+        history = self._get_node_history()
+        if not history:
+            self._send_json({"error": "Node history not available"}, 503)
+            return
+        self._send_json(history.get_snapshot(timestamp))
+
+    def _serve_tracked_nodes(self) -> None:
+        """Serve list of all tracked nodes with observation counts."""
+        history = self._get_node_history()
+        if not history:
+            self._send_json({"error": "Node history not available"}, 503)
+            return
+        nodes = history.get_tracked_nodes()
+        self._send_json({
+            "nodes": nodes,
+            "total_nodes": len(nodes),
+            "total_observations": history.observation_count,
+        })
+
+    def _serve_core_health(self) -> None:
+        """Serve MeshForge core shared health state.
+
+        Reads the cross-process health database written by MeshForge core
+        (gateway bridge status, service states, latency percentiles).
+        Returns empty/unavailable when core is not running.
+        """
+        reader = self._get_shared_health()
+        if not reader:
+            self._send_json({"available": False, "services": []})
+            return
+        # Attempt refresh if not available (core may have started since maps)
+        if not reader.available:
+            reader.refresh()
+        self._send_json(reader.get_summary())
 
     def _serve_health(self) -> None:
         """Serve composite health score (0-100) with per-source breakdown.
@@ -375,6 +499,20 @@ class MapServer:
         self._ws_server: Optional[MapWebSocketServer] = None
         self._ws_port: int = 0
 
+        # Node history DB for trajectory tracking
+        self._node_history: Optional[NodeHistoryDB] = None
+        try:
+            self._node_history = NodeHistoryDB()
+        except Exception as e:
+            logger.warning("Node history DB not available: %s", e)
+
+        # Shared health state reader for cross-process visibility
+        self._shared_health: Optional[SharedHealthStateReader] = None
+        try:
+            self._shared_health = SharedHealthStateReader()
+        except Exception as e:
+            logger.debug("Shared health state not available: %s", e)
+
     def start(self) -> bool:
         """Start the HTTP server in a background thread.
 
@@ -394,6 +532,8 @@ class MapServer:
                 self._server._mf_config = self._config  # type: ignore[attr-defined]
                 self._server._mf_web_dir = self._web_dir  # type: ignore[attr-defined]
                 self._server._mf_start_time = time.time()  # type: ignore[attr-defined]
+                self._server._mf_node_history = self._node_history  # type: ignore[attr-defined]
+                self._server._mf_shared_health = self._shared_health  # type: ignore[attr-defined]
 
                 self._thread = threading.Thread(
                     target=self._server.serve_forever,
@@ -409,6 +549,12 @@ class MapServer:
                     )
                 else:
                     logger.info("MeshForge Maps server started on http://127.0.0.1:%d", port)
+
+                # Subscribe node history recording to position events
+                if self._node_history:
+                    self._aggregator.event_bus.subscribe(
+                        EventType.NODE_POSITION, self._record_node_position,
+                    )
 
                 # Start WebSocket server on adjacent port
                 self._start_websocket(port + 1)
@@ -456,6 +602,21 @@ class MapServer:
         logger.info("WebSocket server not started (optional dependency or ports unavailable)")
         self._ws_server = None
 
+    def _record_node_position(self, event: Event) -> None:
+        """Record node position to history DB when position events arrive."""
+        if not self._node_history:
+            return
+        if not isinstance(event, NodeEvent):
+            return
+        if event.lat is None or event.lon is None:
+            return
+        self._node_history.record_observation(
+            node_id=event.node_id,
+            lat=event.lat,
+            lon=event.lon,
+            network=event.source or "mqtt",
+        )
+
     def _forward_to_websocket(self, event: Event) -> None:
         """Bridge an event bus event to WebSocket broadcast."""
         if not self._ws_server:
@@ -476,7 +637,7 @@ class MapServer:
         self._ws_server.broadcast(msg)
 
     def stop(self) -> None:
-        """Stop the HTTP server, WebSocket server, and clean up the aggregator."""
+        """Stop the HTTP server, WebSocket server, and clean up all resources."""
         if self._ws_server:
             self._ws_server.shutdown()
             self._ws_server = None
@@ -484,6 +645,12 @@ class MapServer:
             self._server.shutdown()
             logger.info("MeshForge Maps server stopped")
         self._aggregator.shutdown()
+        if self._node_history:
+            self._node_history.close()
+            self._node_history = None
+        if self._shared_health:
+            self._shared_health.close()
+            self._shared_health = None
         self._server = None
         self._thread = None
 
@@ -500,3 +667,7 @@ class MapServer:
     @property
     def aggregator(self) -> DataAggregator:
         return self._aggregator
+
+    @property
+    def node_history(self) -> Optional[NodeHistoryDB]:
+        return self._node_history

@@ -105,6 +105,34 @@ def _safe_int(value: Any, low: int, high: int) -> Optional[int]:
         return None
 
 
+# 5-tier SNR quality classification (aligned with meshforge core topology_visualizer)
+SNR_TIERS = [
+    (8.0,   "excellent", "#4caf50"),   # Green
+    (5.0,   "good",      "#8bc34a"),   # Light green
+    (0.0,   "marginal",  "#ffeb3b"),   # Yellow
+    (-10.0, "poor",      "#ff9800"),   # Orange
+]
+SNR_DEFAULT = ("bad", "#f44336")       # Red (SNR < -10)
+SNR_UNKNOWN = ("unknown", "#9e9e9e")   # Grey (no SNR data)
+
+
+def _classify_snr(snr: Optional[float]) -> tuple:
+    """Classify SNR value into quality tier and color.
+
+    Returns (quality_label, hex_color) tuple.
+    """
+    if snr is None:
+        return SNR_UNKNOWN
+    try:
+        snr_val = float(snr)
+    except (ValueError, TypeError):
+        return SNR_UNKNOWN
+    for threshold, label, color in SNR_TIERS:
+        if snr_val > threshold:
+            return (label, color)
+    return SNR_DEFAULT
+
+
 class MQTTNodeStore:
     """Thread-safe in-memory store for live MQTT node data.
 
@@ -218,6 +246,51 @@ class MQTTNodeStore:
                         "snr": neighbor.get("snr"),
                     })
             return links
+
+    def get_topology_geojson(self) -> Dict[str, Any]:
+        """Return topology as a GeoJSON FeatureCollection with SNR-colored edges.
+
+        Each link is a GeoJSON Feature with LineString geometry and properties
+        including SNR value, quality tier, and color for direct rendering.
+
+        5-tier SNR quality scale (aligned with meshforge core):
+          - Excellent (SNR > 8):    #4caf50 (green)
+          - Good (SNR 5-8):         #8bc34a (light green)
+          - Marginal (SNR 0-5):     #ffeb3b (yellow)
+          - Poor (SNR -10-0):       #ff9800 (orange)
+          - Bad (SNR < -10):        #f44336 (red)
+          - Unknown (no SNR):       #9e9e9e (grey)
+        """
+        links = self.get_topology_links()
+        features = []
+        for link in links:
+            snr = link.get("snr")
+            quality, color = _classify_snr(snr)
+            feature = {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [
+                        [link["source_lon"], link["source_lat"]],
+                        [link["target_lon"], link["target_lat"]],
+                    ],
+                },
+                "properties": {
+                    "source": link["source"],
+                    "target": link["target"],
+                    "snr": snr,
+                    "quality": quality,
+                    "color": color,
+                },
+            }
+            features.append(feature)
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "properties": {
+                "link_count": len(features),
+            },
+        }
 
     @property
     def node_count(self) -> int:
