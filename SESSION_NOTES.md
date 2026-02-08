@@ -2,6 +2,131 @@
 
 ---
 
+## Session 7: Phase 3 — Node History, Topology GeoJSON, Cross-Process Health
+
+**Date:** 2026-02-08
+**Branch:** `claude/node-history-offline-caching-xAOm4`
+**Scope:** Phase 3 feature depth — node history DB, server-side topology SNR coloring, shared health state reader, service worker enhancements, AREDN LQM neighbor resolution
+**Version:** 0.3.0-beta → 0.4.0-beta
+
+### Changes Made
+
+**New Modules:**
+
+1. **NodeHistoryDB** (`src/utils/node_history.py`, ~300 lines):
+   - SQLite-backed node position history with WAL mode
+   - Throttled recording (configurable, default 60s per node)
+   - `get_trajectory_geojson(node_id)` — returns GeoJSON LineString for node movement over time
+   - `get_snapshot(timestamp)` — returns network state at a point in time (GeoJSON FeatureCollection)
+   - `get_node_history(node_id)` — raw observation list
+   - `get_tracked_nodes()` — list all nodes with observation counts
+   - `prune_old_data()` — automatic retention cleanup (default 30 days)
+   - Thread-safe with per-operation locking
+   - Wired to event bus: position events from MQTT auto-record to history
+
+2. **SharedHealthStateReader** (`src/utils/shared_health_state.py`, ~175 lines):
+   - Read-only SQLite access to MeshForge core's `health_state.db`
+   - WAL mode for non-blocking concurrent reads
+   - `get_service_states()` — gateway/bridge/service health from core
+   - `get_node_health()` — per-node health scores from core
+   - `get_latency_percentiles()` — p50/p90/p99 delivery latency
+   - `get_summary()` — combined health overview for API
+   - `refresh()` — re-check DB availability (for late core startup)
+   - Graceful degradation: returns empty data when core is not running
+
+**Enhanced Modules:**
+
+3. **Server-side topology SNR edge coloring** (`src/collectors/mqtt_subscriber.py`):
+   - New `_classify_snr()` helper with 5-tier quality classification
+   - New `MQTTNodeStore.get_topology_geojson()` — returns GeoJSON FeatureCollection with LineString features
+   - Each edge includes: SNR value, quality tier label, hex color, source/target IDs
+   - Tiers aligned with meshforge core: Excellent(>8)/Good(5-8)/Marginal(0-5)/Poor(-10-0)/Bad(<-10)
+   - Colors: green → light green → yellow → orange → red (+ grey for unknown)
+
+4. **AREDN LQM neighbor resolution** (`src/collectors/aredn_collector.py`):
+   - `_parse_lqm_neighbor()` now fully parses LQM entries instead of returning None
+   - Extracts: SNR, noise, quality, tx/rx quality, link type (RF/DTD/TUN)
+   - Filters blocked links
+   - New `get_topology_links()` method resolves neighbor coordinates from known nodes
+   - Coordinate resolution: matches LQM neighbor names to queried node positions
+   - Collector tracks `_lqm_links` and `_node_coords` for topology building
+
+5. **Service worker enhancements** (`web/sw-tiles.js`):
+   - New dedicated `API_CACHE` for API responses (separate from tile/static caches)
+   - `PRECACHE_REGION` message handler for offline tile pre-caching
+     - Accepts viewport bounds, tile URL template, zoom range
+     - Rate-limited fetching (50ms delay between tiles)
+     - Safety cap: 500 tiles per precache request, max zoom 14
+     - `latLonToTile()` helper for coordinate-to-tile conversion
+   - `CLEAR_ALL_CACHES` message for clearing tile + API caches
+   - Enhanced `CACHE_STATS` returns tile, API, and static cache counts
+   - Cache cleanup preserves all 3 named caches during activation
+
+6. **New API endpoints** (`src/map_server.py`):
+   - `GET /api/topology/geojson` — topology as GeoJSON FeatureCollection with SNR colors
+   - `GET /api/nodes/<id>/trajectory?since=&until=` — node trajectory GeoJSON
+   - `GET /api/nodes/<id>/history?since=&limit=` — node observation history
+   - `GET /api/snapshot/<timestamp>` — historical network snapshot
+   - `GET /api/history/nodes` — list all tracked nodes with observation counts
+   - `GET /api/core-health` — MeshForge core shared health state
+
+7. **MapServer lifecycle** (`src/map_server.py`):
+   - Creates NodeHistoryDB and SharedHealthStateReader on init
+   - Attaches both to HTTP server for handler access
+   - Subscribes to NODE_POSITION events for automatic history recording
+   - Proper cleanup on stop (close DB connections)
+   - New `node_history` property on MapServer
+
+### Test Results
+- **Before:** 272 passed, 22 skipped
+- **After:** 348 passed, 22 skipped, 0 failures
+- **New tests:** 76 across 4 new test files + updates to 2 existing files
+  - `test_node_history.py` — 26 tests (DB operations, trajectory GeoJSON, snapshots, pruning, closed DB safety)
+  - `test_shared_health_state.py` — 14 tests (unavailable DB, service states, node health, latency, refresh, summary)
+  - `test_topology_geojson.py` — 18 tests (SNR classification boundaries, GeoJSON feature structure, multi-link)
+  - `test_aredn_lqm.py` — 14 tests (neighbor parsing, blocked links, DTD/TUN types, coordinate resolution)
+  - `test_map_server.py` — +8 tests (new endpoint integration tests)
+  - `test_collectors.py` — 1 updated test (LQM signature change)
+
+### Architecture Notes
+- NodeHistoryDB stored at `~/.local/share/meshforge/maps_node_history.db`
+- SharedHealthStateReader reads `~/.config/meshforge/health_state.db` (core's DB)
+- Topology GeoJSON aggregator merges MQTT + AREDN links with unified SNR coloring
+- All new modules follow existing patterns: thread-safe, graceful degradation, logging
+- Version bumped to 0.4.0-beta (significant new features)
+
+### Files Created (4)
+- `src/utils/node_history.py` — Node history SQLite DB
+- `src/utils/shared_health_state.py` — Cross-process health reader
+- `tests/test_node_history.py` — 26 tests
+- `tests/test_shared_health_state.py` — 14 tests
+- `tests/test_topology_geojson.py` — 18 tests
+- `tests/test_aredn_lqm.py` — 14 tests
+
+### Files Modified (6)
+- `src/__init__.py` — Version 0.3.0-beta → 0.4.0-beta
+- `src/collectors/mqtt_subscriber.py` — SNR classification, topology GeoJSON
+- `src/collectors/aggregator.py` — Topology GeoJSON aggregation, AREDN link merging
+- `src/collectors/aredn_collector.py` — LQM neighbor resolution, topology links
+- `src/map_server.py` — 6 new API routes, NodeHistoryDB/SharedHealthState integration
+- `web/sw-tiles.js` — Region precaching, API cache, enhanced stats
+- `tests/test_map_server.py` — 8 new endpoint integration tests
+- `tests/test_collectors.py` — Updated LQM test
+
+### What Still Needs Work (Phase 4 Roadmap)
+1. **Connection manager integration** for MeshtasticCollector
+2. **Frontend trajectory visualization** — Leaflet polyline rendering for trajectory API
+3. **Frontend topology GeoJSON rendering** — Switch from D3 to Leaflet GeoJSON layer using server-side colors
+4. **Node history frontend panel** — UI for viewing tracked nodes and trajectory playback
+5. **OpenHamClock API differences** — endpoint mapping if API diverges from original
+
+### Session Entropy Notes
+- Session stayed focused and systematic throughout all 5 Phase 3 items
+- No entropy detected — all features implemented, tested, and integrated
+- Clean boundary: all tests green, code compiles, ready for Phase 4
+
+---
+
 ## Session 6: Reliability Hardening + meshforge Core Alignment
 
 **Date:** 2026-02-08

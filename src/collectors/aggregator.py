@@ -159,10 +159,62 @@ class DataAggregator:
         return collector.collect()
 
     def get_topology_links(self) -> List[Dict[str, Any]]:
-        """Get topology link data from MQTT subscriber."""
+        """Get topology link data from MQTT subscriber and AREDN LQM."""
+        links = []
         if self._mqtt_subscriber:
-            return self._mqtt_subscriber.store.get_topology_links()
-        return []
+            links.extend(self._mqtt_subscriber.store.get_topology_links())
+        # Include AREDN LQM topology links
+        aredn = self._collectors.get("aredn")
+        if aredn and hasattr(aredn, "get_topology_links"):
+            links.extend(aredn.get_topology_links())
+        return links
+
+    def get_topology_geojson(self) -> Dict[str, Any]:
+        """Get topology as GeoJSON FeatureCollection with SNR-colored edges.
+
+        Combines Meshtastic MQTT topology with AREDN LQM topology links.
+        """
+        from .mqtt_subscriber import _classify_snr
+
+        # Start with MQTT topology GeoJSON if available
+        if self._mqtt_subscriber:
+            result = self._mqtt_subscriber.store.get_topology_geojson()
+        else:
+            result = {"type": "FeatureCollection", "features": [], "properties": {"link_count": 0}}
+
+        # Add AREDN LQM links as GeoJSON features
+        aredn = self._collectors.get("aredn")
+        if aredn and hasattr(aredn, "get_topology_links"):
+            for link in aredn.get_topology_links():
+                # Only include links with resolved coordinates
+                if "source_lat" not in link or "target_lat" not in link:
+                    continue
+                snr = link.get("snr")
+                quality_label, color = _classify_snr(snr)
+                feature = {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [
+                            [link["source_lon"], link["source_lat"]],
+                            [link["target_lon"], link["target_lat"]],
+                        ],
+                    },
+                    "properties": {
+                        "source": link.get("source", ""),
+                        "target": link.get("target", ""),
+                        "snr": snr,
+                        "quality": quality_label,
+                        "color": color,
+                        "network": "aredn",
+                        "link_type": link.get("link_type", ""),
+                        "aredn_quality": link.get("quality"),
+                    },
+                }
+                result["features"].append(feature)
+
+        result["properties"]["link_count"] = len(result["features"])
+        return result
 
     def get_cached_overlay(self) -> Dict[str, Any]:
         """Return cached overlay data from the last collect_all() call.
