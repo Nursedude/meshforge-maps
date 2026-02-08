@@ -205,7 +205,9 @@ class TestReticulumCollector:
 # ==========================================================================
 
 class TestHamClockCollector:
-    """Tests for HamClockCollector space weather and terminator."""
+    """Tests for HamClockCollector API-only architecture."""
+
+    # --- Band condition assessment (unchanged logic) ---
 
     def test_assess_band_conditions_excellent(self):
         c = HamClockCollector()
@@ -244,6 +246,198 @@ class TestHamClockCollector:
         assert "timestamp" in result
         assert -90 <= result["subsolar_lat"] <= 90
         assert -180 <= result["subsolar_lon"] <= 180
+
+    # --- Constructor / config ---
+
+    def test_constructor_defaults(self):
+        c = HamClockCollector()
+        assert c._hamclock_host == "localhost"
+        assert c._hamclock_port == 8080
+        assert c._hamclock_api == "http://localhost:8080"
+
+    def test_constructor_custom_host_port(self):
+        c = HamClockCollector(hamclock_host="192.168.1.50", hamclock_port=8082)
+        assert c._hamclock_api == "http://192.168.1.50:8082"
+        assert c._hamclock_host == "192.168.1.50"
+        assert c._hamclock_port == 8082
+
+    # --- Key=value parser ---
+
+    def test_parse_key_value(self):
+        from src.collectors.hamclock_collector import _parse_key_value
+        raw = "SFI=156\nKp=2\nA=5\nXray=B1.2\n"
+        result = _parse_key_value(raw)
+        assert result["SFI"] == "156"
+        assert result["Kp"] == "2"
+        assert result["A"] == "5"
+        assert result["Xray"] == "B1.2"
+
+    def test_parse_key_value_empty(self):
+        from src.collectors.hamclock_collector import _parse_key_value
+        assert _parse_key_value("") == {}
+        assert _parse_key_value("no equals here") == {}
+
+    def test_parse_key_value_with_equals_in_value(self):
+        from src.collectors.hamclock_collector import _parse_key_value
+        result = _parse_key_value("path=DE to DX = 5000km")
+        assert result["path"] == "DE to DX = 5000km"
+
+    # --- HamClock availability ---
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_is_hamclock_available_true(self, mock_fetch):
+        mock_fetch.return_value = "Version=4.21\nUptime=12345"
+        c = HamClockCollector()
+        assert c.is_hamclock_available() is True
+        assert c._hamclock_available is True
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_is_hamclock_available_false(self, mock_fetch):
+        mock_fetch.return_value = None
+        c = HamClockCollector()
+        assert c.is_hamclock_available() is False
+        assert c._hamclock_available is False
+
+    # --- HamClock API space weather ---
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_space_weather_hamclock(self, mock_fetch):
+        mock_fetch.return_value = "SFI=156\nKp=2\nA=5\nXray=B1.2\nSSN=120\n"
+        c = HamClockCollector()
+        result = c._fetch_space_weather_hamclock()
+        assert result["source"] == "HamClock API"
+        assert result["solar_flux"] == "156"
+        assert result["kp_index"] == "2"
+        assert result["a_index"] == "5"
+        assert result["xray_flux"] == "B1.2"
+        assert result["ssn"] == "120"
+        assert result["band_conditions"] == "excellent"  # SFI 156, Kp 2
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_space_weather_hamclock_unavailable(self, mock_fetch):
+        mock_fetch.return_value = None
+        c = HamClockCollector()
+        result = c._fetch_space_weather_hamclock()
+        assert result["source"] == "HamClock API"
+        assert "solar_flux" not in result
+
+    # --- VOACAP ---
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_voacap_parses_bands(self, mock_fetch):
+        mock_fetch.return_value = "path=DE to DX\nutc=14\n80m=23,12\n40m=65,18\n20m=90,25\n"
+        c = HamClockCollector()
+        result = c._fetch_voacap()
+        assert result is not None
+        assert result["path"] == "DE to DX"
+        assert result["utc"] == "14"
+        assert result["bands"]["80m"]["reliability"] == 23
+        assert result["bands"]["80m"]["snr"] == 12
+        assert result["bands"]["80m"]["status"] == "poor"
+        assert result["bands"]["20m"]["reliability"] == 90
+        assert result["bands"]["20m"]["status"] == "excellent"
+        assert result["best_band"] == "20m"
+        assert result["best_reliability"] == 90
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_voacap_returns_none_when_no_bands(self, mock_fetch):
+        mock_fetch.return_value = "path=DE to DX\nutc=14\n"
+        c = HamClockCollector()
+        assert c._fetch_voacap() is None
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_voacap_returns_none_when_unavailable(self, mock_fetch):
+        mock_fetch.return_value = None
+        c = HamClockCollector()
+        assert c._fetch_voacap() is None
+
+    # --- Band conditions from HamClock ---
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_band_conditions_hamclock(self, mock_fetch):
+        mock_fetch.return_value = "80m-40m=Good\n30m-20m=Fair\n17m-15m=Poor\n12m-10m=Poor\n"
+        c = HamClockCollector()
+        result = c._fetch_band_conditions_hamclock()
+        assert result is not None
+        assert result["bands"]["80m-40m"] == "Good"
+        assert result["bands"]["30m-20m"] == "Fair"
+
+    # --- DE/DX location ---
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_de(self, mock_fetch):
+        mock_fetch.return_value = "lat=21.31\nlng=-157.86\ngrid=BL11\ncall=WH6GXZ\n"
+        c = HamClockCollector()
+        result = c._fetch_de()
+        assert result is not None
+        assert result["lat"] == "21.31"
+        assert result["lon"] == "-157.86"
+        assert result["grid"] == "BL11"
+        assert result["call"] == "WH6GXZ"
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_fetch_dx(self, mock_fetch):
+        mock_fetch.return_value = "lat=48.85\nlng=2.35\ngrid=JN18\ncall=F5ABC\n"
+        c = HamClockCollector()
+        result = c._fetch_dx()
+        assert result["lat"] == "48.85"
+        assert result["grid"] == "JN18"
+
+    # --- Full _fetch: HamClock up ---
+
+    @patch.object(HamClockCollector, "is_hamclock_available", return_value=True)
+    @patch.object(HamClockCollector, "_fetch_space_weather_hamclock")
+    @patch.object(HamClockCollector, "_fetch_band_conditions_hamclock")
+    @patch.object(HamClockCollector, "_fetch_voacap")
+    @patch.object(HamClockCollector, "_fetch_de")
+    @patch.object(HamClockCollector, "_fetch_dx")
+    def test_fetch_uses_hamclock_when_available(
+        self, mock_dx, mock_de, mock_voacap, mock_bc, mock_wx, mock_avail
+    ):
+        mock_wx.return_value = {"source": "HamClock API", "solar_flux": "150", "band_conditions": "excellent"}
+        mock_bc.return_value = {"bands": {"80m-40m": "Good"}}
+        mock_voacap.return_value = {"bands": {"20m": {"reliability": 90}}}
+        mock_de.return_value = {"call": "WH6GXZ"}
+        mock_dx.return_value = {"call": "F5ABC"}
+
+        c = HamClockCollector()
+        fc = c._fetch()
+
+        assert fc["properties"]["space_weather"]["source"] == "HamClock API"
+        assert fc["properties"]["hamclock"]["available"] is True
+        assert fc["properties"]["hamclock"]["source"] == "HamClock API"
+        assert fc["properties"]["hamclock"]["band_conditions"]["bands"]["80m-40m"] == "Good"
+        assert fc["properties"]["hamclock"]["voacap"]["bands"]["20m"]["reliability"] == 90
+        assert fc["properties"]["hamclock"]["de_station"]["call"] == "WH6GXZ"
+        assert fc["properties"]["hamclock"]["dx_station"]["call"] == "F5ABC"
+        assert "solar_terminator" in fc["properties"]
+
+    # --- Full _fetch: HamClock down (NOAA fallback) ---
+
+    @patch.object(HamClockCollector, "is_hamclock_available", return_value=False)
+    @patch.object(HamClockCollector, "_fetch_space_weather_noaa")
+    def test_fetch_falls_back_to_noaa(self, mock_noaa, mock_avail):
+        mock_noaa.return_value = {"source": "NOAA SWPC", "solar_flux": "120", "band_conditions": "good"}
+
+        c = HamClockCollector()
+        fc = c._fetch()
+
+        assert fc["properties"]["space_weather"]["source"] == "NOAA SWPC"
+        assert fc["properties"]["hamclock"]["available"] is False
+        assert fc["properties"]["hamclock"]["source"] == "NOAA SWPC"
+        # No band_conditions, voacap, de, dx keys when HamClock is down
+        assert "band_conditions" not in fc["properties"]["hamclock"]
+        assert "voacap" not in fc["properties"]["hamclock"]
+        assert "de_station" not in fc["properties"]["hamclock"]
+
+    # --- Reliability to status ---
+
+    def test_reliability_to_status(self):
+        assert HamClockCollector._reliability_to_status(90) == "excellent"
+        assert HamClockCollector._reliability_to_status(70) == "good"
+        assert HamClockCollector._reliability_to_status(50) == "fair"
+        assert HamClockCollector._reliability_to_status(20) == "poor"
+        assert HamClockCollector._reliability_to_status(0) == "closed"
 
 
 # ==========================================================================

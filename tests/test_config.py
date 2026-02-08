@@ -35,6 +35,11 @@ class TestMapsConfigDefaults:
         assert config.get("enable_hamclock") is True
         assert config.get("enable_aredn") is True
 
+    def test_hamclock_host_port_defaults(self, tmp_config):
+        config = MapsConfig(config_path=tmp_config)
+        assert config.get("hamclock_host") == "localhost"
+        assert config.get("hamclock_port") == 8080
+
 
 class TestMapsConfigPersistence:
     """Tests for loading and saving settings."""

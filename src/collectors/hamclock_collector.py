@@ -1,23 +1,25 @@
 """
-MeshForge Maps - HamClock / Propagation Data Collector
+MeshForge Maps - HamClock / Propagation Data Collector (API-Only)
 
-Collects space weather and radio propagation overlay data from public sources.
-HamClock (by WB0OEW) / OpenHamClock provide ham radio dashboard data.
+Collects space weather and radio propagation overlay data.
+Architecture aligned with meshforge core (commands/propagation.py):
 
-Data sources:
-  1. NOAA Space Weather Prediction Center (SWPC) - solar/geomagnetic data
-  2. VOACAP - HF propagation predictions
-  3. Local HamClock REST API (port 8080) if running
-  4. PSKReporter - FT8/digital mode activity spots
+    PRIMARY: HamClock/OpenHamClock REST API (when available)
+    FALLBACK: NOAA SWPC public JSON APIs (always works)
 
-This collector focuses on propagation-relevant data that overlays on the map:
-  - Solar terminator (day/night boundary)
-  - Band conditions summary
-  - Solar flux / K-index / A-index
-  - DRAP (D-Region Absorption Prediction) status
+HamClock REST API endpoints (key=value text format):
+    get_sys.txt      — System info / connection test
+    get_spacewx.txt  — SFI, Kp, A-index, X-ray, SSN, proton, aurora
+    get_bc.txt       — HF band conditions (80m-10m)
+    get_voacap.txt   — VOACAP propagation predictions
+    get_de.txt       — Home (DE) location
+    get_dx.txt       — Target (DX) location
+    get_dxspots.txt  — DX cluster spots
 
-Note: Original HamClock ceases operation June 2026.
-OpenHamClock (https://github.com/accius/openhamclock) is the successor.
+Solar terminator is always computed locally (no external dependency).
+
+Original HamClock (WB0OEW): ceases operation June 2026.
+OpenHamClock: https://github.com/accius/openhamclock (MIT, port 3000).
 """
 
 import json
@@ -25,7 +27,7 @@ import logging
 import math
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -33,19 +35,28 @@ from .base import BaseCollector, make_feature_collection
 
 logger = logging.getLogger(__name__)
 
-# NOAA SWPC endpoints (public JSON APIs)
-SWPC_SOLAR_WIND = "https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json"
-SWPC_KP_INDEX = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"
+# NOAA SWPC endpoints (fallback when HamClock is unavailable)
 SWPC_SOLAR_FLUX = "https://services.swpc.noaa.gov/products/summary/10cm-flux.json"
-SWPC_A_INDEX = "https://services.swpc.noaa.gov/products/summary/solar-wind-mag-field.json"
-SWPC_XRAY_FLUX = "https://services.swpc.noaa.gov/json/goes/primary/xrays-6-hour.json"
+SWPC_KP_INDEX = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"
+SWPC_SOLAR_WIND = "https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json"
 
-# Local HamClock API
-HAMCLOCK_API = "http://localhost:8080"
+
+def _parse_key_value(data: str) -> Dict[str, str]:
+    """Parse HamClock key=value text response into a dict."""
+    result = {}
+    for line in data.strip().split("\n"):
+        if "=" in line:
+            key, value = line.split("=", 1)
+            result[key.strip()] = value.strip()
+    return result
 
 
 class HamClockCollector(BaseCollector):
-    """Collects space weather and propagation data for map overlays."""
+    """Collects space weather and propagation data for map overlays.
+
+    API-only architecture: tries HamClock REST API first, falls back
+    to NOAA SWPC if HamClock is unavailable.
+    """
 
     source_name = "hamclock"
 
@@ -56,31 +67,218 @@ class HamClockCollector(BaseCollector):
         cache_ttl_seconds: int = 900,
     ):
         super().__init__(cache_ttl_seconds)
+        self._hamclock_host = hamclock_host
+        self._hamclock_port = hamclock_port
         self._hamclock_api = f"http://{hamclock_host}:{hamclock_port}"
+        self._hamclock_available: Optional[bool] = None
+
+    # ==================== Public API ====================
+
+    def is_hamclock_available(self) -> bool:
+        """Test if HamClock REST API is reachable."""
+        raw = self._fetch_text(f"{self._hamclock_api}/get_sys.txt")
+        available = raw is not None and len(raw) > 0
+        self._hamclock_available = available
+        return available
+
+    # ==================== Core Fetch ====================
 
     def _fetch(self) -> Dict[str, Any]:
-        """Collect propagation and space weather data."""
-        space_weather = self._fetch_space_weather()
-        hamclock_data = self._fetch_hamclock_local()
+        """Collect propagation and space weather data.
+
+        Strategy: try HamClock API first, fall back to NOAA SWPC.
+        Solar terminator is always computed locally.
+        """
+        # Check HamClock availability (cached for this collection cycle)
+        hamclock_up = self.is_hamclock_available()
+
+        if hamclock_up:
+            space_weather = self._fetch_space_weather_hamclock()
+            band_conditions = self._fetch_band_conditions_hamclock()
+            voacap = self._fetch_voacap()
+            de_info = self._fetch_de()
+            dx_info = self._fetch_dx()
+        else:
+            space_weather = self._fetch_space_weather_noaa()
+            band_conditions = None
+            voacap = None
+            de_info = None
+            dx_info = None
+
         terminator = self._calculate_solar_terminator()
 
-        # HamClock data is overlay metadata, not point features.
-        # We store it in the FeatureCollection properties.
+        # Build the FeatureCollection with overlay metadata
         fc = make_feature_collection([], self.source_name)
         fc["properties"]["space_weather"] = space_weather
         fc["properties"]["solar_terminator"] = terminator
-        if hamclock_data:
-            fc["properties"]["hamclock"] = hamclock_data
+
+        hamclock_data: Dict[str, Any] = {
+            "available": hamclock_up,
+            "source": "HamClock API" if hamclock_up else "NOAA SWPC",
+            "host": self._hamclock_host,
+            "port": self._hamclock_port,
+        }
+        if band_conditions:
+            hamclock_data["band_conditions"] = band_conditions
+        if voacap:
+            hamclock_data["voacap"] = voacap
+        if de_info:
+            hamclock_data["de_station"] = de_info
+        if dx_info:
+            hamclock_data["dx_station"] = dx_info
+
+        fc["properties"]["hamclock"] = hamclock_data
         return fc
 
-    def _fetch_space_weather(self) -> Dict[str, Any]:
-        """Fetch current space weather conditions from NOAA SWPC."""
+    # ==================== HamClock API Methods ====================
+
+    def _fetch_space_weather_hamclock(self) -> Dict[str, Any]:
+        """Fetch space weather from HamClock REST API (get_spacewx.txt)."""
+        weather: Dict[str, Any] = {
+            "source": "HamClock API",
+            "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
+        raw = self._fetch_text(f"{self._hamclock_api}/get_spacewx.txt")
+        if not raw:
+            return weather
+
+        parsed = _parse_key_value(raw)
+
+        # Map HamClock response keys to standard names
+        # HamClock returns keys like: SFI, Kp, A, Xray, SSN, Proton, Aurora
+        key_map = {
+            "solar_flux": ["sfi", "flux"],
+            "kp_index": ["kp"],
+            "a_index": ["a", "a_index"],
+            "xray_flux": ["xray", "x-ray"],
+            "ssn": ["ssn", "sunspot", "sunspots"],
+            "proton_flux": ["proton", "pf"],
+            "aurora": ["aurora", "aur"],
+        }
+
+        for standard_key, possible_keys in key_map.items():
+            for raw_key, value in parsed.items():
+                if raw_key.lower() in possible_keys:
+                    weather[standard_key] = value
+                    break
+
+        # Derive band conditions from Kp + SFI
+        weather["band_conditions"] = self._assess_band_conditions(
+            weather.get("solar_flux"), weather.get("kp_index")
+        )
+
+        return weather
+
+    def _fetch_band_conditions_hamclock(self) -> Optional[Dict[str, Any]]:
+        """Fetch HF band conditions from HamClock (get_bc.txt)."""
+        raw = self._fetch_text(f"{self._hamclock_api}/get_bc.txt")
+        if not raw:
+            return None
+
+        parsed = _parse_key_value(raw)
+        bands: Dict[str, str] = {}
+
+        for key, value in parsed.items():
+            key_lower = key.lower()
+            if "80" in key_lower or "40" in key_lower:
+                bands["80m-40m"] = value
+            elif "30" in key_lower or "20" in key_lower:
+                bands["30m-20m"] = value
+            elif "17" in key_lower or "15" in key_lower:
+                bands["17m-15m"] = value
+            elif "12" in key_lower or "10" in key_lower:
+                bands["12m-10m"] = value
+
+        return {"bands": bands, "raw": parsed} if bands else None
+
+    def _fetch_voacap(self) -> Optional[Dict[str, Any]]:
+        """Fetch VOACAP propagation predictions from HamClock (get_voacap.txt)."""
+        raw = self._fetch_text(f"{self._hamclock_api}/get_voacap.txt")
+        if not raw:
+            return None
+
+        voacap: Dict[str, Any] = {"path": "", "utc": "", "bands": {}}
+
+        for line in raw.strip().split("\n"):
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip()
+
+            if key == "path":
+                voacap["path"] = value
+            elif key == "utc":
+                voacap["utc"] = value
+            elif "m" in key:
+                # Band data: "80m=23,12" -> reliability=23%, SNR=12dB
+                try:
+                    if "," in value:
+                        rel, snr = value.split(",", 1)
+                        voacap["bands"][key] = {
+                            "reliability": int(rel.strip()),
+                            "snr": int(snr.strip()),
+                            "status": self._reliability_to_status(int(rel.strip())),
+                        }
+                    else:
+                        rel = int(value)
+                        voacap["bands"][key] = {
+                            "reliability": rel,
+                            "snr": 0,
+                            "status": self._reliability_to_status(rel),
+                        }
+                except ValueError:
+                    logger.debug("Could not parse VOACAP band %s: %s", key, value)
+
+        # Calculate best band
+        best_band = None
+        best_rel = 0
+        for band, data in voacap["bands"].items():
+            if data["reliability"] > best_rel:
+                best_rel = data["reliability"]
+                best_band = band
+        voacap["best_band"] = best_band
+        voacap["best_reliability"] = best_rel
+
+        return voacap if voacap["bands"] else None
+
+    def _fetch_de(self) -> Optional[Dict[str, str]]:
+        """Fetch home (DE) location from HamClock (get_de.txt)."""
+        raw = self._fetch_text(f"{self._hamclock_api}/get_de.txt")
+        if not raw:
+            return None
+        parsed = _parse_key_value(raw)
+        return {
+            "lat": parsed.get("lat", ""),
+            "lon": parsed.get("lng", parsed.get("lon", "")),
+            "grid": parsed.get("grid", ""),
+            "call": parsed.get("call", ""),
+        }
+
+    def _fetch_dx(self) -> Optional[Dict[str, str]]:
+        """Fetch target (DX) location from HamClock (get_dx.txt)."""
+        raw = self._fetch_text(f"{self._hamclock_api}/get_dx.txt")
+        if not raw:
+            return None
+        parsed = _parse_key_value(raw)
+        return {
+            "lat": parsed.get("lat", ""),
+            "lon": parsed.get("lng", parsed.get("lon", "")),
+            "grid": parsed.get("grid", ""),
+            "call": parsed.get("call", ""),
+        }
+
+    # ==================== NOAA Fallback ====================
+
+    def _fetch_space_weather_noaa(self) -> Dict[str, Any]:
+        """Fetch space weather from NOAA SWPC (fallback when HamClock unavailable)."""
         weather: Dict[str, Any] = {
             "solar_flux": None,
             "kp_index": None,
             "solar_wind_speed": None,
-            "xray_flux": None,
             "band_conditions": "unknown",
+            "source": "NOAA SWPC",
             "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
 
@@ -92,7 +290,6 @@ class HamClockCollector(BaseCollector):
         # Planetary K-index
         kp = self._fetch_json(SWPC_KP_INDEX)
         if kp and isinstance(kp, list) and len(kp) > 1:
-            # Last entry in the list is most recent
             latest = kp[-1]
             if isinstance(latest, list) and len(latest) >= 2:
                 try:
@@ -105,16 +302,16 @@ class HamClockCollector(BaseCollector):
         if sw:
             weather["solar_wind_speed"] = sw.get("WindSpeed")
 
-        # Derive band conditions from Kp and SFI
+        # Derive band conditions
         weather["band_conditions"] = self._assess_band_conditions(
             weather.get("solar_flux"), weather.get("kp_index")
         )
 
         return weather
 
-    def _assess_band_conditions(
-        self, sfi: Any, kp: Any
-    ) -> str:
+    # ==================== Shared Helpers ====================
+
+    def _assess_band_conditions(self, sfi: Any, kp: Any) -> str:
         """Simple band condition assessment from SFI and Kp."""
         try:
             sfi_val = float(sfi) if sfi else None
@@ -137,6 +334,19 @@ class HamClockCollector(BaseCollector):
             return "fair"
         return "poor"
 
+    @staticmethod
+    def _reliability_to_status(reliability: int) -> str:
+        """Convert VOACAP reliability percentage to status string."""
+        if reliability >= 80:
+            return "excellent"
+        if reliability >= 60:
+            return "good"
+        if reliability >= 40:
+            return "fair"
+        if reliability > 0:
+            return "poor"
+        return "closed"
+
     def _calculate_solar_terminator(self) -> Dict[str, Any]:
         """Calculate the current solar terminator (day/night boundary).
 
@@ -148,7 +358,9 @@ class HamClockCollector(BaseCollector):
         hour_utc = now.hour + now.minute / 60.0
 
         # Solar declination (approximate)
-        declination = -23.44 * math.cos(math.radians(360 / 365 * (day_of_year + 10)))
+        declination = -23.44 * math.cos(
+            math.radians(360 / 365 * (day_of_year + 10))
+        )
 
         # Subsolar longitude (moves 15 deg/hour westward from noon)
         subsolar_lon = (12.0 - hour_utc) * 15.0
@@ -163,24 +375,29 @@ class HamClockCollector(BaseCollector):
             "timestamp": now.isoformat(),
         }
 
-    def _fetch_hamclock_local(self) -> Optional[Dict[str, Any]]:
-        """Try to fetch data from a local HamClock instance."""
+    def _fetch_text(self, url: str) -> Optional[str]:
+        """Fetch raw text from a URL with timeout."""
         try:
-            # Try the de (home station) endpoint
-            data = self._fetch_json(f"{self._hamclock_api}/get_de.txt")
-            if data:
-                return {"de_station": data, "available": True}
-        except Exception:
-            pass
-        return None
+            req = Request(
+                url,
+                headers={"User-Agent": "MeshForge-Maps/0.3"},
+            )
+            with urlopen(req, timeout=10) as resp:
+                return resp.read().decode("utf-8")
+        except (URLError, OSError, ValueError) as e:
+            logger.debug("Failed to fetch %s: %s", url, e)
+            return None
 
     def _fetch_json(self, url: str) -> Any:
         """Fetch JSON from a URL with timeout."""
         try:
-            req = Request(url, headers={
-                "Accept": "application/json",
-                "User-Agent": "MeshForge-Maps/0.1",
-            })
+            req = Request(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "MeshForge-Maps/0.3",
+                },
+            )
             with urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode())
         except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
