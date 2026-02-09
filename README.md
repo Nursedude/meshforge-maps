@@ -2,11 +2,11 @@
 
 > **Read the white paper:** [Building MeshForge Maps -- AI-Assisted Mesh Network Cartography](https://nursedude.substack.com/p/building-meshforge-maps)
 
-![Version](https://img.shields.io/badge/version-0.4.0--beta-blue)
+![Version](https://img.shields.io/badge/version-0.5.0--beta-blue)
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-348%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-424%20passing-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
 **Maps extension for [MeshForge](https://github.com/Nursedude/meshforge)** -- a unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, HamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, and offline tile caching.
