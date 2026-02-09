@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional
 
 from .map_server import MapServer
 from .utils.config import MapsConfig
+from .utils.plugin_lifecycle import PluginLifecycle, PluginState
 
 logger = logging.getLogger(__name__)
 
@@ -75,98 +76,126 @@ class MeshForgeMapsPlugin(Plugin):
         super().__init__(*args, **kwargs)
         self._config: Optional[MapsConfig] = None
         self._server: Optional[MapServer] = None
+        self._lifecycle = PluginLifecycle()
+
+    @property
+    def lifecycle(self) -> PluginLifecycle:
+        """Access the plugin lifecycle state machine."""
+        return self._lifecycle
 
     def activate(self, context: PluginContext) -> None:
-        """Initialize and start the map server."""
+        """Initialize and start the map server.
+
+        Uses PluginLifecycle state machine for transition tracking:
+        LOADED/STOPPED/ERROR → ACTIVATING → ACTIVE (or ERROR on failure).
+        """
         self._context = context
-        self._config = MapsConfig()
 
-        # Apply any saved settings from MeshForge
-        if hasattr(context, "settings") and context.settings:
-            self._config.update(context.settings)
-
-        # Start the HTTP map server
-        self._server = MapServer(self._config)
-        started = self._server.start()
-
-        if not started:
-            logger.error("MeshForge Maps plugin failed to start map server")
-            if hasattr(context, "notify"):
-                context.notify(
-                    "MeshForge Maps",
-                    "Failed to start map server -- check port availability",
-                )
+        try:
+            self._lifecycle.transition_to(PluginState.ACTIVATING)
+        except Exception as e:
+            logger.error("Cannot activate: %s", e)
             return
 
-        # Register with MeshForge TUI if available
-        if hasattr(context, "register_panel"):
-            context.register_panel(
-                panel_id="meshforge_maps",
-                panel_class=None,
-                title="MeshForge Maps",
-                icon="map-symbolic",
-            )
+        try:
+            self._config = MapsConfig()
 
-        if hasattr(context, "register_tool"):
-            context.register_tool(
-                tool_id="meshforge_maps_refresh",
-                tool_func=self._refresh_data,
-                name="Refresh Map Data",
-                description="Force refresh all map data sources",
-            )
-            context.register_tool(
-                tool_id="meshforge_maps_status",
-                tool_func=self._get_status,
-                name="Map Status",
-                description="Show map server status and node counts",
-            )
-            context.register_tool(
-                tool_id="meshforge_maps_propagation",
-                tool_func=self._get_propagation,
-                name="HF Propagation",
-                description="Show current HF propagation conditions and band predictions",
-            )
-            context.register_tool(
-                tool_id="meshforge_maps_dxspots",
-                tool_func=self._get_dxspots,
-                name="DX Spots",
-                description="Show recent DX cluster spots from HamClock",
-            )
-            context.register_tool(
-                tool_id="meshforge_maps_hamclock_status",
-                tool_func=self._get_hamclock_status,
-                name="HamClock Status",
-                description="Show HamClock connection status and full data summary",
-            )
+            # Apply any saved settings from MeshForge
+            if hasattr(context, "settings") and context.settings:
+                self._config.update(context.settings)
 
-        # Subscribe to node events for live updates
-        if hasattr(context, "subscribe"):
-            context.subscribe("node_discovered", self._on_node_discovered)
-            context.subscribe("config_changed", self._on_config_changed)
+            # Start the HTTP map server
+            self._server = MapServer(self._config)
+            started = self._server.start()
 
-        if hasattr(context, "notify"):
-            port = self._server.port
-            context.notify(
-                "MeshForge Maps",
-                f"Map server started on http://127.0.0.1:{port}",
-            )
+            if not started:
+                logger.error("MeshForge Maps plugin failed to start map server")
+                if hasattr(context, "notify"):
+                    context.notify(
+                        "MeshForge Maps",
+                        "Failed to start map server -- check port availability",
+                    )
+                self._lifecycle.record_error("Failed to start map server")
+                return
 
-        logger.info("MeshForge Maps plugin activated on port %d", self._server.port)
+            # Register with MeshForge TUI if available
+            if hasattr(context, "register_panel"):
+                context.register_panel(
+                    panel_id="meshforge_maps",
+                    panel_class=None,
+                    title="MeshForge Maps",
+                    icon="map-symbolic",
+                )
+
+            if hasattr(context, "register_tool"):
+                context.register_tool(
+                    tool_id="meshforge_maps_refresh",
+                    tool_func=self._refresh_data,
+                    name="Refresh Map Data",
+                    description="Force refresh all map data sources",
+                )
+                context.register_tool(
+                    tool_id="meshforge_maps_status",
+                    tool_func=self._get_status,
+                    name="Map Status",
+                    description="Show map server status and node counts",
+                )
+                context.register_tool(
+                    tool_id="meshforge_maps_propagation",
+                    tool_func=self._get_propagation,
+                    name="HF Propagation",
+                    description="Show current HF propagation conditions and band predictions",
+                )
+                context.register_tool(
+                    tool_id="meshforge_maps_dxspots",
+                    tool_func=self._get_dxspots,
+                    name="DX Spots",
+                    description="Show recent DX cluster spots from HamClock",
+                )
+                context.register_tool(
+                    tool_id="meshforge_maps_hamclock_status",
+                    tool_func=self._get_hamclock_status,
+                    name="HamClock Status",
+                    description="Show HamClock connection status and full data summary",
+                )
+
+            # Subscribe to node events for live updates
+            if hasattr(context, "subscribe"):
+                context.subscribe("node_discovered", self._on_node_discovered)
+                context.subscribe("config_changed", self._on_config_changed)
+
+            if hasattr(context, "notify"):
+                port = self._server.port
+                context.notify(
+                    "MeshForge Maps",
+                    f"Map server started on http://127.0.0.1:{port}",
+                )
+
+            self._lifecycle.transition_to(PluginState.ACTIVE)
+            logger.info("MeshForge Maps plugin activated on port %d", self._server.port)
+        except Exception as e:
+            self._lifecycle.record_error(str(e))
+            logger.error("Activation failed: %s", e)
 
     def deactivate(self) -> None:
-        """Stop the map server and clean up all resources."""
-        try:
-            if self._server:
-                self._server.stop()
-                self._server = None
-        except Exception as e:
-            logger.error("Error stopping map server: %s", e)
-        try:
-            if self._config:
-                self._config.save()
-        except Exception as e:
-            logger.error("Error saving config on deactivate: %s", e)
-        logger.info("MeshForge Maps plugin deactivated")
+        """Stop the map server and clean up all resources.
+
+        Uses PluginLifecycle state machine:
+        ACTIVE → DEACTIVATING → STOPPED (or ERROR on failure).
+        """
+        with self._lifecycle.deactivating():
+            try:
+                if self._server:
+                    self._server.stop()
+                    self._server = None
+            except Exception as e:
+                logger.error("Error stopping map server: %s", e)
+            try:
+                if self._config:
+                    self._config.save()
+            except Exception as e:
+                logger.error("Error saving config on deactivate: %s", e)
+            logger.info("MeshForge Maps plugin deactivated")
 
     def _refresh_data(self) -> str:
         """Force refresh all data sources."""
@@ -180,15 +209,20 @@ class MeshForgeMapsPlugin(Plugin):
 
     def _get_status(self) -> str:
         """Return current server status for MeshForge TUI display."""
+        state = self._lifecycle.state.value
         if not self._server:
-            return "Map server is not running"
+            return f"Map server is not running (state: {state})"
         agg = self._server.aggregator
         mqtt_status = "unavailable"
         if agg._mqtt_subscriber:
             mqtt_status = "connected" if agg._mqtt_subscriber._running else "stopped"
         sources = list(agg._collectors.keys())
+        uptime = self._lifecycle.uptime_seconds
+        uptime_str = f"{int(uptime)}s" if uptime else "N/A"
         return (
             f"Port: {self._server.port} | "
+            f"State: {state} | "
+            f"Uptime: {uptime_str} | "
             f"Sources: {', '.join(sources)} | "
             f"MQTT: {mqtt_status}"
         )

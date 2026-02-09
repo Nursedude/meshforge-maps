@@ -20,6 +20,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .base import BaseCollector, make_feature, make_feature_collection, validate_coordinates
+from ..utils.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,11 @@ MQTT_CACHE_PATH = Path.home() / ".local" / "share" / "meshforge" / "mqtt_nodes.j
 
 
 class MeshtasticCollector(BaseCollector):
-    """Collects Meshtastic node data from local daemon, live MQTT, and MQTT cache."""
+    """Collects Meshtastic node data from local daemon, live MQTT, and MQTT cache.
+
+    Uses ConnectionManager to prevent TCP contention with MeshForge core's
+    gateway when accessing meshtasticd's single-client HTTP API.
+    """
 
     source_name = "meshtastic"
 
@@ -42,10 +47,13 @@ class MeshtasticCollector(BaseCollector):
         meshtasticd_port: int = 4403,
         cache_ttl_seconds: int = 900,
         mqtt_store: Optional[Any] = None,
+        connection_timeout: float = 5.0,
     ):
         super().__init__(cache_ttl_seconds)
         self._api_base = f"http://{meshtasticd_host}:{meshtasticd_port}"
         self._mqtt_store = mqtt_store  # MQTTNodeStore instance from mqtt_subscriber
+        self._conn_mgr = ConnectionManager.get_instance(meshtasticd_host, meshtasticd_port)
+        self._connection_timeout = connection_timeout
 
     def _fetch(self) -> Dict[str, Any]:
         features: List[Dict[str, Any]] = []
@@ -78,22 +86,35 @@ class MeshtasticCollector(BaseCollector):
         return make_feature_collection(features, self.source_name)
 
     def _fetch_from_api(self) -> List[Dict[str, Any]]:
-        """Fetch from local meshtasticd HTTP API."""
-        features = []
-        try:
-            url = f"{self._api_base}{NODES_ENDPOINT}"
-            req = Request(url, headers={"Accept": "application/json"})
-            with urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode())
+        """Fetch from local meshtasticd HTTP API.
 
-            nodes = data if isinstance(data, list) else data.get("nodes", [])
-            for node in nodes:
-                feature = self._parse_api_node(node)
-                if feature:
-                    features.append(feature)
-            logger.debug("meshtasticd API returned %d nodes", len(features))
-        except (URLError, OSError, json.JSONDecodeError) as e:
-            logger.debug("meshtasticd API unavailable: %s", e)
+        Uses ConnectionManager to acquire exclusive access before connecting,
+        preventing TCP contention with MeshForge core's gateway.
+        """
+        features = []
+        with self._conn_mgr.acquire(
+            timeout=self._connection_timeout, holder="maps_collector"
+        ) as acquired:
+            if not acquired:
+                logger.debug(
+                    "meshtasticd connection held by '%s', skipping API fetch",
+                    self._conn_mgr.holder,
+                )
+                return features
+            try:
+                url = f"{self._api_base}{NODES_ENDPOINT}"
+                req = Request(url, headers={"Accept": "application/json"})
+                with urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+
+                nodes = data if isinstance(data, list) else data.get("nodes", [])
+                for node in nodes:
+                    feature = self._parse_api_node(node)
+                    if feature:
+                        features.append(feature)
+                logger.debug("meshtasticd API returned %d nodes", len(features))
+            except (URLError, OSError, json.JSONDecodeError) as e:
+                logger.debug("meshtasticd API unavailable: %s", e)
         return features
 
     def _parse_api_node(self, node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
