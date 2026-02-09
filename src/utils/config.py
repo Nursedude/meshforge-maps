@@ -26,6 +26,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "map_default_zoom": 4,
     "cache_ttl_minutes": 15,
     "http_port": 8808,
+    # MQTT broker configuration (upstream: private broker support)
+    "mqtt_broker": "mqtt.meshtastic.org",
+    "mqtt_port": 1883,
+    "mqtt_topic": "msh/#",
+    "mqtt_username": None,
+    "mqtt_password": None,
 }
 
 # Tile provider definitions for Leaflet.js
