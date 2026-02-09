@@ -574,7 +574,7 @@
 
 <div class="header">
     <span class="header-title">MeshForge Maps</span>
-    <span class="header-subtitle">Multi-Source Mesh Network Map</span>
+    <span class="header-subtitle" id="headerSubtitle">Multi-Source Mesh Network Map</span>
     <div class="header-stats" id="headerStats">
         <span class="status-indicator status-loading" id="connStatus">
             <span class="status-dot"></span>
@@ -591,6 +591,10 @@
         <span class="stat-badge">
             <span class="stat-dot" style="background:#ff7043"></span>
             <span id="statAredn">0</span> AREDN
+        </span>
+        <span class="stat-badge" id="mqttBadge" style="display:none">
+            <span class="stat-dot" style="background:#42a5f5"></span>
+            MQTT <span id="statMqtt">0</span>
         </span>
     </div>
 </div>
@@ -917,9 +921,33 @@
                 if (config.ws_port) {
                     connectWebSocket(config.ws_port);
                 }
+                // Fetch version from status endpoint (upstream: version badge)
+                fetchVersion();
             }
         } catch (e) {
             console.debug('Using default config');
+        }
+    }
+
+    async function fetchVersion() {
+        try {
+            const resp = await fetch(API_BASE + '/api/status');
+            if (resp.ok) {
+                const status = await resp.json();
+                if (status.version) {
+                    var sub = document.getElementById('headerSubtitle');
+                    if (sub) sub.textContent = 'v' + status.version;
+                }
+                // Show MQTT live node count in header (upstream: monitoring)
+                if (status.mqtt_live === 'connected' && status.mqtt_node_count > 0) {
+                    var badge = document.getElementById('mqttBadge');
+                    var count = document.getElementById('statMqtt');
+                    if (badge) badge.style.display = '';
+                    if (count) count.textContent = status.mqtt_node_count;
+                }
+            }
+        } catch (e) {
+            // Non-critical, silently ignore
         }
     }
 
@@ -1096,6 +1124,7 @@
         if (props.battery != null) addRow('Battery', props.battery, '%');
         if (props.voltage != null) addRow('Voltage', Number(props.voltage).toFixed(2), 'V');
         if (props.snr != null) addRow('SNR', props.snr, ' dB');
+        if (props.rssi != null) addRow('RSSI', props.rssi, ' dBm');
         if (props.altitude != null) addRow('Altitude', props.altitude, 'm');
         if (props.hops_away != null) addRow('Hops', props.hops_away, '');
 
@@ -1792,12 +1821,9 @@
     // Auto-refresh
     // =========================================================================
 
+    // Auto-refresh interval (silent -- no toast on auto-refresh, upstream improvement)
     setInterval(function() {
-        loadNodeData().then(function() {
-            if (consecutiveErrors === 0) {
-                showToast('Auto-refreshed');
-            }
-        });
+        loadNodeData();
         if (showTopology) loadTopologyData();
     }, 5 * 60 * 1000); // Refresh every 5 minutes
 
