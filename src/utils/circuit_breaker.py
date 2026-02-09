@@ -166,7 +166,12 @@ class CircuitBreakerRegistry:
     """Registry of named circuit breakers for all data sources.
 
     Thread-safe: breaker creation and lookup are protected by a lock.
+    Includes capacity limit to prevent unbounded growth (upstream pattern
+    from meshforge core gateway/circuit_breaker.py).
     """
+
+    # Maximum tracked breakers (prevent unbounded growth)
+    MAX_CIRCUITS = 1000
 
     def __init__(
         self,
@@ -187,6 +192,9 @@ class CircuitBreakerRegistry:
         """Get or create a circuit breaker by name."""
         with self._lock:
             if name not in self._breakers:
+                # Evict oldest closed breaker if at capacity
+                if len(self._breakers) >= self.MAX_CIRCUITS:
+                    self._evict_oldest_closed()
                 self._breakers[name] = CircuitBreaker(
                     name=name,
                     failure_threshold=failure_threshold
@@ -204,8 +212,48 @@ class CircuitBreakerRegistry:
                 for name, breaker in self._breakers.items()
             }
 
-    def reset_all(self) -> None:
-        """Reset all circuit breakers to CLOSED state."""
+    def get_open_circuits(self) -> Dict[str, Dict[str, Any]]:
+        """Return stats for circuit breakers that are currently OPEN or HALF_OPEN."""
+        with self._lock:
+            return {
+                name: breaker.get_stats()
+                for name, breaker in self._breakers.items()
+                if breaker.state in (CircuitState.OPEN, CircuitState.HALF_OPEN)
+            }
+
+    def reset(self, name: str) -> bool:
+        """Reset a specific circuit breaker by name.
+
+        Returns True if the breaker existed and was reset.
+        """
+        with self._lock:
+            breaker = self._breakers.get(name)
+            if breaker:
+                breaker.reset()
+                return True
+            return False
+
+    def reset_all(self) -> int:
+        """Reset all circuit breakers to CLOSED state.
+
+        Returns the number of breakers that were reset (not already CLOSED).
+        """
+        count = 0
         with self._lock:
             for breaker in self._breakers.values():
-                breaker.reset()
+                if breaker.state != CircuitState.CLOSED:
+                    breaker.reset()
+                    count += 1
+        return count
+
+    def _evict_oldest_closed(self) -> None:
+        """Evict the oldest CLOSED breaker to make room. Must hold lock."""
+        closed = [
+            (name, cb)
+            for name, cb in self._breakers.items()
+            if cb.state == CircuitState.CLOSED
+        ]
+        if closed:
+            oldest = min(closed, key=lambda x: x[1]._last_state_change)
+            del self._breakers[oldest[0]]
+            logger.debug("Evicted circuit breaker '%s' (capacity limit)", oldest[0])
