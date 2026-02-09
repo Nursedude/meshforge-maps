@@ -52,6 +52,9 @@ NODE_REMOVE_THRESHOLD = 259200  # 72 hours
 # Maximum nodes to keep in memory to prevent unbounded growth
 MAX_NODES = 10000
 
+# Maximum MQTT payload size to process (bytes) -- reject oversized payloads
+MAX_PAYLOAD_SIZE = 65536  # 64 KB
+
 
 def _try_import_paho():
     """Try to import paho-mqtt. Returns (Client class, CallbackAPIVersion) or (None, None)."""
@@ -180,7 +183,11 @@ class MQTTNodeStore:
 
     def update_telemetry(self, node_id: str, battery: Optional[int] = None,
                          voltage: Optional[float] = None,
-                         temperature: Optional[float] = None) -> None:
+                         temperature: Optional[float] = None,
+                         humidity: Optional[float] = None,
+                         pressure: Optional[float] = None,
+                         channel_util: Optional[float] = None,
+                         air_util_tx: Optional[float] = None) -> None:
         with self._lock:
             node = self._nodes.setdefault(node_id, {"id": node_id})
             if battery is not None:
@@ -189,6 +196,14 @@ class MQTTNodeStore:
                 node["voltage"] = voltage
             if temperature is not None:
                 node["temperature"] = temperature
+            if humidity is not None:
+                node["humidity"] = humidity
+            if pressure is not None:
+                node["pressure"] = pressure
+            if channel_util is not None:
+                node["channel_util"] = channel_util
+            if air_util_tx is not None:
+                node["air_util_tx"] = air_util_tx
             node["last_seen"] = int(time.time())
 
     def update_neighbors(self, node_id: str,
@@ -344,6 +359,8 @@ class MQTTSubscriber:
         broker: str = DEFAULT_BROKER,
         port: int = DEFAULT_PORT,
         topic: str = DEFAULT_TOPIC,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
         node_store: Optional[MQTTNodeStore] = None,
         on_node_update: Optional[Callable] = None,
         event_bus: Optional[Any] = None,
@@ -351,12 +368,16 @@ class MQTTSubscriber:
         self._broker = broker
         self._port = port
         self._topic = topic
+        self._username = username
+        self._password = password
         self._store = node_store or MQTTNodeStore()
         self._on_node_update = on_node_update
         self._event_bus = event_bus
         self._client = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._connected = False
+        self._messages_received: int = 0
         self._proto = _try_import_meshtastic()
 
         mqtt_mod, api_version = _try_import_paho()
@@ -390,6 +411,10 @@ class MQTTSubscriber:
                 self._client = mqtt.Client(self._api_version.VERSION2)
             else:
                 self._client = mqtt.Client()
+
+            # Set credentials for private broker (upstream: private MQTT support)
+            if self._username:
+                self._client.username_pw_set(self._username, self._password or "")
 
             self._client.on_connect = self._on_connect
             self._client.on_message = self._on_message
@@ -426,7 +451,22 @@ class MQTTSubscriber:
             except Exception:
                 pass
         self._client = None
+        self._connected = False
         logger.info("MQTT subscriber stopped")
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return MQTT subscriber statistics (upstream: monitoring integration)."""
+        return {
+            "broker": self._broker,
+            "port": self._port,
+            "topic": self._topic,
+            "connected": self._connected,
+            "running": self._running,
+            "has_credentials": self._username is not None,
+            "messages_received": self._messages_received,
+            "node_count": self._store.node_count,
+            "protobuf_available": self._proto is not None,
+        }
 
     def _run_loop(self) -> None:
         """Connection loop with reconnect strategy and periodic stale node cleanup."""
@@ -459,17 +499,32 @@ class MQTTSubscriber:
 
     def _on_connect(self, client: Any, userdata: Any, flags: Any,
                     rc: Any, *args: Any) -> None:
+        self._connected = True
         logger.info("MQTT connected to %s (rc=%s), store has %d nodes",
                     self._broker, rc, self._store.node_count)
         client.subscribe(self._topic)
 
     def _on_disconnect(self, client: Any, userdata: Any, rc: Any,
                        *args: Any) -> None:
+        self._connected = False
         if self._running:
             logger.warning("MQTT disconnected (rc=%s), will reconnect", rc)
 
     def _on_message(self, client: Any, userdata: Any, msg: Any) -> None:
         """Process incoming MQTT message."""
+        # Reject oversized payloads with warning (upstream improvement)
+        if len(msg.payload) > MAX_PAYLOAD_SIZE:
+            # Sanitize topic for logging: strip node-specific segments for privacy
+            topic_parts = msg.topic.split("/")
+            safe_topic = "/".join(topic_parts[:5]) + "/..." if len(topic_parts) > 5 else msg.topic
+            logger.warning(
+                "MQTT: rejected oversized payload (%d bytes) on %s",
+                len(msg.payload), safe_topic,
+            )
+            return
+
+        self._messages_received += 1
+
         try:
             # Try protobuf decoding first
             if self._proto:
@@ -583,10 +638,18 @@ class MQTTSubscriber:
             dm = telem.device_metrics
             battery = _safe_int(dm.battery_level, 0, 100)
             voltage = _safe_float(dm.voltage, 0.0, 100.0)
+            channel_util = _safe_float(
+                getattr(dm, "channel_utilization", None), 0.0, 100.0
+            )
+            air_util_tx = _safe_float(
+                getattr(dm, "air_util_tx", None), 0.0, 100.0
+            )
             self._store.update_telemetry(
                 node_id,
                 battery=battery,
                 voltage=voltage,
+                channel_util=channel_util,
+                air_util_tx=air_util_tx,
             )
 
         # Environmental sensors (temperature, humidity, pressure)
@@ -598,11 +661,15 @@ class MQTTSubscriber:
             humidity = _safe_float(
                 getattr(em, "relative_humidity", None), 0.0, 100.0
             )
-            if temperature is not None or humidity is not None:
-                self._store.update_telemetry(
-                    node_id,
-                    temperature=temperature,
-                )
+            pressure = _safe_float(
+                getattr(em, "barometric_pressure", None), 0.0, 2000.0
+            )
+            self._store.update_telemetry(
+                node_id,
+                temperature=temperature,
+                humidity=humidity,
+                pressure=pressure,
+            )
 
         self._notify_update(node_id, "telemetry")
 

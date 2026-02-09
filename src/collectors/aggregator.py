@@ -47,10 +47,16 @@ class DataAggregator:
         retries = DEFAULT_COLLECTOR_RETRIES
 
         # Initialize live MQTT subscriber for Meshtastic
+        # Supports private broker configuration (upstream: private MQTT support)
         self._mqtt_subscriber: Optional[MQTTSubscriber] = None
         mqtt_store: Optional[MQTTNodeStore] = None
         if config.get("enable_meshtastic", True):
             self._mqtt_subscriber = MQTTSubscriber(
+                broker=config.get("mqtt_broker", "mqtt.meshtastic.org"),
+                port=config.get("mqtt_port", 1883),
+                topic=config.get("mqtt_topic", "msh/#"),
+                username=config.get("mqtt_username"),
+                password=config.get("mqtt_password"),
                 event_bus=self._event_bus,
             )
             if self._mqtt_subscriber.available:

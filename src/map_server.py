@@ -74,6 +74,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "/api/health": self._serve_health,
             "/api/hamclock": self._serve_hamclock,
             "/api/core-health": self._serve_core_health,
+            "/api/mqtt/stats": self._serve_mqtt_stats,
             "/api/history/nodes": self._serve_tracked_nodes,
         }
 
@@ -320,6 +321,17 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not reader.available:
             reader.refresh()
         self._send_json(reader.get_summary())
+
+    def _serve_mqtt_stats(self) -> None:
+        """Serve MQTT subscriber statistics (upstream: monitoring integration).
+
+        Returns broker connection state, message counts, and node store stats.
+        """
+        aggregator = self._get_aggregator()
+        if not aggregator or not aggregator._mqtt_subscriber:
+            self._send_json({"available": False, "status": "not_configured"})
+            return
+        self._send_json(aggregator._mqtt_subscriber.get_stats())
 
     def _serve_health(self) -> None:
         """Serve composite health score (0-100) with per-source breakdown.
