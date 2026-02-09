@@ -1,7 +1,7 @@
 {
     "id": "org.meshforge.extension.maps",
     "name": "MeshForge Maps",
-    "version": "0.5.0-beta",
+    "version": "0.6.0-beta",
     "description": "Unified multi-source mesh network map aggregating Meshtastic, Reticulum/RMAP, HamClock, and AREDN data with live MQTT, topology visualization, and offline tile caching",
     "author": "MeshForge Community",
     "type": "extension",

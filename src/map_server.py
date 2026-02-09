@@ -23,8 +23,11 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__
 from .collectors.aggregator import DataAggregator
 from .utils.config import NETWORK_COLORS, TILE_PROVIDERS, MapsConfig
+from .utils.config_drift import ConfigDriftDetector
 from .utils.event_bus import Event, EventBus, EventType, NodeEvent
+from .utils.meshtastic_api_proxy import MeshtasticApiProxy
 from .utils.node_history import NodeHistoryDB
+from .utils.node_state import NodeState, NodeStateTracker
 from .utils.shared_health_state import SharedHealthStateReader
 from .utils.websocket_server import MapWebSocketServer
 
@@ -54,6 +57,12 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     def _get_shared_health(self) -> Optional[SharedHealthStateReader]:
         return getattr(self.server, "_mf_shared_health", None)
 
+    def _get_config_drift(self) -> Optional[ConfigDriftDetector]:
+        return getattr(self.server, "_mf_config_drift", None)
+
+    def _get_node_state(self) -> Optional[NodeStateTracker]:
+        return getattr(self.server, "_mf_node_state", None)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
@@ -76,6 +85,11 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "/api/core-health": self._serve_core_health,
             "/api/mqtt/stats": self._serve_mqtt_stats,
             "/api/history/nodes": self._serve_tracked_nodes,
+            "/api/config-drift": self._serve_config_drift,
+            "/api/config-drift/summary": self._serve_config_drift_summary,
+            "/api/node-states": self._serve_node_states,
+            "/api/node-states/summary": self._serve_node_states_summary,
+            "/api/proxy/stats": self._serve_proxy_stats,
         }
 
         handler = routes.get(path)
@@ -406,6 +420,49 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "sources_reporting": source_counts,
         })
 
+    def _serve_config_drift(self) -> None:
+        """Serve config drift events for all nodes."""
+        detector = self._get_config_drift()
+        if not detector:
+            self._send_json({"error": "Config drift detection not available"}, 503)
+            return
+        self._send_json(detector.get_summary())
+
+    def _serve_config_drift_summary(self) -> None:
+        """Serve config drift summary."""
+        detector = self._get_config_drift()
+        if not detector:
+            self._send_json({"error": "Config drift detection not available"}, 503)
+            return
+        self._send_json(detector.get_summary())
+
+    def _serve_node_states(self) -> None:
+        """Serve all node connectivity states."""
+        tracker = self._get_node_state()
+        if not tracker:
+            self._send_json({"error": "Node state tracking not available"}, 503)
+            return
+        self._send_json({
+            "states": tracker.get_all_states(),
+            "summary": tracker.get_summary(),
+        })
+
+    def _serve_node_states_summary(self) -> None:
+        """Serve node state summary (counts by state)."""
+        tracker = self._get_node_state()
+        if not tracker:
+            self._send_json({"error": "Node state tracking not available"}, 503)
+            return
+        self._send_json(tracker.get_summary())
+
+    def _serve_proxy_stats(self) -> None:
+        """Serve Meshtastic API proxy statistics."""
+        proxy = getattr(self.server, "_mf_proxy", None)
+        if not proxy:
+            self._send_json({"available": False, "status": "not_configured"})
+            return
+        self._send_json(proxy.stats)
+
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
         aggregator = self._get_aggregator()
@@ -525,6 +582,23 @@ class MapServer:
         except Exception as e:
             logger.debug("Shared health state not available: %s", e)
 
+        # Config drift detection
+        self._config_drift = ConfigDriftDetector()
+
+        # Node connectivity state machine
+        self._node_state = NodeStateTracker()
+
+        # Meshtastic API proxy (serves meshtasticd-compatible JSON endpoints)
+        self._proxy: Optional[MeshtasticApiProxy] = None
+        if config.get("enable_meshtastic", True):
+            mqtt_store = None
+            if self._aggregator._mqtt_subscriber:
+                mqtt_store = self._aggregator._mqtt_subscriber.store
+            self._proxy = MeshtasticApiProxy(
+                mqtt_store=mqtt_store,
+                port=config.get("meshtastic_proxy_port", 4404),
+            )
+
     def start(self) -> bool:
         """Start the HTTP server in a background thread.
 
@@ -546,6 +620,10 @@ class MapServer:
                 self._server._mf_start_time = time.time()  # type: ignore[attr-defined]
                 self._server._mf_node_history = self._node_history  # type: ignore[attr-defined]
                 self._server._mf_shared_health = self._shared_health  # type: ignore[attr-defined]
+                self._server._mf_config_drift = self._config_drift  # type: ignore[attr-defined]
+                self._server._mf_node_state = self._node_state  # type: ignore[attr-defined]
+                if self._proxy:
+                    self._server._mf_proxy = self._proxy  # type: ignore[attr-defined]
 
                 self._thread = threading.Thread(
                     target=self._server.serve_forever,
@@ -568,6 +646,24 @@ class MapServer:
                         EventType.NODE_POSITION, self._record_node_position,
                     )
 
+                # Subscribe config drift and node state to info/telemetry events
+                self._aggregator.event_bus.subscribe(
+                    EventType.NODE_INFO, self._handle_node_info_for_drift,
+                )
+                self._aggregator.event_bus.subscribe(
+                    EventType.NODE_POSITION, self._handle_heartbeat,
+                )
+                self._aggregator.event_bus.subscribe(
+                    EventType.NODE_TELEMETRY, self._handle_heartbeat,
+                )
+                self._aggregator.event_bus.subscribe(
+                    EventType.NODE_INFO, self._handle_heartbeat,
+                )
+
+                # Start Meshtastic API proxy
+                if self._proxy:
+                    self._proxy.start()
+
                 # Start WebSocket server on adjacent port
                 self._start_websocket(port + 1)
                 return True
@@ -581,6 +677,22 @@ class MapServer:
             base_port, base_port + 4, last_error,
         )
         return False
+
+    def _handle_node_info_for_drift(self, event: Event) -> None:
+        """Feed node info events to config drift detector."""
+        if not isinstance(event, NodeEvent):
+            return
+        data = event.data or {}
+        self._config_drift.check_node(
+            event.node_id,
+            **{k: v for k, v in data.items() if v is not None},
+        )
+
+    def _handle_heartbeat(self, event: Event) -> None:
+        """Feed any node event as a heartbeat to the state tracker."""
+        if not isinstance(event, NodeEvent):
+            return
+        self._node_state.record_heartbeat(event.node_id)
 
     def _start_websocket(self, ws_port: int) -> None:
         """Start the WebSocket server and wire it to the event bus.
@@ -650,6 +762,9 @@ class MapServer:
 
     def stop(self) -> None:
         """Stop the HTTP server, WebSocket server, and clean up all resources."""
+        if self._proxy:
+            self._proxy.stop()
+            self._proxy = None
         if self._ws_server:
             self._ws_server.shutdown()
             self._ws_server = None
