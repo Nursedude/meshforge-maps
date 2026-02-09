@@ -187,7 +187,9 @@ class MQTTNodeStore:
                          humidity: Optional[float] = None,
                          pressure: Optional[float] = None,
                          channel_util: Optional[float] = None,
-                         air_util_tx: Optional[float] = None) -> None:
+                         air_util_tx: Optional[float] = None,
+                         iaq: Optional[int] = None,
+                         **extra: Any) -> None:
         with self._lock:
             node = self._nodes.setdefault(node_id, {"id": node_id})
             if battery is not None:
@@ -204,6 +206,12 @@ class MQTTNodeStore:
                 node["channel_util"] = channel_util
             if air_util_tx is not None:
                 node["air_util_tx"] = air_util_tx
+            if iaq is not None:
+                node["iaq"] = iaq
+            # Store any additional telemetry fields (air quality, health, etc.)
+            for key, value in extra.items():
+                if value is not None:
+                    node[key] = value
             node["last_seen"] = int(time.time())
 
     def update_neighbors(self, node_id: str,
@@ -652,7 +660,7 @@ class MQTTSubscriber:
                 air_util_tx=air_util_tx,
             )
 
-        # Environmental sensors (temperature, humidity, pressure)
+        # Environmental sensors (temperature, humidity, pressure, IAQ)
         if telem.HasField("environment_metrics"):
             em = telem.environment_metrics
             temperature = _safe_float(
@@ -664,11 +672,41 @@ class MQTTSubscriber:
             pressure = _safe_float(
                 getattr(em, "barometric_pressure", None), 0.0, 2000.0
             )
+            iaq = _safe_int(getattr(em, "iaq", None), 0, 500)
             self._store.update_telemetry(
                 node_id,
                 temperature=temperature,
                 humidity=humidity,
                 pressure=pressure,
+                iaq=iaq,
+            )
+
+        # Air quality sensors (PM2.5, PM10, CO2, VOC, NOx)
+        if telem.HasField("air_quality_metrics"):
+            aq = telem.air_quality_metrics
+            self._store.update_telemetry(
+                node_id,
+                pm10_standard=_safe_int(getattr(aq, "pm10_standard", None), 0, 10000),
+                pm25_standard=_safe_int(getattr(aq, "pm25_standard", None), 0, 10000),
+                pm100_standard=_safe_int(getattr(aq, "pm100_standard", None), 0, 10000),
+                pm10_environmental=_safe_int(getattr(aq, "pm10_environmental", None), 0, 10000),
+                pm25_environmental=_safe_int(getattr(aq, "pm25_environmental", None), 0, 10000),
+                pm100_environmental=_safe_int(getattr(aq, "pm100_environmental", None), 0, 10000),
+                co2=_safe_int(getattr(aq, "co2", None), 0, 40000),
+                pm_voc_idx=_safe_float(getattr(aq, "pm_voc_idx", None), 0.0, 500.0),
+                pm_nox_idx=_safe_float(getattr(aq, "pm_nox_idx", None), 0.0, 500.0),
+            )
+
+        # Health sensors (heart rate, SpO2, body temperature)
+        if telem.HasField("health_metrics"):
+            hm = telem.health_metrics
+            self._store.update_telemetry(
+                node_id,
+                heart_bpm=_safe_int(getattr(hm, "heart_bpm", None), 0, 300),
+                spo2=_safe_int(getattr(hm, "spO2", None), 0, 100),
+                body_temperature=_safe_float(
+                    getattr(hm, "temperature", None), 20.0, 50.0
+                ),
             )
 
         self._notify_update(node_id, "telemetry")

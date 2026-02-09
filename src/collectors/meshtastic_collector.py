@@ -245,4 +245,15 @@ class MeshtasticCollector(BaseCollector):
             channel_util=node.get("channel_util"),
             air_util_tx=node.get("air_util_tx"),
             altitude=node.get("altitude"),
+            # Air quality metrics
+            iaq=node.get("iaq"),
+            pm25_standard=node.get("pm25_standard"),
+            pm100_standard=node.get("pm100_standard"),
+            co2=node.get("co2"),
+            pm_voc_idx=node.get("pm_voc_idx"),
+            pm_nox_idx=node.get("pm_nox_idx"),
+            # Health metrics
+            heart_bpm=node.get("heart_bpm"),
+            spo2=node.get("spo2"),
+            body_temperature=node.get("body_temperature"),
         )
