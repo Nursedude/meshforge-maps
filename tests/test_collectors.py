@@ -313,7 +313,7 @@ class TestHamClockCollector:
     def test_openhamclock_fallback_when_hamclock_down(self, mock_fetch):
         """When HamClock port 8080 fails, should try OpenHamClock port 3000."""
         # First call (port 8080) returns None, second call (port 3000) succeeds
-        mock_fetch.side_effect = [None, "Version=1.0\nUptime=100"]
+        mock_fetch.side_effect = [None, "Version=OpenHamClock 1.0\nUptime=100"]
         c = HamClockCollector()
         assert c.is_hamclock_available() is True
         assert c._detected_variant == "openhamclock"

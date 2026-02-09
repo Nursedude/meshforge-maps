@@ -33,6 +33,13 @@ from urllib.request import Request, urlopen
 
 from .base import BaseCollector, make_feature_collection
 from .. import __version__
+from ..utils.openhamclock_compat import (
+    detect_variant,
+    get_endpoint_map,
+    normalize_band_conditions,
+    normalize_de_dx,
+    normalize_spacewx,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +93,8 @@ class HamClockCollector(BaseCollector):
         self._hamclock_available: Optional[bool] = None
         # Tracks which variant was detected ("hamclock", "openhamclock", or None)
         self._detected_variant: Optional[str] = None
+        # Endpoint map (updated when variant is detected)
+        self._endpoints = get_endpoint_map("hamclock")
 
     # ==================== Public API ====================
 
@@ -95,6 +104,7 @@ class HamClockCollector(BaseCollector):
         Tries the configured port first (default 8080, original HamClock),
         then falls back to OpenHamClock port (default 3000).
         Updates _hamclock_api to whichever responds.
+        Uses detect_variant() to identify which variant is running.
         """
         # Try configured port first (HamClock legacy)
         primary_url = f"http://{self._hamclock_host}:{self._hamclock_port}"
@@ -102,7 +112,8 @@ class HamClockCollector(BaseCollector):
         if raw is not None and len(raw) > 0:
             self._hamclock_api = primary_url
             self._hamclock_available = True
-            self._detected_variant = "hamclock"
+            self._detected_variant = detect_variant(raw)
+            self._endpoints = get_endpoint_map(self._detected_variant)
             return True
 
         # Try OpenHamClock port (community successor)
@@ -112,9 +123,11 @@ class HamClockCollector(BaseCollector):
             if raw is not None and len(raw) > 0:
                 self._hamclock_api = fallback_url
                 self._hamclock_available = True
-                self._detected_variant = "openhamclock"
+                self._detected_variant = detect_variant(raw)
+                self._endpoints = get_endpoint_map(self._detected_variant)
                 logger.info(
-                    "OpenHamClock detected on port %d (HamClock port %d unavailable)",
+                    "%s detected on port %d (HamClock port %d unavailable)",
+                    self._detected_variant,
                     self._openhamclock_port,
                     self._hamclock_port,
                 )
@@ -122,6 +135,7 @@ class HamClockCollector(BaseCollector):
 
         self._hamclock_available = False
         self._detected_variant = None
+        self._endpoints = get_endpoint_map("hamclock")
         return False
 
     # ==================== Core Fetch ====================
@@ -193,16 +207,18 @@ class HamClockCollector(BaseCollector):
 
     def _fetch_space_weather_hamclock(self) -> Dict[str, Any]:
         """Fetch space weather from HamClock REST API (get_spacewx.txt)."""
+        source_label = "OpenHamClock API" if self._detected_variant == "openhamclock" else "HamClock API"
         weather: Dict[str, Any] = {
-            "source": "HamClock API",
+            "source": source_label,
             "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
 
-        raw = self._fetch_text(f"{self._hamclock_api}/get_spacewx.txt")
+        endpoint = self._endpoints.get("spacewx", "/get_spacewx.txt")
+        raw = self._fetch_text(f"{self._hamclock_api}{endpoint}")
         if not raw:
             return weather
 
-        parsed = _parse_key_value(raw)
+        parsed = normalize_spacewx(_parse_key_value(raw))
 
         # Map HamClock response keys to standard names
         # HamClock returns keys like: SFI, Kp, A, Xray, SSN, Proton, Aurora
@@ -231,7 +247,8 @@ class HamClockCollector(BaseCollector):
 
     def _fetch_band_conditions_hamclock(self) -> Optional[Dict[str, Any]]:
         """Fetch HF band conditions from HamClock (get_bc.txt)."""
-        raw = self._fetch_text(f"{self._hamclock_api}/get_bc.txt")
+        endpoint = self._endpoints.get("band_conditions", "/get_bc.txt")
+        raw = self._fetch_text(f"{self._hamclock_api}{endpoint}")
         if not raw:
             return None
 
@@ -253,7 +270,8 @@ class HamClockCollector(BaseCollector):
 
     def _fetch_voacap(self) -> Optional[Dict[str, Any]]:
         """Fetch VOACAP propagation predictions from HamClock (get_voacap.txt)."""
-        raw = self._fetch_text(f"{self._hamclock_api}/get_voacap.txt")
+        endpoint = self._endpoints.get("voacap", "/get_voacap.txt")
+        raw = self._fetch_text(f"{self._hamclock_api}{endpoint}")
         if not raw:
             return None
 
@@ -304,10 +322,11 @@ class HamClockCollector(BaseCollector):
 
     def _fetch_de(self) -> Optional[Dict[str, str]]:
         """Fetch home (DE) location from HamClock (get_de.txt)."""
-        raw = self._fetch_text(f"{self._hamclock_api}/get_de.txt")
+        endpoint = self._endpoints.get("de", "/get_de.txt")
+        raw = self._fetch_text(f"{self._hamclock_api}{endpoint}")
         if not raw:
             return None
-        parsed = _parse_key_value(raw)
+        parsed = normalize_de_dx(_parse_key_value(raw))
         return {
             "lat": parsed.get("lat", ""),
             "lon": parsed.get("lng", parsed.get("lon", "")),
@@ -317,10 +336,11 @@ class HamClockCollector(BaseCollector):
 
     def _fetch_dx(self) -> Optional[Dict[str, str]]:
         """Fetch target (DX) location from HamClock (get_dx.txt)."""
-        raw = self._fetch_text(f"{self._hamclock_api}/get_dx.txt")
+        endpoint = self._endpoints.get("dx", "/get_dx.txt")
+        raw = self._fetch_text(f"{self._hamclock_api}{endpoint}")
         if not raw:
             return None
-        parsed = _parse_key_value(raw)
+        parsed = normalize_de_dx(_parse_key_value(raw))
         return {
             "lat": parsed.get("lat", ""),
             "lon": parsed.get("lng", parsed.get("lon", "")),
@@ -334,7 +354,8 @@ class HamClockCollector(BaseCollector):
         Returns a list of spot dicts with call, freq, de, utc fields,
         or None if unavailable.
         """
-        raw = self._fetch_text(f"{self._hamclock_api}/get_dxspots.txt")
+        endpoint = self._endpoints.get("dxspots", "/get_dxspots.txt")
+        raw = self._fetch_text(f"{self._hamclock_api}{endpoint}")
         if not raw:
             return None
 

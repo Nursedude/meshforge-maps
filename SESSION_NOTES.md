@@ -958,3 +958,77 @@ Session remained focused and productive throughout. No signs of entropy:
 - Actionable implementation phases defined
 
 **Session complete.** Ready for implementation in next session starting with Phase 1 (Reliability Foundation).
+
+---
+
+# Session 9 — Phase 4: Integration Polish
+
+**Date:** 2026-02-08
+**Version:** 0.4.0-beta → 0.5.0-beta
+**Tests:** 348 → 424 passing (+76 new tests)
+
+## What Was Built
+
+### 1. Connection Manager (`src/utils/connection_manager.py`)
+- Thread-safe singleton lock per meshtasticd host:port
+- Prevents TCP contention between MeshForge core gateway and maps collector
+- Context manager with configurable timeout (default 5s)
+- Diagnostic stats: acquisitions, timeouts, held duration
+- MeshtasticCollector now acquires exclusive access before API calls
+
+### 2. Frontend Topology GeoJSON Rendering
+- Replaced legacy `/api/topology` with `/api/topology/geojson` endpoint
+- Frontend now uses native Leaflet `L.geoJSON()` layer instead of manual polylines
+- Server-side SNR colors rendered directly (no duplicate client-side classification)
+- Popups show network type and AREDN link type when available
+
+### 3. Frontend Trajectory Visualization & Node History Panel
+- New "Node History" toggle in Overlays section
+- Floating history panel listing all tracked nodes with observation counts
+- Click to show/hide trajectory polylines per node
+- Start marker (green) and end marker (red) on each trajectory
+- Auto-fits map bounds to trajectory when shown
+- Trajectory rendered as dashed amber polyline with popup metadata
+
+### 4. OpenHamClock API Compatibility Layer (`src/utils/openhamclock_compat.py`)
+- `detect_variant()`: auto-detects HamClock vs OpenHamClock from get_sys.txt
+- `normalize_spacewx()`: normalizes lowercase/alternate space weather keys
+- `normalize_de_dx()`: normalizes DE/DX location keys (longitude, callsign aliases)
+- `normalize_band_conditions()`: normalizes band key formats
+- `get_endpoint_map()`: returns variant-specific endpoint paths
+- HamClockCollector now uses endpoint map and key normalization throughout
+
+### 5. Plugin Lifecycle State Machine (`src/utils/plugin_lifecycle.py`)
+- Formal 6-state machine: LOADED → ACTIVATING → ACTIVE → DEACTIVATING → STOPPED → ERROR
+- Validated transitions with `InvalidTransitionError` for illegal moves
+- Context managers: `lifecycle.activating()` and `lifecycle.deactivating()`
+- Transition listener callbacks for monitoring
+- Uptime tracking and diagnostic `info` property
+- MeshForgeMapsPlugin now uses lifecycle for activate/deactivate
+- Status tool output includes state and uptime
+
+## Test Coverage Added (76 new tests)
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `test_connection_manager.py` | 19 | Singleton, acquire/release, timeout, stats, thread safety |
+| `test_plugin_lifecycle.py` | 31 | All state transitions, context managers, errors, listeners, info |
+| `test_openhamclock_compat.py` | 26 | Variant detection, key normalization, endpoint maps |
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `src/utils/connection_manager.py` | **NEW** — ConnectionManager singleton |
+| `src/utils/openhamclock_compat.py` | **NEW** — OpenHamClock compatibility layer |
+| `src/utils/plugin_lifecycle.py` | **NEW** — Plugin lifecycle state machine |
+| `src/collectors/meshtastic_collector.py` | Uses ConnectionManager for API access |
+| `src/collectors/hamclock_collector.py` | Uses compat layer for variant detection |
+| `src/main.py` | Uses PluginLifecycle for activate/deactivate |
+| `web/meshforge_maps.html` | Topology GeoJSON, trajectory UI, history panel |
+| `manifest.json` | Version bump to 0.5.0-beta |
+| `README.md` | Version and test count badge updates |
+| `tests/test_connection_manager.py` | **NEW** — 19 tests |
+| `tests/test_plugin_lifecycle.py` | **NEW** — 31 tests |
+| `tests/test_openhamclock_compat.py` | **NEW** — 26 tests |
+| `tests/test_collectors.py` | Fixed OpenHamClock fallback test for detect_variant |
