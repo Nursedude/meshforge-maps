@@ -2,6 +2,144 @@
 
 ---
 
+## Session 10: Meshtastic API Proxy, Health Telemetry, Config Drift, Node State Machine
+
+**Date:** 2026-02-09
+**Branch:** `claude/meshtastic-api-health-telemetry-b5b8v`
+**Scope:** Four new features — Meshtastic API proxy, air quality/health telemetry parsing, config drift detection, node intermittent state machine
+**Version:** 0.5.0-beta → 0.6.0-beta
+
+### Changes Made
+
+**New Modules:**
+
+1. **MeshtasticApiProxy** (`src/utils/meshtastic_api_proxy.py`, ~290 lines):
+   - HTTP server serving meshtasticd-compatible JSON REST API
+   - Backed by live MQTTNodeStore — works without a local meshtasticd
+   - `GET /api/v1/nodes` — all nodes as JSON array in meshtastic Python library format
+   - `GET /api/v1/nodes/<node_id>` — single node by ID
+   - `GET /api/v1/topology` — mesh topology links
+   - `GET /api/v1/stats` — proxy statistics (uptime, request count, store state)
+   - Port fallback: tries 5 consecutive ports (default 4404)
+   - Thread-safe background server with proper shutdown
+   - Node formatting: hex ID→int conversion, device/environment/air quality/health metrics
+   - `set_store()` for late binding when MQTT subscriber starts after proxy
+
+2. **ConfigDriftDetector** (`src/utils/config_drift.py`, ~200 lines):
+   - Compares successive node config observations to detect changes
+   - Tracks: role, hardware, name, short_name, region, modem_preset, hop_limit, tx_power, channel_name, uplink/downlink
+   - Three severity levels: INFO (name changes), WARNING (role/hardware), CRITICAL (region/modem preset)
+   - Per-node snapshot storage with drift history
+   - `check_node(node_id, **fields)` — returns list of detected drifts
+   - `get_all_drifts(since, severity)` — filtered drift query
+   - `get_summary()` — overview for API consumption
+   - Optional `on_drift` callback for real-time alerting
+   - Bounded memory: max_history per node, max_nodes with LRU eviction
+
+3. **NodeStateTracker** (`src/utils/node_state.py`, ~260 lines):
+   - Four-state connectivity machine: NEW → STABLE → INTERMITTENT → OFFLINE
+   - Driven by `record_heartbeat(node_id)` on each node observation
+   - Sliding window of heartbeat timestamps (default 20)
+   - Gap ratio analysis: fraction of intervals exceeding 2× expected interval
+   - `check_offline(now)` — batch transition for nodes not seen within threshold
+   - `get_nodes_by_state(state)` — filter all nodes by connectivity state
+   - `get_summary()` — state counts and transition totals
+   - Optional `on_transition` callback for state change notifications
+   - Bounded memory: max_nodes with LRU eviction
+
+**Enhanced Modules:**
+
+4. **Air quality telemetry** (`src/collectors/mqtt_subscriber.py`):
+   - `_handle_telemetry()` now parses `air_quality_metrics` protobuf:
+     - PM1.0/2.5/4.0/10 (standard and environmental)
+     - CO2 (ppm), VOC Index, NOx Index
+   - `_handle_telemetry()` now parses `health_metrics` protobuf:
+     - Heart rate (BPM), SpO2 (%), body temperature
+   - `_handle_telemetry()` now parses IAQ from `environment_metrics`
+   - `MQTTNodeStore.update_telemetry()` extended with `iaq` param and `**extra` kwargs
+   - All new fields flow through to GeoJSON properties via `_parse_mqtt_node()`
+
+5. **MeshtasticCollector** (`src/collectors/meshtastic_collector.py`):
+   - `_parse_mqtt_node()` now passes through air quality (pm25, co2, voc, nox) and health (heart_bpm, spo2, body_temperature) fields to `make_feature()`
+
+6. **MapServer** (`src/map_server.py`):
+   - Creates ConfigDriftDetector, NodeStateTracker, MeshtasticApiProxy on init
+   - Subscribes drift detector to NODE_INFO events via event bus
+   - Subscribes state tracker to NODE_POSITION, NODE_TELEMETRY, NODE_INFO as heartbeats
+   - Starts proxy server alongside HTTP and WebSocket servers
+   - Proper cleanup: proxy.stop() in stop()
+   - 5 new API endpoints:
+     - `GET /api/config-drift` — drift detection summary
+     - `GET /api/config-drift/summary` — drift detection summary
+     - `GET /api/node-states` — all node connectivity states
+     - `GET /api/node-states/summary` — state counts
+     - `GET /api/proxy/stats` — Meshtastic API proxy statistics
+
+### New API Endpoints
+
+| Endpoint | Data | Source |
+|----------|------|--------|
+| `GET /api/config-drift` | Config drift summary | ConfigDriftDetector |
+| `GET /api/config-drift/summary` | Drift counts and recent events | ConfigDriftDetector |
+| `GET /api/node-states` | All node states + summary | NodeStateTracker |
+| `GET /api/node-states/summary` | State counts | NodeStateTracker |
+| `GET /api/proxy/stats` | Proxy uptime, requests, store state | MeshtasticApiProxy |
+
+### Meshtastic API Proxy Endpoints (port 4404)
+
+| Endpoint | Data | Format |
+|----------|------|--------|
+| `GET /api/v1/nodes` | All nodes | meshtastic Python library JSON |
+| `GET /api/v1/nodes/<id>` | Single node | meshtastic JSON |
+| `GET /api/v1/topology` | Mesh topology links | JSON |
+| `GET /api/v1/stats` | Proxy statistics | JSON |
+
+### Test Coverage Added (86 new tests)
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `test_meshtastic_api_proxy.py` | 21 | Formatting, lifecycle, all proxy endpoints, edge cases |
+| `test_config_drift.py` | 25 | Severity levels, multi-field, history, eviction, callbacks |
+| `test_node_state.py` | 25 | State transitions, gap ratio, offline, summary, eviction |
+| `test_health_telemetry.py` | 10 | Air quality, health, IAQ, combined telemetry, None handling |
+| `test_map_server.py` | +5 | New endpoint integration tests |
+
+### Test Results
+- **Before:** 424 passed, 22 skipped
+- **After:** 510 passed (+86 new), 22 skipped, 0 failures, 0 regressions
+
+### Architecture Notes
+- MeshtasticApiProxy runs on port 4404 (adjacent to meshtasticd's 4403)
+- ConfigDriftDetector fed by NODE_INFO events from MQTT subscriber via EventBus
+- NodeStateTracker fed by all node events (position, telemetry, info) as heartbeats
+- All new modules follow existing patterns: thread-safe, bounded memory, graceful degradation
+- Air quality and health telemetry stored in MQTTNodeStore via **extra kwargs (flexible schema)
+- meshtasticd's real API is binary protobuf only — the proxy serves JSON for easier tool integration
+
+### Files Created (7)
+- `src/utils/meshtastic_api_proxy.py` — Meshtastic API proxy server
+- `src/utils/config_drift.py` — Config drift detection
+- `src/utils/node_state.py` — Node intermittent state machine
+- `tests/test_meshtastic_api_proxy.py` — 21 tests
+- `tests/test_config_drift.py` — 25 tests
+- `tests/test_node_state.py` — 25 tests
+- `tests/test_health_telemetry.py` — 10 tests
+
+### Files Modified (6)
+- `src/__init__.py` — Version 0.5.0-beta → 0.6.0-beta
+- `manifest.json` — Version 0.5.0-beta → 0.6.0-beta
+- `src/collectors/mqtt_subscriber.py` — Air quality + health telemetry parsing, IAQ, **extra kwargs
+- `src/collectors/meshtastic_collector.py` — Pass through air quality + health fields
+- `src/map_server.py` — Proxy, drift, state machine integration + 5 new endpoints
+- `tests/test_map_server.py` — 5 new endpoint integration tests
+
+### Session Entropy Watch
+- Session stayed focused and systematic throughout all 4 features
+- No entropy detected — all features implemented, tested, and integrated
+- Clean boundary: all tests green, code compiles, ready for next session
+
+---
+
 ## Session 8: Phase 3 — Node History, Topology GeoJSON, Cross-Process Health
 
 **Date:** 2026-02-08
