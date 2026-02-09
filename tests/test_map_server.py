@@ -265,3 +265,31 @@ class TestMapServerHTTPEndpoints:
     def test_node_history_with_limit(self):
         data = self._get_json("/api/nodes/!test/history?limit=10")
         assert "observations" in data
+
+    # --- Session 10 endpoints ---
+
+    def test_config_drift_endpoint(self):
+        data = self._get_json("/api/config-drift")
+        assert "tracked_nodes" in data
+        assert "total_drifts" in data
+
+    def test_config_drift_summary_endpoint(self):
+        data = self._get_json("/api/config-drift/summary")
+        assert "tracked_nodes" in data
+        assert "nodes_with_drift" in data
+
+    def test_node_states_endpoint(self):
+        data = self._get_json("/api/node-states")
+        assert "states" in data
+        assert "summary" in data
+
+    def test_node_states_summary_endpoint(self):
+        data = self._get_json("/api/node-states/summary")
+        assert "tracked_nodes" in data
+        assert "states" in data
+        assert "total_transitions" in data
+
+    def test_proxy_stats_endpoint(self):
+        data = self._get_json("/api/proxy/stats")
+        # Proxy not started because meshtastic is disabled
+        assert "available" in data or "running" in data
