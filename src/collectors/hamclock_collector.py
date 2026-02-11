@@ -99,39 +99,40 @@ class HamClockCollector(BaseCollector):
     # ==================== Public API ====================
 
     def is_hamclock_available(self) -> bool:
-        """Test if HamClock or OpenHamClock REST API is reachable.
+        """Test if OpenHamClock or HamClock REST API is reachable.
 
-        Tries the configured port first (default 8080, original HamClock),
-        then falls back to OpenHamClock port (default 3000).
+        Tries OpenHamClock port first (default 3000, community successor),
+        then falls back to HamClock legacy port (default 8080).
         Updates _hamclock_api to whichever responds.
         Uses detect_variant() to identify which variant is running.
         """
-        # Try configured port first (HamClock legacy)
-        primary_url = f"http://{self._hamclock_host}:{self._hamclock_port}"
-        raw = self._fetch_text(f"{primary_url}/get_sys.txt")
-        if raw is not None and len(raw) > 0:
-            self._hamclock_api = primary_url
-            self._hamclock_available = True
-            self._detected_variant = detect_variant(raw)
-            self._endpoints = get_endpoint_map(self._detected_variant)
-            return True
-
-        # Try OpenHamClock port (community successor)
+        # Try OpenHamClock port first (community successor, actively developed)
         if self._openhamclock_port != self._hamclock_port:
-            fallback_url = f"http://{self._hamclock_host}:{self._openhamclock_port}"
-            raw = self._fetch_text(f"{fallback_url}/get_sys.txt")
+            openhamclock_url = f"http://{self._hamclock_host}:{self._openhamclock_port}"
+            raw = self._fetch_text(f"{openhamclock_url}/get_sys.txt")
             if raw is not None and len(raw) > 0:
-                self._hamclock_api = fallback_url
+                self._hamclock_api = openhamclock_url
                 self._hamclock_available = True
                 self._detected_variant = detect_variant(raw)
                 self._endpoints = get_endpoint_map(self._detected_variant)
-                logger.info(
-                    "%s detected on port %d (HamClock port %d unavailable)",
-                    self._detected_variant,
-                    self._openhamclock_port,
-                    self._hamclock_port,
-                )
                 return True
+
+        # Fall back to HamClock legacy port
+        legacy_url = f"http://{self._hamclock_host}:{self._hamclock_port}"
+        raw = self._fetch_text(f"{legacy_url}/get_sys.txt")
+        if raw is not None and len(raw) > 0:
+            self._hamclock_api = legacy_url
+            self._hamclock_available = True
+            self._detected_variant = detect_variant(raw)
+            self._endpoints = get_endpoint_map(self._detected_variant)
+            if self._openhamclock_port != self._hamclock_port:
+                logger.info(
+                    "%s detected on legacy port %d (OpenHamClock port %d unavailable)",
+                    self._detected_variant,
+                    self._hamclock_port,
+                    self._openhamclock_port,
+                )
+            return True
 
         self._hamclock_available = False
         self._detected_variant = None

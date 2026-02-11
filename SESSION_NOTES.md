@@ -2,6 +2,114 @@
 
 ---
 
+## Session 12: Health Scoring, Performance Profiling, AREDN Hardening, OpenHamClock Priority
+
+**Date:** 2026-02-11
+**Branch:** `claude/session-management-tasks-tjRE2`
+**Scope:** Five features — per-node health scoring, frontend overlay enhancements, performance profiling, AREDN test hardening, OpenHamClock port priority swap
+**Version:** 0.6.0-beta → 0.7.0-beta
+
+### Context
+
+Session continued from Session 11 (reliability hardening). User specified 5 tasks in priority order. HamClock legacy is no longer in active development — OpenHamClock is the successor.
+
+### Changes Made
+
+**New Modules:**
+
+1. **NodeHealthScorer** (`src/utils/health_scoring.py`, ~340 lines):
+   - Per-node composite health score (0-100) from 5 weighted components:
+     - Battery (0-25): battery level and/or voltage (weighted split if both available)
+     - Signal (0-25): SNR quality and hop distance (70/30 split if both available)
+     - Freshness (0-20): time since last observation vs configurable thresholds
+     - Reliability (0-15): connectivity state from NodeStateTracker (stable/new/intermittent/offline)
+     - Congestion (0-15): channel utilization and TX air time (inverted — lower is better)
+   - Handles sparse data: normalizes score based on available components only
+   - Status labels: excellent (>=80), good (>=60), fair (>=40), poor (>=20), critical (<20)
+   - Thread-safe cache with LRU eviction (max 10,000 nodes)
+   - `score_node()`, `get_node_score()`, `get_all_scores()`, `get_summary()`, `remove_node()`
+
+2. **PerfMonitor** (`src/utils/perf_monitor.py`, ~190 lines):
+   - Collection cycle timing with per-source latency tracking
+   - TimingContext context manager for clean instrumentation
+   - Percentile stats (p50/p90/p99), cache hit ratio, collections/minute
+   - Memory usage tracking (sample counts, tracked sources)
+   - Bounded history (max 100 samples per source, configurable)
+   - Integrated into DataAggregator.collect_all() for automatic instrumentation
+
+**Enhanced Modules:**
+
+3. **Frontend overlay enhancements** (`web/meshforge_maps.html`):
+   - Node Health overlay toggle — color-codes markers by health score (excellent=green, poor=red)
+   - Health badge in node popups showing score and status
+   - VOACAP bands now show SNR dB values alongside reliability percentages
+   - Panel title changed from "HamClock Propagation" to "Propagation"
+   - Source indicator distinguishes "OpenHamClock" vs "HamClock" variant
+   - Fallback message updated: "OpenHamClock unavailable" (was "HamClock unavailable")
+   - CSS classes for health status badges (health-excellent/good/fair/poor/critical)
+   - `rebuildMarkersFromFeatures()` for re-rendering with health colors without re-fetching
+
+4. **OpenHamClock port priority swap** (`src/collectors/hamclock_collector.py`):
+   - Port detection order reversed: OpenHamClock (3000) tried first, legacy (8080) as fallback
+   - Rationale: HamClock legacy is no longer in active development
+   - Log message updated for legacy fallback case
+   - All existing behavior preserved (same-port skip, variant detection, endpoint mapping)
+
+5. **DataAggregator instrumentation** (`src/collectors/aggregator.py`):
+   - collect_all() now wrapped in PerfMonitor timing contexts
+   - Per-source timing with node count and cache-hit detection
+   - Full cycle timing with total node count
+   - `perf_monitor` property exposed for API access
+
+6. **MapServer wiring** (`src/map_server.py`):
+   - 4 new API endpoints: `/api/node-health`, `/api/node-health/summary`, `/api/nodes/<id>/health`, `/api/perf`
+   - NodeHealthScorer initialized in MapServer.__init__()
+   - Health scorer attached to HTTP server for handler access
+   - Eviction cleanup wired (node removed → health score removed)
+
+### Test Coverage Added (132 new tests)
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `test_health_scoring.py` | 66 | All 5 components, composite scoring, normalization, cache, eviction, summary |
+| `test_perf_monitor.py` | 20 | Timing recording, context manager, percentiles, stats, memory usage |
+| `test_aredn_hardening.py` | 46 | Network failures, malformed JSON, cache file handling, coordinates, dedup, LQM edges, port detection |
+
+### Test Results
+- **Before:** 538 passed, 22 skipped (Session 11 baseline)
+- **After:** 670 passed (+132 new), 22 skipped, 0 failures, 0 regressions
+
+### Files Created (4)
+- `src/utils/health_scoring.py` — Per-node health scoring module
+- `src/utils/perf_monitor.py` — Performance monitoring module
+- `tests/test_health_scoring.py` — 66 tests for health scoring
+- `tests/test_perf_monitor.py` — 20 tests for perf monitoring
+- `tests/test_aredn_hardening.py` — 46 tests for AREDN collector hardening
+
+### Files Modified (6)
+- `src/map_server.py` — Health scorer init, 4 new endpoints, eviction cleanup
+- `src/collectors/aggregator.py` — PerfMonitor integration, instrumented collect_all()
+- `src/collectors/hamclock_collector.py` — OpenHamClock port priority (3000 first, 8080 fallback)
+- `web/meshforge_maps.html` — Health overlay, VOACAP SNR, OpenHamClock labels
+- `tests/test_collectors.py` — Updated port order tests for OpenHamClock priority
+- `manifest.json` — Version bump to 0.7.0-beta
+- `src/__init__.py` — Version bump to 0.7.0-beta
+
+### Architecture Notes
+- Health scoring normalizes to 0-100 regardless of available data (avoids penalizing sparse nodes)
+- PerfMonitor uses monotonic clock for timing, wall clock for timestamps
+- Frontend health overlay fetches scores on-demand, not on every refresh
+- AREDN collector _fetch() skips features without truthy ID (unlike aggregator which allows them)
+- OpenHamClock priority swap is a one-line conceptual change but touches test expectations
+
+### Session Entropy Watch
+- Session stayed focused and systematic throughout
+- All 5 tasks completed in priority order without scope creep
+- No entropy detected — clean implementation boundaries per task
+- Zero regressions at every checkpoint (538 → 604 → 624 → 670)
+
+---
+
 ## Session 11: Reliability Hardening — Thread Safety, Input Validation, Resource Cleanup
 
 **Date:** 2026-02-11
