@@ -88,7 +88,7 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
         store = self._get_store()
         proxy = self._get_proxy()
         if proxy:
-            proxy._request_count += 1
+            proxy._inc_request_count()
 
         if not store:
             self._send_json({"nodes": [], "node_count": 0})
@@ -110,7 +110,7 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
         store = self._get_store()
         proxy = self._get_proxy()
         if proxy:
-            proxy._request_count += 1
+            proxy._inc_request_count()
 
         if not store:
             self._send_json({"error": "Store not available"}, 503)
@@ -130,7 +130,7 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
         store = self._get_store()
         proxy = self._get_proxy()
         if proxy:
-            proxy._request_count += 1
+            proxy._inc_request_count()
 
         if not store:
             self._send_json({"links": [], "link_count": 0})
@@ -151,7 +151,7 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
             "proxy_running": True,
             "store_available": store is not None,
             "node_count": store.node_count if store else 0,
-            "request_count": proxy._request_count if proxy else 0,
+            "request_count": proxy.request_count if proxy else 0,
             "uptime_seconds": int(time.time() - proxy._start_time) if proxy else 0,
         }
         self._send_json(stats)
@@ -307,7 +307,18 @@ class MeshtasticApiProxy:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._request_count = 0
+        self._request_count_lock = threading.Lock()
         self._start_time = 0.0
+
+    def _inc_request_count(self) -> None:
+        """Thread-safe request counter increment."""
+        with self._request_count_lock:
+            self._request_count += 1
+
+    @property
+    def request_count(self) -> int:
+        with self._request_count_lock:
+            return self._request_count
 
     @property
     def port(self) -> int:
@@ -324,7 +335,7 @@ class MeshtasticApiProxy:
             "running": self._running,
             "host": self._host,
             "port": self._port if self._running else 0,
-            "request_count": self._request_count,
+            "request_count": self.request_count,
             "uptime_seconds": int(time.time() - self._start_time) if self._running else 0,
             "store_available": self._mqtt_store is not None,
             "node_count": self._mqtt_store.node_count if self._mqtt_store else 0,
@@ -389,5 +400,9 @@ class MeshtasticApiProxy:
         if self._server:
             self._server.shutdown()
             self._server = None
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                logger.warning("Proxy server thread did not exit within 5s")
         self._thread = None
         logger.info("Meshtastic API proxy stopped")

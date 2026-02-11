@@ -145,13 +145,15 @@ class MQTTNodeStore:
 
     def __init__(self, stale_seconds: int = NODE_STALE_THRESHOLD,
                  remove_seconds: int = NODE_REMOVE_THRESHOLD,
-                 max_nodes: int = MAX_NODES):
+                 max_nodes: int = MAX_NODES,
+                 on_node_removed: Optional[Callable[[str], None]] = None):
         self._nodes: Dict[str, Dict[str, Any]] = {}
         self._neighbors: Dict[str, List[Dict[str, Any]]] = {}  # node_id -> [{neighbor_id, snr}]
         self._lock = threading.Lock()
         self._stale_seconds = stale_seconds
         self._remove_seconds = remove_seconds
         self._max_nodes = max_nodes
+        self._on_node_removed = on_node_removed
 
     def update_position(self, node_id: str, lat: float, lon: float,
                         altitude: Optional[int] = None, timestamp: Optional[int] = None) -> None:
@@ -326,7 +328,7 @@ class MQTTNodeStore:
         Returns the number of nodes removed.
         """
         now = int(time.time())
-        removed = 0
+        removed_ids: List[str] = []
         with self._lock:
             stale_ids = [
                 nid for nid, node in self._nodes.items()
@@ -335,10 +337,18 @@ class MQTTNodeStore:
             for nid in stale_ids:
                 del self._nodes[nid]
                 self._neighbors.pop(nid, None)
-                removed += 1
-        if removed:
-            logger.debug("Cleaned up %d stale nodes from MQTT store", removed)
-        return removed
+                removed_ids.append(nid)
+        # Notify dependent modules outside the lock
+        cb = self._on_node_removed
+        if cb and removed_ids:
+            for nid in removed_ids:
+                try:
+                    cb(nid)
+                except Exception as e:
+                    logger.debug("on_node_removed callback error: %s", e)
+        if removed_ids:
+            logger.debug("Cleaned up %d stale nodes from MQTT store", len(removed_ids))
+        return len(removed_ids)
 
     def _evict_oldest_locked(self) -> None:
         """Evict the oldest node to make room. Must be called with lock held."""
@@ -350,6 +360,13 @@ class MQTTNodeStore:
         )
         del self._nodes[oldest_id]
         self._neighbors.pop(oldest_id, None)
+        # Notify dependent modules (drift detector, state tracker) outside lock
+        cb = self._on_node_removed
+        if cb:
+            try:
+                cb(oldest_id)
+            except Exception as e:
+                logger.debug("on_node_removed callback error: %s", e)
 
 
 class MQTTSubscriber:
@@ -450,15 +467,26 @@ class MQTTSubscriber:
         if client:
             try:
                 client.disconnect()
+            except Exception as e:
+                logger.debug("MQTT disconnect error: %s", e)
+            try:
                 # Use loop_stop with a timeout thread to avoid hanging
                 stop_thread = threading.Thread(
                     target=client.loop_stop, daemon=True
                 )
                 stop_thread.start()
                 stop_thread.join(timeout=5)
-            except Exception:
-                pass
+                if stop_thread.is_alive():
+                    logger.warning("MQTT loop_stop did not complete within 5s")
+            except Exception as e:
+                logger.debug("MQTT loop_stop error: %s", e)
+        # Wait for the main subscriber thread to exit
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                logger.warning("MQTT subscriber thread did not exit within 5s")
         self._client = None
+        self._thread = None
         self._connected = False
         logger.info("MQTT subscriber stopped")
 

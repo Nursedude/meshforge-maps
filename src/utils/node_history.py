@@ -62,15 +62,16 @@ class NodeHistoryDB:
 
     def _init_db(self) -> None:
         """Create database and tables if they don't exist."""
+        conn = None
         try:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(
+            conn = sqlite3.connect(
                 str(self._db_path),
                 check_same_thread=False,
             )
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.execute("""
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS observations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     node_id TEXT NOT NULL,
@@ -84,18 +85,24 @@ class NodeHistoryDB:
                     name TEXT
                 )
             """)
-            self._conn.execute("""
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_obs_node_time
                 ON observations (node_id, timestamp)
             """)
-            self._conn.execute("""
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_obs_time
                 ON observations (timestamp)
             """)
-            self._conn.commit()
+            conn.commit()
+            self._conn = conn
             logger.info("Node history DB initialized at %s", self._db_path)
         except Exception as e:
             logger.error("Failed to initialize node history DB: %s", e)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
             self._conn = None
 
     def record_observation(
@@ -390,7 +397,8 @@ class NodeHistoryDB:
                     "SELECT COUNT(*) FROM observations"
                 ).fetchone()
                 return row[0] if row else 0
-            except Exception:
+            except Exception as e:
+                logger.debug("observation_count query failed: %s", e)
                 return 0
 
     @property
@@ -404,7 +412,8 @@ class NodeHistoryDB:
                     "SELECT COUNT(DISTINCT node_id) FROM observations"
                 ).fetchone()
                 return row[0] if row else 0
-            except Exception:
+            except Exception as e:
+                logger.debug("node_count query failed: %s", e)
                 return 0
 
     def close(self) -> None:
@@ -412,7 +421,7 @@ class NodeHistoryDB:
         if self._conn:
             try:
                 self._conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error closing node history DB: %s", e)
             self._conn = None
             logger.debug("Node history DB closed")

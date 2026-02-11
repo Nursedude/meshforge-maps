@@ -13,11 +13,12 @@ CORS support for local development.
 import json
 import logging
 import os
+import re
 import threading
 import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
@@ -32,6 +33,27 @@ from .utils.shared_health_state import SharedHealthStateReader
 from .utils.websocket_server import MapWebSocketServer
 
 logger = logging.getLogger(__name__)
+
+# Node IDs must be hex strings, optionally prefixed with '!'
+# e.g. "!a1b2c3d4" or "a1b2c3d4" — up to 16 hex chars
+_NODE_ID_RE = re.compile(r"^!?[0-9a-fA-F]{1,16}$")
+
+
+def _safe_query_param(query: Dict[str, List[str]], key: str,
+                      default: Optional[str] = None) -> Optional[str]:
+    """Safely extract a single query parameter value.
+
+    Returns the first value for the key, or default if missing/empty.
+    """
+    values = query.get(key)
+    if not values:
+        return default
+    return values[0] if values[0] else default
+
+
+def _validate_node_id(node_id: str) -> bool:
+    """Validate that a node ID looks like a valid Meshtastic hex ID."""
+    return bool(_NODE_ID_RE.match(node_id))
 
 
 class MapRequestHandler(SimpleHTTPRequestHandler):
@@ -101,13 +123,19 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 parts = path.split("/")
                 if len(parts) >= 4:
                     node_id = parts[3]
-                    self._serve_trajectory(node_id, query)
+                    if not _validate_node_id(node_id):
+                        self._send_json({"error": "Invalid node ID format"}, 400)
+                    else:
+                        self._serve_trajectory(node_id, query)
             elif path.startswith("/api/nodes/") and path.endswith("/history"):
                 # /api/nodes/<node_id>/history
                 parts = path.split("/")
                 if len(parts) >= 4:
                     node_id = parts[3]
-                    self._serve_node_history(node_id, query)
+                    if not _validate_node_id(node_id):
+                        self._send_json({"error": "Invalid node ID format"}, 400)
+                    else:
+                        self._serve_node_history(node_id, query)
             elif path.startswith("/api/snapshot/"):
                 # /api/snapshot/<timestamp>
                 parts = path.split("/")
@@ -264,14 +292,14 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": "Node history not available"}, 503)
             return
 
-        since = query.get("since", [None])[0]
-        until = query.get("until", [None])[0]
+        since_str = _safe_query_param(query, "since")
+        until_str = _safe_query_param(query, "until")
         try:
-            since = int(since) if since else None
-            until = int(until) if until else None
+            since = int(since_str) if since_str else None
+            until = int(until_str) if until_str else None
         except (ValueError, TypeError):
-            since = None
-            until = None
+            self._send_json({"error": "Invalid since/until parameter"}, 400)
+            return
 
         data = history.get_trajectory_geojson(node_id, since=since, until=until)
         self._send_json(data)
@@ -283,14 +311,15 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": "Node history not available"}, 503)
             return
 
-        since = query.get("since", [None])[0]
-        limit_str = query.get("limit", ["100"])[0]
+        since_str = _safe_query_param(query, "since")
+        limit_str = _safe_query_param(query, "limit", "100")
         try:
-            since = int(since) if since else None
+            since = int(since_str) if since_str else None
             limit = int(limit_str) if limit_str else 100
+            limit = max(1, min(limit, 10000))  # Clamp to reasonable range
         except (ValueError, TypeError):
-            since = None
-            limit = 100
+            self._send_json({"error": "Invalid since/limit parameter"}, 400)
+            return
 
         observations = history.get_node_history(node_id, since=since, limit=limit)
         self._send_json({
@@ -588,6 +617,12 @@ class MapServer:
         # Node connectivity state machine
         self._node_state = NodeStateTracker()
 
+        # Wire node eviction cleanup to drift detector and state tracker
+        if self._aggregator._mqtt_subscriber:
+            self._aggregator._mqtt_subscriber.store._on_node_removed = (
+                self._handle_node_removed
+            )
+
         # Meshtastic API proxy (serves meshtasticd-compatible JSON endpoints)
         self._proxy: Optional[MeshtasticApiProxy] = None
         if config.get("enable_meshtastic", True):
@@ -688,6 +723,11 @@ class MapServer:
             **{k: v for k, v in data.items() if v is not None},
         )
 
+    def _handle_node_removed(self, node_id: str) -> None:
+        """Clean up drift and state tracking when a node is evicted."""
+        self._config_drift.remove_node(node_id)
+        self._node_state.remove_node(node_id)
+
     def _handle_heartbeat(self, event: Event) -> None:
         """Feed any node event as a heartbeat to the state tracker."""
         if not isinstance(event, NodeEvent):
@@ -771,6 +811,12 @@ class MapServer:
         if self._server:
             self._server.shutdown()
             logger.info("MeshForge Maps server stopped")
+        # Wait for the HTTP server thread to fully exit before releasing
+        # the port, preventing "Address already in use" on rapid restart
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                logger.warning("HTTP server thread did not exit within 5s")
         self._aggregator.shutdown()
         if self._node_history:
             self._node_history.close()

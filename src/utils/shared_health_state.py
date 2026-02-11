@@ -210,7 +210,7 @@ class SharedHealthStateReader:
         if self._conn:
             try:
                 self._conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error closing shared health DB: %s", e)
             self._conn = None
             self._available = False

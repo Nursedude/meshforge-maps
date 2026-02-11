@@ -223,6 +223,12 @@ class ConfigDriftDetector:
     def total_drifts(self) -> int:
         return self._total_drifts
 
+    def remove_node(self, node_id: str) -> None:
+        """Remove all tracking data for a node (e.g., after eviction)."""
+        with self._lock:
+            self._snapshots.pop(node_id, None)
+            self._drift_history.pop(node_id, None)
+
     def _evict_oldest_locked(self) -> None:
         """Evict the node with the oldest last_seen. Must hold lock."""
         if not self._snapshots:
