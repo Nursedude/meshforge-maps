@@ -26,6 +26,7 @@ from .collectors.aggregator import DataAggregator
 from .utils.config import NETWORK_COLORS, TILE_PROVIDERS, MapsConfig
 from .utils.config_drift import ConfigDriftDetector
 from .utils.event_bus import Event, EventBus, EventType, NodeEvent
+from .utils.health_scoring import NodeHealthScorer
 from .utils.meshtastic_api_proxy import MeshtasticApiProxy
 from .utils.node_history import NodeHistoryDB
 from .utils.node_state import NodeState, NodeStateTracker
@@ -85,6 +86,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     def _get_node_state(self) -> Optional[NodeStateTracker]:
         return getattr(self.server, "_mf_node_state", None)
 
+    def _get_health_scorer(self) -> Optional[NodeHealthScorer]:
+        return getattr(self.server, "_mf_health_scorer", None)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
@@ -112,6 +116,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "/api/node-states": self._serve_node_states,
             "/api/node-states/summary": self._serve_node_states_summary,
             "/api/proxy/stats": self._serve_proxy_stats,
+            "/api/node-health": self._serve_all_node_health,
+            "/api/node-health/summary": self._serve_node_health_summary,
+            "/api/perf": self._serve_perf_stats,
         }
 
         handler = routes.get(path)
@@ -127,6 +134,15 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
                         self._serve_trajectory(node_id, query)
+            elif path.startswith("/api/nodes/") and path.endswith("/health"):
+                # /api/nodes/<node_id>/health
+                parts = path.split("/")
+                if len(parts) >= 4:
+                    node_id = parts[3]
+                    if not _validate_node_id(node_id):
+                        self._send_json({"error": "Invalid node ID format"}, 400)
+                    else:
+                        self._serve_node_health(node_id)
             elif path.startswith("/api/nodes/") and path.endswith("/history"):
                 # /api/nodes/<node_id>/history
                 parts = path.split("/")
@@ -492,6 +508,92 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
         self._send_json(proxy.stats)
 
+    def _serve_node_health(self, node_id: str) -> None:
+        """Serve health score for a single node."""
+        scorer = self._get_health_scorer()
+        if not scorer:
+            self._send_json({"error": "Health scoring not available"}, 503)
+            return
+
+        # Try cached score first
+        cached = scorer.get_node_score(node_id)
+        if cached:
+            self._send_json(cached)
+            return
+
+        # Score on demand from current GeoJSON data
+        aggregator = self._get_aggregator()
+        if not aggregator:
+            self._send_json({"error": "No data available"}, 503)
+            return
+
+        data = aggregator.collect_all()
+        features = data.get("features", [])
+        for f in features:
+            props = f.get("properties", {})
+            if props.get("id") == node_id:
+                tracker = self._get_node_state()
+                conn_state = None
+                if tracker:
+                    state = tracker.get_node_state(node_id)
+                    conn_state = state.value if state else None
+                result = scorer.score_node(node_id, props, conn_state)
+                self._send_json(result.to_dict())
+                return
+
+        self._send_json({"error": "Node not found"}, 404)
+
+    def _serve_all_node_health(self) -> None:
+        """Serve health scores for all nodes."""
+        scorer = self._get_health_scorer()
+        if not scorer:
+            self._send_json({"error": "Health scoring not available"}, 503)
+            return
+
+        # Score all current nodes
+        aggregator = self._get_aggregator()
+        if not aggregator:
+            self._send_json({"error": "No data available"}, 503)
+            return
+
+        data = aggregator.collect_all()
+        features = data.get("features", [])
+        tracker = self._get_node_state()
+
+        results = []
+        for f in features:
+            props = f.get("properties", {})
+            node_id = props.get("id")
+            if not node_id:
+                continue
+            conn_state = None
+            if tracker:
+                state = tracker.get_node_state(node_id)
+                conn_state = state.value if state else None
+            result = scorer.score_node(node_id, props, conn_state)
+            results.append(result.to_dict())
+
+        self._send_json({
+            "nodes": results,
+            "count": len(results),
+        })
+
+    def _serve_node_health_summary(self) -> None:
+        """Serve health score summary statistics."""
+        scorer = self._get_health_scorer()
+        if not scorer:
+            self._send_json({"error": "Health scoring not available"}, 503)
+            return
+        self._send_json(scorer.get_summary())
+
+    def _serve_perf_stats(self) -> None:
+        """Serve performance profiling statistics."""
+        aggregator = self._get_aggregator()
+        if not aggregator:
+            self._send_json({"error": "Aggregator not available"}, 503)
+            return
+        self._send_json(aggregator.perf_monitor.get_stats())
+
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
         aggregator = self._get_aggregator()
@@ -617,6 +719,9 @@ class MapServer:
         # Node connectivity state machine
         self._node_state = NodeStateTracker()
 
+        # Per-node health scoring
+        self._health_scorer = NodeHealthScorer()
+
         # Wire node eviction cleanup to drift detector and state tracker
         if self._aggregator._mqtt_subscriber:
             self._aggregator._mqtt_subscriber.store._on_node_removed = (
@@ -657,6 +762,7 @@ class MapServer:
                 self._server._mf_shared_health = self._shared_health  # type: ignore[attr-defined]
                 self._server._mf_config_drift = self._config_drift  # type: ignore[attr-defined]
                 self._server._mf_node_state = self._node_state  # type: ignore[attr-defined]
+                self._server._mf_health_scorer = self._health_scorer  # type: ignore[attr-defined]
                 if self._proxy:
                     self._server._mf_proxy = self._proxy  # type: ignore[attr-defined]
 
@@ -724,9 +830,10 @@ class MapServer:
         )
 
     def _handle_node_removed(self, node_id: str) -> None:
-        """Clean up drift and state tracking when a node is evicted."""
+        """Clean up drift, state, and health tracking when a node is evicted."""
         self._config_drift.remove_node(node_id)
         self._node_state.remove_node(node_id)
+        self._health_scorer.remove_node(node_id)
 
     def _handle_heartbeat(self, event: Event) -> None:
         """Feed any node event as a heartbeat to the state tracker."""
