@@ -17,6 +17,7 @@ from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
 from .reticulum_collector import ReticulumCollector
 from ..utils.circuit_breaker import CircuitBreakerRegistry
 from ..utils.event_bus import EventBus
+from ..utils.perf_monitor import PerfMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,9 @@ class DataAggregator:
 
         # Event bus for decoupled real-time communication
         self._event_bus = EventBus()
+
+        # Performance monitor for collection timing
+        self._perf_monitor = PerfMonitor()
 
         # Circuit breaker registry for per-collector failure protection
         self._circuit_breaker_registry = CircuitBreakerRegistry(
@@ -112,31 +116,41 @@ class DataAggregator:
         source_counts: Dict[str, int] = {}
         overlay_data: Dict[str, Any] = {}
 
-        for name, collector in self._collectors.items():
-            try:
-                fc = collector.collect()
-                features = fc.get("features", [])
-                source_counts[name] = len(features)
+        with self._perf_monitor.time_cycle() as cycle_ctx:
+            for name, collector in self._collectors.items():
+                try:
+                    with self._perf_monitor.time_collection(name) as src_ctx:
+                        fc = collector.collect()
+                        features = fc.get("features", [])
+                        source_counts[name] = len(features)
+                        src_ctx.node_count = len(features)
+                        # Detect cache hit from collector's cache state
+                        src_ctx.from_cache = (
+                            collector._cache is not None
+                            and fc is collector._cache
+                        )
 
-                for feature in features:
-                    if feature is None:
-                        continue
-                    fid = feature.get("properties", {}).get("id")
-                    if fid and fid not in seen_ids:
-                        seen_ids.add(fid)
-                        all_features.append(feature)
-                    elif not fid:
-                        all_features.append(feature)
+                    for feature in features:
+                        if feature is None:
+                            continue
+                        fid = feature.get("properties", {}).get("id")
+                        if fid and fid not in seen_ids:
+                            seen_ids.add(fid)
+                            all_features.append(feature)
+                        elif not fid:
+                            all_features.append(feature)
 
-                # Capture overlay data (space weather, terminator, etc.)
-                fc_props = fc.get("properties", {})
-                for key in ("space_weather", "solar_terminator", "hamclock"):
-                    if key in fc_props:
-                        overlay_data[key] = fc_props[key]
+                    # Capture overlay data (space weather, terminator, etc.)
+                    fc_props = fc.get("properties", {})
+                    for key in ("space_weather", "solar_terminator", "hamclock"):
+                        if key in fc_props:
+                            overlay_data[key] = fc_props[key]
 
-            except Exception as e:
-                logger.error("Collector %s failed: %s", name, e)
-                source_counts[name] = 0
+                except Exception as e:
+                    logger.error("Collector %s failed: %s", name, e)
+                    source_counts[name] = 0
+
+            cycle_ctx.node_count = len(all_features)
 
         # Cache overlay data so /api/overlay doesn't trigger a full re-collect
         self._cached_overlay = overlay_data
@@ -264,6 +278,10 @@ class DataAggregator:
     @property
     def circuit_breaker_registry(self) -> CircuitBreakerRegistry:
         return self._circuit_breaker_registry
+
+    @property
+    def perf_monitor(self) -> PerfMonitor:
+        return self._perf_monitor
 
     def get_circuit_breaker_states(self) -> Dict[str, Any]:
         """Return circuit breaker stats for all registered sources."""

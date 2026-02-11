@@ -240,6 +240,31 @@
         .voacap-fill-poor { background: #ef5350; }
         .voacap-fill-closed { background: #546e7a; }
 
+        .voacap-snr-text {
+            width: 42px;
+            text-align: left;
+            flex-shrink: 0;
+            font-size: 10px;
+            color: #546e7a;
+        }
+
+        /* Node health badge in popup */
+        .health-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .health-excellent { background: rgba(102, 187, 106, 0.2); color: #66bb6a; }
+        .health-good { background: rgba(129, 199, 132, 0.2); color: #81c784; }
+        .health-fair { background: rgba(255, 167, 38, 0.2); color: #ffa726; }
+        .health-poor { background: rgba(239, 83, 80, 0.2); color: #ef5350; }
+        .health-critical { background: rgba(239, 83, 80, 0.3); color: #e53935; }
+        .health-unknown { background: rgba(120, 144, 156, 0.2); color: #78909c; }
+
         /* DE/DX station info */
         .station-info {
             display: flex;
@@ -654,6 +679,11 @@
             <span class="layer-color" style="background:#ffc107"></span>
             <span class="layer-label">Node History</span>
         </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="overlayHealth" onchange="toggleHealthOverlay()">
+            <span class="layer-color" style="background:#e91e63"></span>
+            <span class="layer-label">Node Health</span>
+        </label>
     </div>
 
     <div class="panel-section" id="weatherSection">
@@ -682,7 +712,7 @@
     </div>
 
     <div class="panel-section" id="hamclockSection" style="display:none">
-        <div class="panel-section-title">HamClock Propagation</div>
+        <div class="panel-section-title">Propagation</div>
         <div class="station-info" id="stationInfo" style="display:none">
             <div class="station-box">
                 <div class="station-label">DE (Home)</div>
@@ -821,6 +851,8 @@
     let wsReconnectDelay = 2000; // Current reconnect delay (exponential backoff)
     let trajectoryLayers = {};   // Active trajectory polylines keyed by node_id
     let historyPanelOpen = false;
+    let healthOverlayActive = false;  // Whether health color-coding is enabled
+    let nodeHealthScores = {};        // Cached {node_id: {score, status}} from API
 
     // Per-network layer groups (for toggle visibility)
     const networkLayers = {
@@ -1170,9 +1202,17 @@
             } catch (e) { /* ignore parse errors */ }
         }
 
+        // Health score badge (if available)
+        let healthBadge = '';
+        const hs = nodeHealthScores[props.id];
+        if (hs) {
+            healthBadge = `<div class="popup-row"><span class="popup-key">Health</span><span class="popup-val"><span class="health-badge health-${hs.status}">${hs.score} ${hs.status}</span></span></div>`;
+        }
+
         return `
             <div class="popup-title" style="color:${color}">${esc(props.name || props.id || 'Unknown')}</div>
             <div class="popup-network" style="color:${color}">${esc(props.network || '')} <span style="color:${onlineColor}">${onlineStr}</span></div>
+            ${healthBadge}
             ${rows.join('')}
             ${lastSeenStr}
             <div class="popup-row" style="margin-top:4px;font-size:10px;color:#546e7a">
@@ -1330,10 +1370,11 @@
         // Source indicator
         var srcEl = document.getElementById('hamclockSource');
         if (data.available) {
-            srcEl.textContent = 'Source: HamClock API (' + esc(data.host) + ':' + data.port + ')';
+            var srcName = (data.source && data.source.indexOf('OpenHamClock') >= 0) ? 'OpenHamClock' : 'HamClock';
+            srcEl.textContent = 'Source: ' + srcName + ' API (' + esc(data.host) + ':' + data.port + ')';
             srcEl.className = 'hamclock-source hamclock-source-active';
         } else {
-            srcEl.textContent = 'Source: NOAA SWPC (HamClock unavailable)';
+            srcEl.textContent = 'Source: NOAA SWPC (OpenHamClock unavailable)';
             srcEl.className = 'hamclock-source hamclock-source-fallback';
         }
 
@@ -1365,10 +1406,12 @@
                 var info = bands[band];
                 var rel = info.reliability || 0;
                 var status = info.status || 'closed';
+                var snrStr = (info.snr != null) ? info.snr + 'dB' : '';
                 html += '<div class="voacap-band-row">' +
                     '<span class="voacap-band-label">' + esc(band) + '</span>' +
                     '<div class="voacap-bar-bg"><div class="voacap-bar-fill voacap-fill-' + status + '" style="width:' + rel + '%"></div></div>' +
                     '<span class="voacap-bar-text">' + rel + '%</span>' +
+                    '<span class="voacap-snr-text">' + snrStr + '</span>' +
                     '</div>';
             }
             if (data.voacap.best_band) {
@@ -1460,6 +1503,112 @@
             weight: 1.5,
             interactive: false,
         }).addTo(map);
+    }
+
+    // =========================================================================
+    // Node Health Overlay
+    // =========================================================================
+
+    const HEALTH_COLORS = {
+        excellent: '#66bb6a',
+        good:      '#81c784',
+        fair:      '#ffa726',
+        poor:      '#ef5350',
+        critical:  '#e53935',
+        unknown:   '#78909c',
+    };
+
+    async function toggleHealthOverlay() {
+        healthOverlayActive = document.getElementById('overlayHealth').checked;
+        if (healthOverlayActive) {
+            await loadNodeHealthData();
+        }
+        // Re-render markers with health coloring
+        rebuildMarkersFromFeatures();
+    }
+
+    async function loadNodeHealthData() {
+        try {
+            var resp = await fetch(API_BASE + '/api/node-health');
+            if (!resp.ok) return;
+            var data = await resp.json();
+            nodeHealthScores = {};
+            if (data.nodes) {
+                for (var i = 0; i < data.nodes.length; i++) {
+                    var n = data.nodes[i];
+                    nodeHealthScores[n.node_id] = { score: n.score, status: n.status };
+                }
+            }
+        } catch (e) {
+            console.debug('Node health data unavailable:', e);
+        }
+    }
+
+    function getHealthColor(nodeId) {
+        var hs = nodeHealthScores[nodeId];
+        if (!hs) return null;
+        return HEALTH_COLORS[hs.status] || HEALTH_COLORS.unknown;
+    }
+
+    function rebuildMarkersFromFeatures() {
+        // Re-process stored features with current health overlay state
+        clusterGroup.clearLayers();
+        directGroup.clearLayers();
+
+        const counts = { meshtastic: 0, reticulum: 0, aredn: 0 };
+        networkLayers.meshtastic = [];
+        networkLayers.reticulum = [];
+        networkLayers.aredn = [];
+
+        for (const feature of allFeatures) {
+            const props = feature.properties || {};
+            const coords = feature.geometry?.coordinates;
+            if (!coords || coords.length < 2) continue;
+
+            const lat = coords[1];
+            const lon = coords[0];
+            const network = props.network || 'unknown';
+
+            // Determine color: health overlay or network color
+            let color;
+            if (healthOverlayActive) {
+                color = getHealthColor(props.id) || '#78909c';
+            } else {
+                color = NETWORK_COLORS[network] || '#78909c';
+            }
+
+            const isStale = props.is_online === false;
+            const marker = L.circleMarker([lat, lon], {
+                radius: isStale ? 5 : 7,
+                fillColor: color,
+                color: isStale ? '#546e7a' : color,
+                weight: isStale ? 1 : 2,
+                opacity: isStale ? 0.4 : 1.0,
+                fillOpacity: isStale ? 0.2 : 0.7,
+            });
+
+            marker.bindPopup(buildPopup(props, healthOverlayActive ? color : (NETWORK_COLORS[network] || '#78909c')));
+
+            if (counts.hasOwnProperty(network)) {
+                counts[network]++;
+                networkLayers[network].push(marker);
+            }
+
+            if (networkVisible[network] !== false) {
+                if (useClustering) {
+                    clusterGroup.addLayer(marker);
+                } else {
+                    directGroup.addLayer(marker);
+                }
+            }
+        }
+
+        document.getElementById('countMeshtastic').textContent = counts.meshtastic;
+        document.getElementById('countReticulum').textContent = counts.reticulum;
+        document.getElementById('countAredn').textContent = counts.aredn;
+        document.getElementById('statMeshtastic').textContent = counts.meshtastic;
+        document.getElementById('statReticulum').textContent = counts.reticulum;
+        document.getElementById('statAredn').textContent = counts.aredn;
     }
 
     // =========================================================================
