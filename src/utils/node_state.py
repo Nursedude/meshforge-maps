@@ -275,6 +275,11 @@ class NodeStateTracker:
     def total_transitions(self) -> int:
         return self._total_transitions
 
+    def remove_node(self, node_id: str) -> None:
+        """Remove all tracking data for a node (e.g., after eviction)."""
+        with self._lock:
+            self._nodes.pop(node_id, None)
+
     def _classify(self, entry: NodeStateEntry) -> NodeState:
         """Classify a node's current state based on heartbeat pattern."""
         # Need at least 3 heartbeats to classify as stable/intermittent

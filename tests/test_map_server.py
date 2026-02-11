@@ -230,13 +230,13 @@ class TestMapServerHTTPEndpoints:
         assert "link_count" in data["properties"]
 
     def test_trajectory_endpoint_empty(self):
-        data = self._get_json("/api/nodes/!nonexistent/trajectory")
+        data = self._get_json("/api/nodes/!deadbeef/trajectory")
         assert data["type"] == "FeatureCollection"
         assert data["features"] == []
 
     def test_node_history_endpoint_empty(self):
-        data = self._get_json("/api/nodes/!nonexistent/history")
-        assert data["node_id"] == "!nonexistent"
+        data = self._get_json("/api/nodes/!deadbeef/history")
+        assert data["node_id"] == "!deadbeef"
         assert data["observations"] == []
         assert data["count"] == 0
 
@@ -259,11 +259,11 @@ class TestMapServerHTTPEndpoints:
         assert isinstance(data["available"], bool)
 
     def test_trajectory_with_query_params(self):
-        data = self._get_json("/api/nodes/!test/trajectory?since=1000&until=2000")
+        data = self._get_json("/api/nodes/!a1b2c3d4/trajectory?since=1000&until=2000")
         assert data["type"] == "FeatureCollection"
 
     def test_node_history_with_limit(self):
-        data = self._get_json("/api/nodes/!test/history?limit=10")
+        data = self._get_json("/api/nodes/!a1b2c3d4/history?limit=10")
         assert "observations" in data
 
     # --- Session 10 endpoints ---

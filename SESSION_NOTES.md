@@ -2,6 +2,117 @@
 
 ---
 
+## Session 11: Reliability Hardening — Thread Safety, Input Validation, Resource Cleanup
+
+**Date:** 2026-02-11
+**Branch:** `claude/meshforge-reliability-features-TULsN`
+**Scope:** Comprehensive reliability audit and fixes — thread safety, resource leaks, input validation, shutdown lifecycle, eviction cleanup
+**Version:** 0.6.0-beta (no version bump — fixes only, no new features)
+
+### Context
+
+Full codebase audit identified 34 issues across severity levels (2 critical, 5 high, 13 medium, 14 low). This session addressed all critical and high severity issues plus key medium-severity items.
+
+### Changes Made
+
+**Critical Fixes:**
+
+1. **Proxy request counter race condition** (`src/utils/meshtastic_api_proxy.py`):
+   - `_request_count` was incremented without locks from concurrent HTTP handler threads
+   - Added `_request_count_lock`, `_inc_request_count()` method, and `request_count` property
+   - All 4 handler methods now use thread-safe increment
+   - `stats` property uses thread-safe accessor
+
+2. **Node history DB connection leak** (`src/utils/node_history.py`):
+   - `_init_db()` opened a sqlite3 connection then set `self._conn = None` on failure without closing it
+   - Refactored to use local `conn` variable; if schema creation fails, `conn.close()` is called before setting `self._conn = None`
+
+**High Severity Fixes:**
+
+3. **Node ID input validation** (`src/map_server.py`):
+   - Added `_NODE_ID_RE` regex: `^!?[0-9a-fA-F]{1,16}$`
+   - Added `_validate_node_id()` function
+   - `/api/nodes/<id>/trajectory` and `/api/nodes/<id>/history` now return 400 for invalid IDs
+   - Prevents injection via URL path parameters
+
+4. **Safe query parameter extraction** (`src/map_server.py`):
+   - Added `_safe_query_param(query, key, default)` helper
+   - Handles missing keys, empty lists, empty string values safely
+   - `_serve_trajectory()` and `_serve_node_history()` now use it
+   - Invalid `since`/`until`/`limit` params return 400 instead of silently defaulting
+   - `limit` parameter clamped to 1-10000 range
+
+5. **MQTT subscriber thread leak on stop** (`src/collectors/mqtt_subscriber.py`):
+   - `stop()` now joins the main subscriber thread with 5s timeout
+   - Logs warning if thread doesn't exit
+   - `disconnect()` and `loop_stop()` exceptions are now logged at debug level instead of silently swallowed
+
+6. **WebSocket broadcast/history race condition** (`src/utils/websocket_server.py`):
+   - `broadcast()` now holds the lock across both history append AND `call_soon_threadsafe()` scheduling
+   - Prevents new clients from receiving duplicate messages
+   - Added `RuntimeError` catch for event loop closed between check and call
+   - `shutdown()` now catches `RuntimeError` from `loop.is_running()` race
+
+**Medium Severity Fixes:**
+
+7. **MapServer thread join on stop** (`src/map_server.py`):
+   - `stop()` now joins the HTTP server thread with 5s timeout before releasing the port
+   - Prevents "Address already in use" on rapid restart
+
+8. **Proxy server thread join** (`src/utils/meshtastic_api_proxy.py`):
+   - `stop()` now joins the proxy server thread with 5s timeout
+
+9. **Node eviction cleanup propagation**:
+   - `ConfigDriftDetector.remove_node(node_id)` — clears snapshot and drift history
+   - `NodeStateTracker.remove_node(node_id)` — clears state entry
+   - `MQTTNodeStore` now accepts `on_node_removed` callback
+   - Both `_evict_oldest_locked()` and `cleanup_stale_nodes()` invoke the callback
+   - `MapServer.__init__()` wires `_handle_node_removed()` to propagate eviction
+
+10. **Bare except:pass replaced with logged exceptions** (6 locations):
+    - `connection_manager.py` — lock release RuntimeError
+    - `shared_health_state.py` — DB close
+    - `node_history.py` — DB close, observation_count, node_count properties
+
+### Test Coverage Added (28 new tests)
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `test_reliability_fixes.py` | 28 | Proxy thread safety, DB leak, validation, query params, MQTT stop, WS broadcast, MapServer stop, eviction cleanup |
+
+### Test Results
+- **Before:** 510 passed, 22 skipped
+- **After:** 538 passed (+28 new), 22 skipped, 0 failures, 0 regressions
+
+### Files Created (1)
+- `tests/test_reliability_fixes.py` — 28 tests for all reliability fixes
+
+### Files Modified (10)
+- `src/utils/meshtastic_api_proxy.py` — Thread-safe request counter, thread join on stop
+- `src/utils/node_history.py` — Connection leak fix, logged exceptions
+- `src/utils/websocket_server.py` — Broadcast atomicity, shutdown race fix
+- `src/utils/event_bus.py` — (reviewed, stats counting confirmed correct)
+- `src/utils/config_drift.py` — `remove_node()` method
+- `src/utils/node_state.py` — `remove_node()` method
+- `src/utils/connection_manager.py` — Logged debug on lock release
+- `src/utils/shared_health_state.py` — Logged debug on DB close
+- `src/collectors/mqtt_subscriber.py` — Thread join, eviction callback
+- `src/map_server.py` — Input validation, safe params, thread join, eviction wiring
+- `tests/test_map_server.py` — Updated test node IDs to valid hex format
+
+### Architecture Notes
+- All thread join operations use 5-second timeout (consistent pattern)
+- Node ID validation is hex-only (`!?[0-9a-fA-F]{1,16}`), matching Meshtastic format
+- Eviction cleanup is callback-based (no event bus overhead for internal cleanup)
+- Query parameter validation returns 400 errors (breaking change vs silent fallback, but correct)
+
+### Session Entropy Watch
+- Session stayed focused and systematic throughout
+- No entropy detected — all fixes mapped to audit findings
+- Clean boundary: all tests green, no new features, reliability-only changes
+
+---
+
 ## Session 10: Meshtastic API Proxy, Health Telemetry, Config Drift, Node State Machine
 
 **Date:** 2026-02-09
