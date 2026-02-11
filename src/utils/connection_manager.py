@@ -109,7 +109,7 @@ class ConnectionManager:
         try:
             self._lock.release()
         except RuntimeError:
-            pass  # Already released
+            logger.debug("Connection lock already released for %s:%d", self._host, self._port)
         logger.debug(
             "Connection lock released by '%s' for %s:%d",
             holder or "unknown", self._host, self._port,

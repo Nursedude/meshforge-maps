@@ -90,10 +90,17 @@ class MapWebSocketServer:
 
     def shutdown(self) -> None:
         """Stop the server and close all connections."""
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        loop = self._loop
+        if loop:
+            try:
+                if loop.is_running():
+                    loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass  # Loop already closed
         if self._thread:
             self._thread.join(timeout=3.0)
+            if self._thread.is_alive():
+                logger.warning("WebSocket server thread did not exit within 3s")
             self._thread = None
         self._loop = None
         self._server = None
@@ -105,6 +112,9 @@ class MapWebSocketServer:
 
         Thread-safe. Can be called from any thread (MQTT callback, etc.).
         Messages are also added to the history buffer for new clients.
+        The lock covers both history append and broadcast scheduling to
+        prevent a new client from receiving a duplicate message if it
+        connects between the two operations.
         """
         if not self._loop or not self._loop.is_running():
             return
@@ -113,12 +123,16 @@ class MapWebSocketServer:
 
         with self._lock:
             self._history.append(text)
-
-        # Schedule broadcast on the event loop thread
-        self._loop.call_soon_threadsafe(
-            self._loop.create_task,
-            self._broadcast_async(text),
-        )
+            # Schedule broadcast while still holding the lock so a newly
+            # connecting client sees either history OR broadcast, not both
+            try:
+                self._loop.call_soon_threadsafe(
+                    self._loop.create_task,
+                    self._broadcast_async(text),
+                )
+            except RuntimeError:
+                # Event loop closed between the check and the call
+                pass
 
     @property
     def client_count(self) -> int:
