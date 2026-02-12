@@ -2,6 +2,137 @@
 
 ---
 
+## Session 20: Analytics Frontend, CSV/JSON Export, TUI Search & Event Filtering
+
+**Date:** 2026-02-12
+**Branch:** `claude/session-management-tasks-alAbk`
+**Scope:** Four features: analytics dashboard, data export, TUI search/filter, events pause/filter
+**Version:** 0.7.0-beta (no version bump)
+
+### Summary
+
+Added browser-based analytics dashboard with SVG charts, server-side CSV/JSON export
+endpoints, TUI-wide search/filter with `/` key, and Events tab pause/resume with event
+type filtering. Zero new dependencies. 27 new tests (885 total).
+
+### What Was Built
+
+#### 1. Analytics Frontend (Browser)
+- New "Analytics" toggle in control panel Overlays section
+- Collapsible analytics panel (bottom-left) with 4 tabs:
+  - **Growth**: Network growth sparkline (SVG polyline + area fill), summary stats
+    (current nodes, peak nodes, total observations), time axis labels
+  - **Activity**: Activity heatmap grid (24 cells, intensity-colored), bar chart
+    (SVG bars by hour), peak hour and average stats
+  - **Ranking**: Node ranking table with columns: rank, node ID, network,
+    observation count, active time
+  - **Alert Trends**: Stacked bar chart (critical/warning/info), severity summary
+    stats, total alert count
+- All charts use inline SVG (no chart library dependency)
+- Client-side JSON/CSV export buttons per tab via Blob download
+- Auto-hides history panel when analytics opens (same screen position)
+
+#### 2. CSV/JSON Export Endpoints (Server)
+- 5 new export routes:
+  - `GET /api/export/nodes` — tracked nodes CSV (or JSON with `?format=json`)
+  - `GET /api/export/alerts` — alert history CSV (or JSON)
+  - `GET /api/export/analytics/growth` — network growth CSV
+  - `GET /api/export/analytics/activity` — activity heatmap CSV
+  - `GET /api/export/analytics/ranking` — node ranking CSV
+- `_send_csv()` helper method: proper Content-Type, Content-Disposition headers
+- CSV uses stdlib `csv.writer` for correct escaping
+- Limit parameter support with sensible defaults (5000 nodes, 500 alerts)
+- CORS headers on CSV responses
+
+#### 3. TUI Search/Filter (`/` key)
+- `/` key activates search input mode (cursor visible in status bar)
+- Type to build query, Enter to accept, Escape to cancel
+- Search query filters displayed data on the active tab:
+  - **Nodes tab**: Filters by ID, name, source, health label, state
+  - **Alerts tab**: Filters by type, severity, node ID, message
+  - **Events tab**: Filters by type, node ID, source, data content
+- Status bar shows active filter with `[Esc]clear` hint
+- Escape (outside search mode) clears current filter
+- Updated keybinding hint: `/:Search`
+
+#### 4. Events Tab: Pause/Resume + Type Filtering
+- `p` key toggles pause on Events tab
+  - Pauses: takes snapshot of current event log (frozen view)
+  - Unpauses: resumes live scrolling from real event log
+- `f` key cycles event type filter:
+  - All (no filter) -> node.position -> node.telemetry ->
+    node.topology -> alert.fired -> service -> (back to All)
+- Active filter shown in Events tab header: `Type:node.position`
+- Pause indicator: `PAUSED` shown in header when frozen
+- Both `p` and `f` only respond on Events tab (tab index 5)
+
+### Testing
+
+- **27 new tests** (858 -> 885 total)
+- Test classes:
+  - `TestSearchFilter` (12 tests): search activation, typing, backspace,
+    escape cancel, enter accept, escape clear, node filter, alert filter
+  - `TestEventsPauseResume` (13 tests): initial state, pause toggle, unpause,
+    type filter cycle, filter wrap, filter applies, event search, draw paused,
+    draw with type filter, p/f key tab isolation
+  - `TestMapServerHTTPEndpoints` additions (7 tests): export nodes CSV/JSON,
+    export alerts CSV/JSON, export analytics growth/activity/ranking CSV
+- **Full suite: 885 passed, 22 skipped, 0 failures** (no regressions)
+
+### Architecture Decisions
+
+- **Inline SVG charts**: No chart.js or D3 for analytics — raw SVG `<polyline>`,
+  `<polygon>`, `<rect>`, `<text>` elements. Keeps the zero-dependency frontend
+  philosophy. Trade-off: no interactivity (hover tooltips) on charts, but the
+  heatmap cells do have CSS `:hover::after` tooltips.
+- **Client-side CSV export**: The analytics panel's JSON/CSV buttons create Blobs
+  from cached API data. Server-side export endpoints exist separately for direct
+  download links (bookmarkable URLs, curl-friendly).
+- **Search as filter, not highlight**: Search filters rows rather than highlighting
+  matches. Simpler implementation, clearer UX — you see only matching items.
+  Cursor/scroll position resets when filter changes.
+- **Pause snapshot**: Events pause takes a snapshot (list copy) rather than
+  stopping the ring buffer. New events still accumulate in `_event_log` — unpause
+  shows the latest state, not where you left off.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `web/meshforge_maps.html` | Modified — analytics panel CSS + HTML + JS (4 chart renderers, CSV export, tab switcher) |
+| `src/map_server.py` | Modified — 5 export routes, `_send_csv()` helper, route table additions |
+| `src/tui/app.py` | Modified — search/filter state, `/` key handling, event pause/filter, status bar update |
+| `tests/test_tui.py` | Modified — 25 new tests (TestSearchFilter, TestEventsPauseResume) |
+| `tests/test_map_server.py` | Modified — 7 new export endpoint tests |
+
+### Usage
+
+```bash
+# Analytics panel: check "Analytics" in Overlays section, or toggle in browser
+# Export: GET /api/export/nodes, /api/export/alerts, /api/export/analytics/growth
+
+# TUI search: press / to search, type query, Enter to accept, Esc to clear
+# TUI events: press p to pause/resume, f to cycle type filter
+```
+
+### Session Entropy Notes
+
+Session stayed focused: four planned features, implemented in order, tested after
+each. No scope creep. Good stopping point — all four items completed.
+
+### Next Session Candidates
+
+- [ ] Analytics frontend: interactive chart tooltips (hover to see values)
+- [ ] Analytics frontend: time range picker (last 1h/6h/24h/7d)
+- [ ] TUI: Analytics tab (7th tab) showing growth/ranking inline
+- [ ] TUI: Mouse support for tab switching and node selection
+- [ ] TUI: Configuration editing from within the TUI
+- [ ] Email alert delivery (SMTP integration)
+- [ ] Multi-instance federation (peer instances via MQTT/HTTP)
+- [ ] Mobile / PWA with push notifications
+
+---
+
 ## Session 19: TUI Expansion — Node Detail, Topology, WebSocket, Events
 
 **Date:** 2026-02-12
