@@ -2,6 +2,131 @@
 
 ---
 
+## Session 18: Terminal User Interface (TUI)
+
+**Date:** 2026-02-12
+**Branch:** `claude/improve-tui-meshforge-PWjwR`
+**Scope:** Curses-based terminal dashboard for mesh network monitoring
+**Version:** 0.7.0-beta (no version bump)
+
+### Summary
+
+Added a full terminal UI using Python stdlib `curses` — zero new dependencies,
+consistent with the project's stdlib-first philosophy. The TUI provides a
+4-tab dashboard that connects to the running MapServer HTTP API for real-time
+monitoring directly from the terminal.
+
+### What Was Built
+
+#### 1. TUI Core Framework (`src/tui/app.py`)
+- `TuiApp` class: curses.wrapper-based app with tabbed panel architecture
+- Color system: 16 color pairs for health scores, alert severity, source status
+- Thread-safe data refresh: background thread fetches API data every 5 seconds
+- `safe_addstr()` / `draw_hbar()` helpers: clip-safe drawing, no curses.error crashes
+- Vim-style keybindings: j/k scroll, 1-4 tab select, g home, r refresh, q quit
+
+#### 2. Dashboard Tab ([1])
+- Server status: version, port, uptime
+- Data sources: ON/ERR/OFF indicators with node counts per source
+- Node health summary: distribution across excellent/good/fair/poor/critical
+- Node connectivity: stable/new/intermittent/offline counts
+- Alert summary: total/active counts by severity
+- MQTT subscriber: running state, message count, nodes tracked
+- Performance: cache hit rate, avg/p99 latency
+
+#### 3. Nodes Tab ([2])
+- Scrollable node table: ID, name, source, health score, health label, state
+- Color-coded health scores (green/yellow/red)
+- State coloring: stable=green, intermittent=yellow, offline=red
+- Sortable: `s` toggles sort direction, `S` cycles sort column
+- Merges data from nodes/geojson, node-health, and node-states APIs
+
+#### 4. Alerts Tab ([3])
+- Active alerts section with severity coloring (cyan/yellow/red)
+- Full alert history table with type, node, timestamp, message
+- Alert rules listing with enabled/disabled state
+- Scrollable with full history
+
+#### 5. Propagation Tab ([4])
+- Space weather: SFI, Kp index (color-coded by storm level), band conditions
+- VOACAP band predictions: reliability %, status, best-band indicator
+- Band conditions: good/fair/poor coloring
+- DX spots table: call, frequency, DE, UTC
+- Station info: DE/DX callsigns and grids
+
+#### 6. HTTP Data Client (`src/tui/data_client.py`)
+- `MapDataClient`: lightweight urllib-based REST client
+- 19 endpoint accessors covering all MapServer APIs
+- 3-second timeout per request for TUI responsiveness
+- `is_alive()` liveness check
+- All methods return None on failure (graceful degradation)
+
+#### 7. CLI Integration (`src/main.py`)
+- `--tui`: Start server + launch TUI on main thread
+- `--tui-only`: Connect TUI to already-running server (client mode)
+- `--host` / `--port`: Custom server address
+- Backwards compatible: plain `python -m src` still works as before
+- Added hint message: "Tip: restart with --tui for a terminal dashboard"
+
+### Testing
+
+- **42 new tests** in `tests/test_tui.py`
+- Covers: data client (HTTP + stub server), app init, color helpers,
+  safe_addstr clipping, timestamp formatting, CLI arg parsing,
+  keyboard input handling, scroll management, sort toggling, refresh logic
+- **Full suite: 821 passed, 22 skipped, 0 failures** (no regressions)
+
+### Architecture Decisions
+
+- **stdlib curses over textual/rich**: Matches project's zero-dependency philosophy;
+  curses is available everywhere Python runs (Linux, macOS, Pi)
+- **HTTP API client, not direct object access**: TUI connects via REST like the
+  browser does — clean separation, works in --tui-only mode against remote servers
+- **Thread-safe cache pattern**: Background fetch thread writes to `_cache` dict
+  under lock; draw thread reads a snapshot — no UI freezes during API calls
+- **Tab-specific fetching**: Only fetches APIs relevant to current tab to minimize
+  server load
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `src/tui/__init__.py` | New — package init |
+| `src/tui/app.py` | New — TUI application (620 lines) |
+| `src/tui/data_client.py` | New — HTTP data client (100 lines) |
+| `src/main.py` | Modified — CLI args, --tui/--tui-only flags |
+| `tests/test_tui.py` | New — 42 tests (260 lines) |
+
+### Usage
+
+```bash
+# Server + TUI together
+python -m src --tui
+
+# TUI client only (connect to running server)
+python -m src --tui-only --port 8808
+
+# Classic mode (no TUI, just server)
+python -m src
+```
+
+### Session Entropy Notes
+
+Stopping here with clean, focused scope. Session stayed on track: single feature
+(TUI), systematic build (framework → tabs → CLI → tests), no scope creep.
+Good stopping point for a new session to pick up next items.
+
+### Next Session Candidates
+
+- [ ] TUI: Add node detail view (drill into single node: health breakdown, trajectory, config drift)
+- [ ] TUI: Add topology tab with ASCII art mesh link visualization
+- [ ] TUI: WebSocket integration for push-based updates (instead of polling)
+- [ ] TUI: Log/event stream panel for real-time MQTT messages
+- [ ] TUI: Resizable panels / split-pane layout
+- [ ] TUI: Configuration editing from within the TUI
+
+---
+
 ## Session 17: Alerting Delivery Expansion & Historical Analytics
 
 **Date:** 2026-02-12
