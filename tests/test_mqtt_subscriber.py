@@ -125,6 +125,50 @@ class TestMQTTNodeStore:
         assert len(links) == 0
 
 
+class TestMQTTNodeStoreGetNode:
+    """Tests for the get_node() direct lookup method."""
+
+    def test_get_node_by_exact_id(self):
+        store = MQTTNodeStore()
+        store.update_position("!abc123", 35.0, 139.0)
+        node = store.get_node("!abc123")
+        assert node is not None
+        assert node["id"] == "!abc123"
+        assert node["latitude"] == 35.0
+
+    def test_get_node_without_prefix(self):
+        store = MQTTNodeStore()
+        store.update_position("!abc123", 35.0, 139.0)
+        node = store.get_node("abc123")
+        assert node is not None
+        assert node["id"] == "!abc123"
+
+    def test_get_node_with_prefix_when_stored_without(self):
+        store = MQTTNodeStore()
+        store.update_position("abc123", 35.0, 139.0)
+        node = store.get_node("!abc123")
+        assert node is not None
+        assert node["id"] == "abc123"
+
+    def test_get_node_not_found(self):
+        store = MQTTNodeStore()
+        store.update_position("!abc123", 35.0, 139.0)
+        node = store.get_node("!zzz999")
+        assert node is None
+
+    def test_get_node_returns_copy(self):
+        store = MQTTNodeStore()
+        store.update_position("!abc123", 35.0, 139.0)
+        node = store.get_node("!abc123")
+        node["latitude"] = 999
+        fresh = store.get_node("!abc123")
+        assert fresh["latitude"] == 35.0
+
+    def test_get_node_empty_store(self):
+        store = MQTTNodeStore()
+        assert store.get_node("!abc123") is None
+
+
 class TestMQTTSubscriber:
     """Tests for MQTTSubscriber initialization."""
 
