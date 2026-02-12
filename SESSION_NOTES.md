@@ -2,6 +2,121 @@
 
 ---
 
+## Session 17: Alerting Delivery Expansion & Historical Analytics
+
+**Date:** 2026-02-12
+**Branch:** `claude/alerting-delivery-expansion-vWbAh`
+**Scope:** MQTT alert publishing, EventBus→WebSocket alert propagation, frontend alert panel, historical analytics
+**Version:** 0.7.0-beta (no version bump)
+
+### Summary
+
+Extended the alerting engine from Session 16 with three delivery channels and
+built the historical analytics module (second near-term roadmap item).
+
+### Changes
+
+#### 1. MQTT Alert Publishing (`alert_engine.py`)
+- Added `mqtt_client` and `mqtt_topic` parameters to `AlertEngine.__init__`
+- New `_publish_mqtt()` method publishes to base topic and severity sub-topic
+  (e.g. `meshforge/alerts` + `meshforge/alerts/critical`) with QoS 1
+- `set_mqtt_client()` / `remove_mqtt_client()` for dynamic MQTT configuration
+- `mqtt_publish_count` property tracks successful MQTT deliveries
+- Alert summary now includes `mqtt_enabled` and `mqtt_publish_count`
+- MQTT errors are swallowed (best-effort, matches webhook pattern)
+
+#### 2. EventBus Alert Propagation (`map_server.py`)
+- `_handle_telemetry_for_alerts()` now captures triggered alerts and publishes
+  each as an `ALERT_FIRED` event on the EventBus
+- New `_publish_alert_event()` creates `Event(EventType.ALERT_FIRED)` with
+  full alert dict as payload
+- Existing wildcard subscriber `_forward_to_websocket()` automatically forwards
+  alert events to all WebSocket clients as `{"type": "alert.fired", "data": {...}}`
+- MapServer wires MQTT client from subscriber to alert engine on startup
+
+#### 3. Frontend Alert Panel (`meshforge_maps.html`)
+- **Alert panel**: Collapsible panel (bottom-right) showing live alerts with
+  severity-colored dots, message text, node ID, and timestamp
+- **Header alert badge**: Red badge in header bar showing active alert count;
+  clicking toggles alert panel
+- **Overlay toggle**: "Alerts" checkbox in Overlays section controls panel visibility
+- **Real-time alerts**: `handleRealtimeMessage()` routes `alert.fired` WebSocket
+  messages to `handleAlertEvent()` which prepends to in-memory buffer
+- **Initial load**: `loadInitialAlerts()` fetches `/api/alerts/active` on page
+  load to populate panel with existing unacknowledged alerts
+- **Toast on critical**: Critical alerts show toast notification
+- Bounded to 100 alert items (`MAX_ALERT_ITEMS`)
+
+#### 4. Historical Analytics (`analytics.py` — new module)
+- `HistoricalAnalytics` class: read-only aggregation over NodeHistoryDB + AlertEngine
+- **Network growth**: `network_growth()` — unique nodes per time bucket,
+  total observations per bucket. Configurable bucket size (60s–86400s)
+- **Activity heatmap**: `activity_heatmap()` — observation counts by hour of day
+  (0–23), with peak hour detection
+- **Node ranking**: `node_activity_ranking()` — nodes ranked by observation count,
+  with first/last seen timestamps and active duration
+- **Network summary**: `network_summary()` — total nodes, observations,
+  per-network breakdown, average observations per node
+- **Alert trends**: `alert_trends()` — alerts bucketed by time with per-severity
+  counts (critical/warning/info/total)
+
+#### 5. Analytics API Endpoints (`map_server.py`)
+- `GET /api/analytics/growth?since=&until=&bucket=` — network growth time-series
+- `GET /api/analytics/activity?since=&until=` — hour-of-day activity heatmap
+- `GET /api/analytics/ranking?since=&limit=` — most active nodes
+- `GET /api/analytics/summary?since=` — high-level network statistics
+- `GET /api/analytics/alert-trends?bucket=` — alert trend aggregation
+
+### Tests
+
+- **54 new tests** across 2 new test files:
+  - `test_alerting_delivery.py` — MQTT publishing (13 tests), EventBus propagation (6),
+    combined delivery (2)
+  - `test_analytics.py` — network growth (7), activity heatmap (5), node ranking (6),
+    network summary (6), alert trends (6), integration (3)
+- **779 passing, 22 skipped** — zero regressions from 725 prior passing tests
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `src/utils/alert_engine.py` | +MQTT publish delivery, `set_mqtt_client()`, `_publish_mqtt()`, summary stats |
+| `src/utils/analytics.py` | **New** — HistoricalAnalytics: growth, heatmap, ranking, summary, alert trends |
+| `src/map_server.py` | +ALERT_FIRED event publishing, +analytics wiring, +5 analytics API endpoints |
+| `web/meshforge_maps.html` | +alert panel CSS/HTML/JS, header badge, overlay toggle, WebSocket alert handler |
+| `tests/test_alerting_delivery.py` | **New** — 21 tests for MQTT + EventBus alert delivery |
+| `tests/test_analytics.py` | **New** — 33 tests for historical analytics |
+
+### Architecture
+
+```
+Alert Flow (expanded):
+  MQTT Telemetry → EventBus(NODE_TELEMETRY)
+    → _handle_telemetry_for_alerts()
+      → AlertEngine.evaluate_node()
+        → _deliver():
+          1. on_alert callback
+          2. _publish_mqtt() → MQTT topic (meshforge/alerts/{severity})
+          3. _send_webhook() → HTTP POST
+      → _publish_alert_event()
+        → EventBus(ALERT_FIRED)
+          → _forward_to_websocket()
+            → WebSocket broadcast {"type":"alert.fired","data":{...}}
+              → Frontend: handleAlertEvent() → alert panel + toast
+
+Analytics Flow:
+  NodeHistoryDB (SQLite observations) ──┐
+                                        ├→ HistoricalAnalytics ──→ /api/analytics/*
+  AlertEngine (in-memory history) ──────┘
+```
+
+### Session Entropy Watch
+Session remained systematic. All 4 features implemented in dependency order
+(alert engine expansion → EventBus wiring → frontend panel → analytics).
+54 new tests, zero regressions at final checkpoint. Session complete.
+
+---
+
 ## Session 16: WebSocket Marker Fix & Alerting Foundation
 
 **Date:** 2026-02-12
