@@ -565,11 +565,11 @@ pytest tests/ -v
 
 ### Near-term
 
-- **Analytics frontend** -- browser-based charts for the analytics API endpoints (network growth sparkline, activity heatmap calendar, node ranking table). The backend API is complete; frontend visualization is next.
+- ~~**Analytics frontend**~~ (done) -- browser-based analytics dashboard with SVG sparkline charts, activity heatmap, node ranking table, and alert trend visualization. Toggle via Overlays > Analytics.
 
 - **Email alert delivery** -- SMTP integration for the alert engine. The delivery pipeline already supports multiple channels (callback, MQTT, webhook); email is a natural extension.
 
-- **CSV/JSON export** -- export node history, alert history, and analytics data for external analysis tools. The data layer is complete; export endpoints and download UI are next.
+- ~~**CSV/JSON export**~~ (done) -- export endpoints at `/api/export/nodes`, `/api/export/alerts`, and `/api/export/analytics/*` serving CSV downloads with JSON option. Also available via analytics panel export buttons.
 
 ### Medium-term
 
