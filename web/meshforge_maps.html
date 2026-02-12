@@ -854,6 +854,7 @@
     let historyPanelOpen = false;
     let healthOverlayActive = false;  // Whether health color-coding is enabled
     let nodeHealthScores = {};        // Cached {node_id: {score, status}} from API
+    const markerRegistry = new Map(); // nodeId -> marker for O(1) WebSocket lookup
 
     // Per-network layer groups (for toggle visibility)
     const networkLayers = {
@@ -1064,6 +1065,7 @@
         // for both initial load (processGeoJSON) and re-render (health overlay toggle)
         clusterGroup.clearLayers();
         directGroup.clearLayers();
+        markerRegistry.clear();
 
         const counts = { meshtastic: 0, reticulum: 0, aredn: 0 };
         networkLayers.meshtastic = [];
@@ -1098,6 +1100,10 @@
             });
 
             marker.bindPopup(buildPopup(props, color));
+
+            if (props.id) {
+                markerRegistry.set(props.id, marker);
+            }
 
             if (counts.hasOwnProperty(network)) {
                 counts[network]++;
@@ -1858,41 +1864,31 @@
         var nodeId = msg.node_id;
         var latlng = L.latLng(msg.lat, msg.lon);
 
-        // Check if this node already exists in our markers
-        var found = false;
-        var groups = [clusterGroup, directGroup];
-        for (var g = 0; g < groups.length; g++) {
-            if (!groups[g]) continue;
-            groups[g].eachLayer(function(layer) {
-                if (layer.feature &&
-                    layer.feature.properties &&
-                    layer.feature.properties.id === nodeId) {
-                    // Move existing marker
-                    if (layer.setLatLng) {
-                        layer.setLatLng(latlng);
-                        found = true;
-                    }
+        // O(1) lookup via marker registry
+        var existing = markerRegistry.get(nodeId);
+        if (existing) {
+            existing.setLatLng(latlng);
+            // Update corresponding feature in allFeatures so next render preserves position
+            for (var i = 0; i < allFeatures.length; i++) {
+                if (allFeatures[i].properties && allFeatures[i].properties.id === nodeId) {
+                    allFeatures[i].geometry.coordinates = [msg.lon, msg.lat];
+                    break;
                 }
-            });
-            if (found) break;
-        }
-
-        if (!found) {
+            }
+        } else {
             // New node -- add a temporary marker. Full data comes on next poll.
+            var network = msg.source || 'meshtastic';
+            var color = NETWORK_COLORS[network] || NETWORK_COLORS.meshtastic;
             var marker = L.circleMarker(latlng, {
                 radius: 6,
-                fillColor: NETWORK_COLORS.meshtastic,
+                fillColor: color,
                 color: '#fff',
                 weight: 1,
                 opacity: 0.9,
                 fillOpacity: 0.8,
             });
-            marker.feature = {
-                type: 'Feature',
-                properties: { id: nodeId, source: msg.source || 'mqtt' },
-                geometry: { type: 'Point', coordinates: [msg.lon, msg.lat] },
-            };
             marker.bindPopup('<b>' + esc(nodeId) + '</b><br><i>Real-time update</i>');
+            markerRegistry.set(nodeId, marker);
             if (useClustering && clusterGroup) {
                 clusterGroup.addLayer(marker);
             } else if (directGroup) {
