@@ -18,6 +18,7 @@ See: https://docs.arednmesh.org/en/latest/arednHow-toGuides/devtools.html
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.error import URLError
@@ -46,6 +47,7 @@ class AREDNCollector(BaseCollector):
     ):
         super().__init__(cache_ttl_seconds)
         self._node_targets = node_targets or list(DEFAULT_AREDN_NODES)
+        self._topo_lock = threading.Lock()
         # Topology links from LQM data (source_name -> [{neighbor, snr, quality, ...}])
         self._lqm_links: List[Dict[str, Any]] = []
         # Known node coordinates for resolving LQM neighbor positions
@@ -54,11 +56,12 @@ class AREDNCollector(BaseCollector):
     def _fetch(self) -> Dict[str, Any]:
         features: List[Dict[str, Any]] = []
         seen_ids: set = set()
-        self._lqm_links = []
+        lqm_links: List[Dict[str, Any]] = []
 
         # Source 1: Direct AREDN node queries (if on mesh)
         for target in self._node_targets:
-            node_features = self._fetch_from_node(target)
+            node_features, links = self._fetch_from_node(target)
+            lqm_links.extend(links)
             for f in node_features:
                 fid = f["properties"].get("id")
                 if fid and fid not in seen_ids:
@@ -82,27 +85,36 @@ class AREDNCollector(BaseCollector):
                 features.append(f)
 
         # Build coordinate lookup for all known nodes
-        self._node_coords = {}
+        node_coords: Dict[str, tuple] = {}
         for f in features:
             props = f.get("properties", {})
             geom = f.get("geometry", {})
             coords = geom.get("coordinates", [])
             fid = props.get("id")
             if fid and len(coords) >= 2:
-                self._node_coords[fid] = (coords[1], coords[0])  # lat, lon
+                node_coords[fid] = (coords[1], coords[0])  # lat, lon
+
+        # Swap topology data under lock for thread safety
+        with self._topo_lock:
+            self._lqm_links = lqm_links
+            self._node_coords = node_coords
 
         return make_feature_collection(features, self.source_name)
 
-    def _fetch_from_node(self, target: str) -> List[Dict[str, Any]]:
+    def _fetch_from_node(self, target: str) -> tuple:
         """Query a single AREDN node's sysinfo API with LQM data.
 
         Validates the HTTP response contains expected AREDN JSON fields
         (node, sysinfo, or meshrf) to confirm this is a real AREDN node
         and not some other HTTP service on the same port.
+
+        Returns (features, lqm_links) tuple.
         """
-        features = []
+        features: List[Dict[str, Any]] = []
+        links: List[Dict[str, Any]] = []
         # AREDN API runs on port 8080 (not port 80)
-        host = target if ":" in target else f"{target}:8080"
+        # Use explicit port check to avoid IPv6 false positives
+        host = target if ":" in target and not target.startswith("[") else f"{target}:8080"
         url = f"http://{host}/a/sysinfo?lqm=1"
         try:
             req = Request(url, headers={
@@ -115,10 +127,10 @@ class AREDNCollector(BaseCollector):
             # Validate this is actually an AREDN node response
             if not isinstance(data, dict):
                 logger.debug("AREDN node %s: response is not a JSON object", target)
-                return features
+                return features, links
             if not ("node" in data or "sysinfo" in data or "meshrf" in data):
                 logger.debug("AREDN node %s: missing expected AREDN fields", target)
-                return features
+                return features, links
 
             # Parse the queried node itself
             feature = self._parse_sysinfo(data, target)
@@ -132,12 +144,12 @@ class AREDNCollector(BaseCollector):
                 for neighbor in lqm:
                     link = self._parse_lqm_neighbor(neighbor, node_name)
                     if link:
-                        self._lqm_links.append(link)
+                        links.append(link)
 
             logger.debug("AREDN node %s returned %d entries", target, len(features))
         except (URLError, OSError, json.JSONDecodeError) as e:
             logger.debug("AREDN node %s unreachable: %s", target, e)
-        return features
+        return features, links
 
     def _parse_sysinfo(
         self, data: Dict[str, Any], target: str
@@ -246,12 +258,16 @@ class AREDNCollector(BaseCollector):
         known node positions. Links where both endpoints have known
         coordinates are returned with full positioning data.
         """
+        with self._topo_lock:
+            lqm_links = list(self._lqm_links)
+            node_coords = dict(self._node_coords)
+
         resolved = []
-        for link in self._lqm_links:
+        for link in lqm_links:
             src = link.get("source", "")
             tgt = link.get("target", "")
-            src_coords = self._node_coords.get(src)
-            tgt_coords = self._node_coords.get(tgt)
+            src_coords = node_coords.get(src)
+            tgt_coords = node_coords.get(tgt)
             if src_coords and tgt_coords:
                 resolved.append({
                     **link,

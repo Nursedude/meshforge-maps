@@ -26,7 +26,7 @@ class TestNodeStateEntry(unittest.TestCase):
     def test_initial_state(self):
         entry = NodeStateEntry("!node1", 1000.0)
         self.assertEqual(entry.state, NodeState.NEW)
-        self.assertEqual(entry.heartbeats, [1000.0])
+        self.assertEqual(list(entry.heartbeats), [1000.0])
         self.assertEqual(entry.first_seen, 1000.0)
         self.assertEqual(entry.transition_count, 0)
 
@@ -37,7 +37,7 @@ class TestNodeStateEntry(unittest.TestCase):
         self.assertEqual(entry.last_seen, 1300.0)
 
     def test_heartbeat_window_trimming(self):
-        entry = NodeStateEntry("!node1", 1000.0)
+        entry = NodeStateEntry("!node1", 1000.0, max_window=10)
         for i in range(25):
             entry.add_heartbeat(1000.0 + (i + 1) * 100, max_window=10)
         self.assertEqual(len(entry.heartbeats), 10)

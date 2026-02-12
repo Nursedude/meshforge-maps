@@ -66,13 +66,20 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+    def _get_cors_origin(self):
+        """Get configured CORS origin, or None for same-origin."""
+        proxy = self._get_proxy()
+        return getattr(proxy, "_cors_origin", None) if proxy else None
+
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests."""
+        cors_origin = self._get_cors_origin()
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
-        self.send_header("Access-Control-Max-Age", "86400")
+        if cors_origin:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
+            self.send_header("Access-Control-Max-Age", "86400")
         self.end_headers()
 
     def _get_store(self):
@@ -166,7 +173,9 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        cors_origin = self._get_cors_origin()
+        if cors_origin:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
         self.end_headers()
         self.wfile.write(body)
 
@@ -299,10 +308,12 @@ class MeshtasticApiProxy:
         mqtt_store: Optional[Any] = None,
         host: str = "127.0.0.1",
         port: int = DEFAULT_PROXY_PORT,
+        cors_origin: Optional[str] = None,
     ):
         self._mqtt_store = mqtt_store
         self._host = host
         self._port = port
+        self._cors_origin = cors_origin
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -366,7 +377,7 @@ class MeshtasticApiProxy:
                 self._server._mf_proxy = self  # type: ignore[attr-defined]
 
                 self._thread = threading.Thread(
-                    target=self._server.serve_forever,
+                    target=self._serve_forever_safe,
                     name="meshforge-maps-meshtastic-proxy",
                     daemon=True,
                 )
@@ -393,6 +404,16 @@ class MeshtasticApiProxy:
         logger.error("Failed to start Meshtastic API proxy on ports %d-%d",
                       self._port, self._port + 4)
         return False
+
+    def _serve_forever_safe(self) -> None:
+        """Wrapper around serve_forever that sets _running=False on failure."""
+        try:
+            if self._server:
+                self._server.serve_forever()
+        except Exception as e:
+            logger.error("Meshtastic API proxy serve_forever failed: %s", e)
+        finally:
+            self._running = False
 
     def stop(self) -> None:
         """Stop the proxy server."""

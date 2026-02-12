@@ -232,7 +232,10 @@ class MQTTNodeStore:
             self._neighbors[node_id] = neighbors
 
     def get_all_nodes(self) -> List[Dict[str, Any]]:
-        """Return all non-stale nodes with valid coordinates."""
+        """Return all non-stale nodes with valid coordinates.
+
+        Returns copies of node dicts; does not mutate the store.
+        """
         from .base import validate_coordinates
 
         now = int(time.time())
@@ -244,10 +247,11 @@ class MQTTNodeStore:
                 )
                 if coords is None:
                     continue
-                last_seen = node.get("last_seen", 0)
+                copy = dict(node)
+                last_seen = copy.get("last_seen", 0)
                 if (now - last_seen) > self._stale_seconds:
-                    node["is_online"] = False
-                result.append(dict(node))
+                    copy["is_online"] = False
+                result.append(copy)
             return result
 
     def get_topology_links(self) -> List[Dict[str, Any]]:

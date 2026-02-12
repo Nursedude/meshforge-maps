@@ -6,6 +6,7 @@ into a single unified collection with deduplication.
 """
 
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -32,6 +33,7 @@ class DataAggregator:
         self._config = config
         cache_ttl = config.get("cache_ttl_minutes", 15) * 60
         self._collectors = {}
+        self._data_lock = threading.Lock()
         self._cached_overlay: Dict[str, Any] = {}
         self._last_collect_time: float = 0
         self._last_collect_counts: Dict[str, int] = {}
@@ -153,9 +155,10 @@ class DataAggregator:
             cycle_ctx.node_count = len(all_features)
 
         # Cache overlay data so /api/overlay doesn't trigger a full re-collect
-        self._cached_overlay = overlay_data
-        self._last_collect_time = time.time()
-        self._last_collect_counts = dict(source_counts)
+        with self._data_lock:
+            self._cached_overlay = overlay_data
+            self._last_collect_time = time.time()
+            self._last_collect_counts = dict(source_counts)
 
         result = make_feature_collection(all_features, "aggregated")
         result["properties"]["sources"] = source_counts
@@ -242,8 +245,9 @@ class DataAggregator:
         Falls back to collecting from hamclock only if no cache exists,
         avoiding a full multi-source aggregation.
         """
-        if self._cached_overlay:
-            return self._cached_overlay
+        with self._data_lock:
+            if self._cached_overlay:
+                return dict(self._cached_overlay)
         # No cache yet -- collect overlay from hamclock only
         hamclock = self._collectors.get("hamclock")
         if hamclock:
@@ -254,7 +258,8 @@ class DataAggregator:
                 for key in ("space_weather", "solar_terminator", "hamclock"):
                     if key in fc_props:
                         overlay[key] = fc_props[key]
-                self._cached_overlay = overlay
+                with self._data_lock:
+                    self._cached_overlay = overlay
                 return overlay
             except Exception as e:
                 logger.error("Overlay-only collection failed: %s", e)
@@ -263,13 +268,16 @@ class DataAggregator:
     @property
     def last_collect_age_seconds(self) -> Optional[float]:
         """Seconds since last successful collect_all(), or None if never collected."""
-        if self._last_collect_time == 0:
+        with self._data_lock:
+            t = self._last_collect_time
+        if t == 0:
             return None
-        return time.time() - self._last_collect_time
+        return time.time() - t
 
     @property
     def last_collect_counts(self) -> Dict[str, int]:
-        return dict(self._last_collect_counts)
+        with self._data_lock:
+            return dict(self._last_collect_counts)
 
     @property
     def event_bus(self) -> EventBus:
@@ -297,7 +305,8 @@ class DataAggregator:
     def clear_all_caches(self) -> None:
         for collector in self._collectors.values():
             collector.clear_cache()
-        self._cached_overlay = {}
+        with self._data_lock:
+            self._cached_overlay = {}
 
     def shutdown(self) -> None:
         """Stop MQTT subscriber and release resources."""

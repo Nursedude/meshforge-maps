@@ -26,6 +26,7 @@ Thread-safe: all state behind a lock.
 import logging
 import threading
 import time
+from collections import deque
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
@@ -59,10 +60,10 @@ class NodeStateEntry:
         "last_seen", "transition_count", "last_transition",
     )
 
-    def __init__(self, node_id: str, timestamp: float):
+    def __init__(self, node_id: str, timestamp: float, max_window: int = MAX_HEARTBEAT_WINDOW):
         self.node_id = node_id
         self.state = NodeState.NEW
-        self.heartbeats: List[float] = [timestamp]
+        self.heartbeats: deque = deque([timestamp], maxlen=max_window)
         self.first_seen = timestamp
         self.last_seen = timestamp
         self.transition_count = 0
@@ -71,8 +72,6 @@ class NodeStateEntry:
     def add_heartbeat(self, timestamp: float, max_window: int) -> None:
         self.heartbeats.append(timestamp)
         self.last_seen = timestamp
-        if len(self.heartbeats) > max_window:
-            self.heartbeats = self.heartbeats[-max_window:]
 
     def average_interval(self) -> Optional[float]:
         """Compute average interval between heartbeats."""
@@ -163,7 +162,7 @@ class NodeStateTracker:
             if entry is None:
                 if len(self._nodes) >= self._max_nodes:
                     self._evict_oldest_locked()
-                entry = NodeStateEntry(node_id, timestamp)
+                entry = NodeStateEntry(node_id, timestamp, self._heartbeat_window)
                 self._nodes[node_id] = entry
                 return (NodeState.NEW, NodeState.NEW)
 
@@ -273,7 +272,8 @@ class NodeStateTracker:
 
     @property
     def total_transitions(self) -> int:
-        return self._total_transitions
+        with self._lock:
+            return self._total_transitions
 
     def remove_node(self, node_id: str) -> None:
         """Remove all tracking data for a node (e.g., after eviction)."""
