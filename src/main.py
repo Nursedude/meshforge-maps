@@ -357,10 +357,46 @@ def _get_error_log_path() -> Path:
         return Path("/tmp/meshforge_maps_errors.log")
 
 
+def _parse_args() -> "argparse.Namespace":
+    """Parse command-line arguments."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="meshforge-maps",
+        description="MeshForge Maps - Unified mesh network visualization",
+    )
+    parser.add_argument(
+        "--tui", action="store_true",
+        help="Launch the terminal UI alongside the map server",
+    )
+    parser.add_argument(
+        "--tui-only", action="store_true",
+        help="Launch TUI client only (connect to an already-running server)",
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="Server host (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=0,
+        help="Server HTTP port (default: from config or 8808)",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     """Standalone entry point for running outside MeshForge."""
     import signal
     import threading
+
+    args = _parse_args()
+
+    # TUI-only mode: just launch the curses UI against an existing server
+    if args.tui_only:
+        from .tui.app import run_tui
+        port = args.port or 8808
+        run_tui(host=args.host, port=port)
+        return
 
     logging.basicConfig(
         level=logging.INFO,
@@ -379,6 +415,8 @@ def main() -> None:
 
     try:
         config = MapsConfig()
+        if args.port:
+            config.update({"http_port": args.port})
         server = MapServer(config)
 
         if not server.start():
@@ -389,11 +427,21 @@ def main() -> None:
         signal.signal(signal.SIGTERM, _signal_handler)
         signal.signal(signal.SIGINT, _signal_handler)
 
-        print(f"MeshForge Maps running at http://127.0.0.1:{server.port}")
-        print("Press Ctrl+C to stop")
+        # If --tui flag, launch curses UI in place of the text banner
+        if args.tui:
+            from .tui.app import run_tui
+            # Run TUI on the main thread; server runs in background threads
+            try:
+                run_tui(host=args.host, port=server.port)
+            finally:
+                shutdown_event.set()
+        else:
+            print(f"MeshForge Maps running at http://127.0.0.1:{server.port}")
+            print("Press Ctrl+C to stop")
+            print("Tip: restart with --tui for a terminal dashboard")
 
-        # Block until shutdown signal received
-        shutdown_event.wait()
+            # Block until shutdown signal received
+            shutdown_event.wait()
     except KeyboardInterrupt:
         print("\nShutting down...")
     except Exception as e:
