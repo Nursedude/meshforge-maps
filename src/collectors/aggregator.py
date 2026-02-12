@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .aredn_collector import AREDNCollector
-from .base import make_feature_collection
+from .base import deduplicate_features, make_feature_collection
 from .hamclock_collector import HamClockCollector
 from .meshtastic_collector import MeshtasticCollector
 from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
@@ -113,8 +113,7 @@ class DataAggregator:
 
     def collect_all(self) -> Dict[str, Any]:
         """Collect from all enabled sources and merge into one FeatureCollection."""
-        all_features: List[Dict[str, Any]] = []
-        seen_ids: set = set()
+        per_source_features: List[List[Dict[str, Any]]] = []
         source_counts: Dict[str, int] = {}
         overlay_data: Dict[str, Any] = {}
 
@@ -127,20 +126,13 @@ class DataAggregator:
                         source_counts[name] = len(features)
                         src_ctx.node_count = len(features)
                         # Detect cache hit from collector's cache state
-                        src_ctx.from_cache = (
-                            collector._cache is not None
-                            and fc is collector._cache
-                        )
+                        with collector._cache_lock:
+                            src_ctx.from_cache = (
+                                collector._cache is not None
+                                and fc is collector._cache
+                            )
 
-                    for feature in features:
-                        if feature is None:
-                            continue
-                        fid = feature.get("properties", {}).get("id")
-                        if fid and fid not in seen_ids:
-                            seen_ids.add(fid)
-                            all_features.append(feature)
-                        elif not fid:
-                            all_features.append(feature)
+                    per_source_features.append(features)
 
                     # Capture overlay data (space weather, terminator, etc.)
                     fc_props = fc.get("properties", {})
@@ -152,6 +144,7 @@ class DataAggregator:
                     logger.error("Collector %s failed: %s", name, e)
                     source_counts[name] = 0
 
+            all_features = deduplicate_features(per_source_features, allow_no_id=True)
             cycle_ctx.node_count = len(all_features)
 
         # Cache overlay data so /api/overlay doesn't trigger a full re-collect
@@ -301,6 +294,25 @@ class DataAggregator:
         for name, collector in self._collectors.items():
             health[name] = collector.health_info
         return health
+
+    def get_collector(self, name: str) -> Optional[Any]:
+        """Return a named collector, or None if not enabled."""
+        return self._collectors.get(name)
+
+    @property
+    def enabled_collector_count(self) -> int:
+        """Number of enabled collectors."""
+        return len(self._collectors)
+
+    @property
+    def enabled_collector_names(self) -> List[str]:
+        """Names of all enabled collectors."""
+        return list(self._collectors.keys())
+
+    @property
+    def mqtt_subscriber(self) -> Optional[MQTTSubscriber]:
+        """The MQTT subscriber instance, or None if not configured."""
+        return self._mqtt_subscriber
 
     def clear_all_caches(self) -> None:
         for collector in self._collectors.values():

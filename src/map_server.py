@@ -301,7 +301,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not aggregator:
             self._send_json({"error": "Aggregator not initialized"}, 503)
             return
-        hamclock_collector = aggregator._collectors.get("hamclock")
+        hamclock_collector = aggregator.get_collector("hamclock")
         if not hamclock_collector:
             self._send_json({"error": "HamClock source not enabled", "available": False}, 404)
             return
@@ -406,10 +406,10 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         Returns broker connection state, message counts, and node store stats.
         """
         aggregator = self._get_aggregator()
-        if not aggregator or not aggregator._mqtt_subscriber:
+        if not aggregator or not aggregator.mqtt_subscriber:
             self._send_json({"available": False, "status": "not_configured"})
             return
-        self._send_json(aggregator._mqtt_subscriber.get_stats())
+        self._send_json(aggregator.mqtt_subscriber.get_stats())
 
     def _serve_health(self) -> None:
         """Serve composite health score (0-100) with per-source breakdown.
@@ -445,7 +445,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         # Source availability score (0-30): how many sources returned data?
         source_score = 0.0
         source_counts = aggregator.last_collect_counts
-        enabled_count = len(aggregator._collectors)
+        enabled_count = aggregator.enabled_collector_count
         if enabled_count > 0:
             sources_with_data = sum(1 for c in source_counts.values() if c > 0)
             source_score = 30.0 * (sources_with_data / enabled_count)
@@ -619,9 +619,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         config = self._get_config()
         mqtt_status = "unavailable"
         mqtt_nodes = 0
-        if aggregator and aggregator._mqtt_subscriber:
-            mqtt_status = "connected" if aggregator._mqtt_subscriber._running else "stopped"
-            mqtt_nodes = aggregator._mqtt_subscriber.store.node_count
+        if aggregator and aggregator.mqtt_subscriber:
+            mqtt_status = "connected" if aggregator.mqtt_subscriber._running.is_set() else "stopped"
+            mqtt_nodes = aggregator.mqtt_subscriber.store.node_count
 
         start_time = getattr(self.server, "_mf_start_time", None)
         uptime = int(time.time() - start_time) if start_time else None
@@ -744,8 +744,8 @@ class MapServer:
         self._health_scorer = NodeHealthScorer()
 
         # Wire node eviction cleanup to drift detector and state tracker
-        if self._aggregator._mqtt_subscriber:
-            self._aggregator._mqtt_subscriber.store._on_node_removed = (
+        if self._aggregator.mqtt_subscriber:
+            self._aggregator.mqtt_subscriber.store._on_node_removed = (
                 self._handle_node_removed
             )
 
@@ -753,8 +753,8 @@ class MapServer:
         self._proxy: Optional[MeshtasticApiProxy] = None
         if config.get("enable_meshtastic", True):
             mqtt_store = None
-            if self._aggregator._mqtt_subscriber:
-                mqtt_store = self._aggregator._mqtt_subscriber.store
+            if self._aggregator.mqtt_subscriber:
+                mqtt_store = self._aggregator.mqtt_subscriber.store
             self._proxy = MeshtasticApiProxy(
                 mqtt_store=mqtt_store,
                 port=config.get("meshtastic_proxy_port", 4404),

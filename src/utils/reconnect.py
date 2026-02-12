@@ -10,6 +10,7 @@ Inspired by MeshForge core gateway/reconnect.py
 
 import logging
 import random
+import threading
 import time
 from typing import Optional
 
@@ -37,6 +38,7 @@ class ReconnectStrategy:
         self._multiplier = multiplier
         self._jitter_factor = jitter_factor
         self._max_retries = max_retries
+        self._lock = threading.Lock()
 
         self._attempt: int = 0
         self._total_attempts: int = 0
@@ -45,27 +47,30 @@ class ReconnectStrategy:
     @property
     def attempt(self) -> int:
         """Current attempt number (0-indexed)."""
-        return self._attempt
+        with self._lock:
+            return self._attempt
 
     @property
     def total_attempts(self) -> int:
         """Total attempts across all reset cycles."""
-        return self._total_attempts
+        with self._lock:
+            return self._total_attempts
 
     def next_delay(self) -> float:
         """Calculate the next backoff delay with jitter.
 
         Returns the delay in seconds. Increments the attempt counter.
         """
-        delay = self._base_delay * (self._multiplier ** self._attempt)
-        delay = min(delay, self._max_delay)
+        with self._lock:
+            delay = self._base_delay * (self._multiplier ** self._attempt)
+            delay = min(delay, self._max_delay)
 
-        jitter = random.uniform(0, delay * self._jitter_factor)
-        delay += jitter
+            jitter = random.uniform(0, delay * self._jitter_factor)
+            delay += jitter
 
-        self._attempt += 1
-        self._total_attempts += 1
-        self._last_attempt_time = time.time()
+            self._attempt += 1
+            self._total_attempts += 1
+            self._last_attempt_time = time.time()
 
         return delay
 
@@ -77,11 +82,13 @@ class ReconnectStrategy:
         """
         if self._max_retries is None:
             return True
-        return self._attempt < self._max_retries
+        with self._lock:
+            return self._attempt < self._max_retries
 
     def reset(self) -> None:
         """Reset the attempt counter after a successful connection."""
-        self._attempt = 0
+        with self._lock:
+            self._attempt = 0
 
     def wait(self) -> float:
         """Calculate delay and sleep for that duration.
