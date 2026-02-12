@@ -154,10 +154,12 @@ class MQTTNodeStore:
         self._remove_seconds = remove_seconds
         self._max_nodes = max_nodes
         self._on_node_removed = on_node_removed
+        self._pending_removal_id: Optional[str] = None
 
     def update_position(self, node_id: str, lat: float, lon: float,
                         altitude: Optional[int] = None, timestamp: Optional[int] = None) -> None:
         with self._lock:
+            self._pending_removal_id = None
             if node_id not in self._nodes and len(self._nodes) >= self._max_nodes:
                 self._evict_oldest_locked()
             node = self._nodes.setdefault(node_id, {"id": node_id})
@@ -167,6 +169,14 @@ class MQTTNodeStore:
                 node["altitude"] = altitude
             node["last_seen"] = timestamp or int(time.time())
             node["is_online"] = True
+        # Invoke removal callback outside lock to prevent deadlock
+        evicted_id = self._pending_removal_id
+        cb = self._on_node_removed
+        if evicted_id and cb:
+            try:
+                cb(evicted_id)
+            except Exception as e:
+                logger.debug("on_node_removed callback error: %s", e)
 
     def update_nodeinfo(self, node_id: str, long_name: str = "",
                         short_name: str = "", hw_model: str = "",
@@ -360,13 +370,8 @@ class MQTTNodeStore:
         )
         del self._nodes[oldest_id]
         self._neighbors.pop(oldest_id, None)
-        # Notify dependent modules (drift detector, state tracker) outside lock
-        cb = self._on_node_removed
-        if cb:
-            try:
-                cb(oldest_id)
-            except Exception as e:
-                logger.debug("on_node_removed callback error: %s", e)
+        # Store callback + id for invocation outside lock by caller
+        self._pending_removal_id = oldest_id
 
 
 class MQTTSubscriber:
@@ -639,11 +644,11 @@ class MQTTSubscriber:
         pos = mesh_pb2.Position()
         pos.ParseFromString(payload)
 
-        lat = pos.latitude_i / 1e7 if pos.latitude_i else None
-        lon = pos.longitude_i / 1e7 if pos.longitude_i else None
+        lat = pos.latitude_i / 1e7 if pos.latitude_i != 0 else 0.0
+        lon = pos.longitude_i / 1e7 if pos.longitude_i != 0 else 0.0
 
         if lat is not None and lon is not None and (-90 <= lat <= 90) and (-180 <= lon <= 180):
-            alt = _safe_int(pos.altitude, -500, 100000) if pos.altitude else None
+            alt = _safe_int(pos.altitude, -500, 100000) if pos.altitude != 0 else 0
             self._store.update_position(node_id, lat, lon, altitude=alt)
             self._notify_update(node_id, "position", lat=lat, lon=lon)
 
@@ -748,7 +753,7 @@ class MQTTSubscriber:
         for n in ni.neighbors:
             neighbors.append({
                 "node_id": f"!{n.node_id:08x}",
-                "snr": n.snr if n.snr else None,
+                "snr": float(n.snr),
             })
         self._store.update_neighbors(node_id, neighbors)
         self._notify_update(node_id, "topology", neighbor_count=len(neighbors))

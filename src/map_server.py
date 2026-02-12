@@ -917,6 +917,7 @@ class MapServer:
             self._ws_server = None
         if self._server:
             self._server.shutdown()
+            self._server.server_close()
             logger.info("MeshForge Maps server stopped")
         # Wait for the HTTP server thread to fully exit before releasing
         # the port, preventing "Address already in use" on rapid restart

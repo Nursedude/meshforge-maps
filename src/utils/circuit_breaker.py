@@ -198,9 +198,11 @@ class CircuitBreakerRegistry:
                 self._breakers[name] = CircuitBreaker(
                     name=name,
                     failure_threshold=failure_threshold
-                    or self._default_failure_threshold,
+                    if failure_threshold is not None
+                    else self._default_failure_threshold,
                     recovery_timeout=recovery_timeout
-                    or self._default_recovery_timeout,
+                    if recovery_timeout is not None
+                    else self._default_recovery_timeout,
                 )
             return self._breakers[name]
 
