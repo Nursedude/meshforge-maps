@@ -117,11 +117,12 @@ class ConnectionManager:
 
     @property
     def is_locked(self) -> bool:
-        """Check if the connection is currently held (non-blocking)."""
-        if self._lock.acquire(timeout=0):
-            self._lock.release()
-            return False
-        return True
+        """Check if the connection is currently held (diagnostic only).
+
+        Note: inherently racy — the result may be stale by the time
+        the caller acts on it.  Use acquire() for actual locking.
+        """
+        return self._holder is not None
 
     @property
     def holder(self) -> Optional[str]:

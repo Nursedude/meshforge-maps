@@ -91,12 +91,20 @@ class MapWebSocketServer:
     def shutdown(self) -> None:
         """Stop the server and close all connections."""
         loop = self._loop
-        if loop:
+        server = self._server
+        if loop and server:
+            try:
+                if loop.is_running():
+                    # Close the WebSocket server first, then stop the loop
+                    loop.call_soon_threadsafe(self._close_server_and_stop, server, loop)
+            except RuntimeError:
+                pass  # Loop already closed
+        elif loop:
             try:
                 if loop.is_running():
                     loop.call_soon_threadsafe(loop.stop)
             except RuntimeError:
-                pass  # Loop already closed
+                pass
         if self._thread:
             self._thread.join(timeout=3.0)
             if self._thread.is_alive():
@@ -106,6 +114,15 @@ class MapWebSocketServer:
         self._server = None
         with self._lock:
             self._clients.clear()
+
+    @staticmethod
+    def _close_server_and_stop(server, loop) -> None:
+        """Close the WebSocket server and stop the event loop."""
+        try:
+            server.close()
+        except Exception:
+            pass
+        loop.stop()
 
     def broadcast(self, message: Dict[str, Any]) -> None:
         """Send a JSON message to all connected clients.

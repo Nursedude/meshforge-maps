@@ -2,6 +2,113 @@
 
 ---
 
+## Session 14: Medium & Low Severity Fixes
+
+**Date:** 2026-02-12
+**Branch:** `claude/fix-severity-issues-x7r1W`
+**Scope:** Fix all 13 medium-severity issues and 10 low-severity quick wins from Session 13 review
+**Version:** 0.7.0-beta (no version bump — fixes only)
+
+### Context
+
+Follow-up to Session 13 code review. Systematically fixed all 13 medium-severity issues and 10 of the 32 low-severity issues identified in the review. Focused on thread safety, CORS hardening, resource management, and correctness fixes.
+
+### Baseline
+
+- **Tests:** 670 passed, 22 skipped, 0 failures (matches Session 13)
+
+### Medium Severity Fixes (13/13 complete)
+
+| # | Issue | File(s) | Fix |
+|---|-------|---------|-----|
+| 8 | Wildcard CORS | `map_server.py`, `meshtastic_api_proxy.py`, `config.py` | Added `cors_allowed_origin` config key (default `None` = same-origin, no CORS headers). CORS headers only sent when explicitly configured. |
+| 9 | Aggregator thread safety | `aggregator.py` | Added `_data_lock` protecting `_cached_overlay`, `_last_collect_time`, `_last_collect_counts`. |
+| 10 | AREDN collector thread safety | `aredn_collector.py` | Added `_topo_lock`. Refactored `_fetch` to build topology data in local vars, swap under lock. `_fetch_from_node` now returns `(features, links)` tuple. Also fixed IPv6 false-positive in port detection. |
+| 11 | Config thread safety | `config.py` | Added `_lock` around all `_settings` reads/writes: `load()`, `save()`, `get()`, `set()`, `update()`, `to_dict()`, `get_enabled_sources()`. |
+| 12 | WebSocket server resource | `websocket_server.py` | Explicit `server.close()` before `loop.stop()` in shutdown. Added `_close_server_and_stop` static method. |
+| 13 | MQTT get_all_nodes side effect | `mqtt_subscriber.py` | Read method no longer mutates store. Stale-node `is_online=False` set on copy, not original dict. |
+| 14 | Proxy async failure | `meshtastic_api_proxy.py` | Wrapped `serve_forever()` in `_serve_forever_safe()` that sets `_running=False` on exception. |
+| 15 | Connection manager TOCTOU | `connection_manager.py` | Replaced acquire/release lock probe with `_holder is not None` check. Added docstring noting inherent diagnostic-only nature. |
+| 16 | Service worker FIFO→LRU | `sw-tiles.js` | Cache hits now delete+re-insert entry (LRU touch). `enforceCacheLimit` amortized to ~1% of fetches. |
+| 17 | Precache template substitution | `sw-tiles.js` | Added `.replace('{r}', '')` for retina placeholder. |
+| 18 | Missing HTTP response | `map_server.py` | Added `else: self._send_json({"error": "Not found"}, 404)` for all path-parsed routes with `len(parts)` checks. |
+| 19 | Band key matching | `hamclock_collector.py` | Replaced substring matching with regex `(?<!\d)(80|40|30|20|17|15|12|10)m?\b` using negative lookbehind. |
+| 20 | Plugin lifecycle thread safety | `plugin_lifecycle.py` | Added `_lock` for state, error, history, and listener mutations. Listeners invoked outside lock. |
+
+### Low Severity Fixes (10 of 32)
+
+| Issue | File | Fix |
+|-------|------|-----|
+| Import inside method | `base.py` | Moved `ReconnectStrategy` import to module level. |
+| Heartbeat list slicing | `node_state.py` | Changed `heartbeats` from `List` to `deque(maxlen=N)` for O(1) trimming. |
+| `total_transitions` unprotected read | `node_state.py` | Wrapped in `self._lock`. |
+| `total_drifts` unprotected read | `config_drift.py` | Wrapped in `self._lock`. |
+| Spurious drift from type mismatch | `config_drift.py` | Added `_normalize_value()` so `int(1)` == `float(1.0)`. |
+| `get_memory_usage()` unprotected read | `perf_monitor.py` | Added lock; split into public/internal `_memory_usage_locked()` to avoid deadlock from `get_stats()`. |
+| Route dict rebuilt per request | `map_server.py` | Moved to class-level `_ROUTE_TABLE` dict (method names, resolved via `getattr`). |
+| IPv6 address false-positive | `aredn_collector.py` | Port detection now checks for `[` prefix to distinguish IPv6 from host:port. |
+| CORS in proxy | `meshtastic_api_proxy.py` | Added `cors_origin` constructor parameter, handler reads from proxy instance. |
+| CORS proxy propagation | `meshtastic_api_proxy.py` | Handler `_get_cors_origin()` reads `_cors_origin` from proxy. |
+
+### Remaining Low Severity (22 unfixed)
+
+- `base.py` thread safety: `_cache`, `_cache_time` read/written without sync
+- `mqtt_subscriber._running/_connected`: bare booleans across threads
+- `mqtt_subscriber._messages_received`: incremented without lock
+- `event_bus.reset()`: replaces `_stats` object; concurrent `publish()` loses counters
+- `reconnect.py`: entire class has no synchronization
+- `node_history` throttle check outside lock allows duplicate observations
+- `node_history` `get_snapshot` can return duplicates
+- `openhamclock_compat` band key aliases: overlapping bands silently overwrite
+- `connection_manager.stats`: reads multiple fields without lock
+- `connection_manager._instances`: class-level mutable shared across subclasses
+- `reticulum_collector` cache: `_read_cache_file` returns all features without network filter
+- `reticulum_collector` duplicated cache-reading logic
+- Duplicated deduplication pattern across 4 collectors + aggregator
+- Duplicated unified cache path constant across collectors
+- `map_server` private attribute access: reaches into `aggregator._collectors`
+- `meshforge_maps.html` `rebuildMarkersFromFeatures`: duplicates `processGeoJSON` marker logic
+- `meshforge_maps.html` `trajectoryLayers`: grows without bound
+- `meshforge_maps.html` `allFeatures`: retains references indefinitely
+
+### Files Modified (16)
+
+| File | Change |
+|------|--------|
+| `src/collectors/aggregator.py` | Thread safety: `_data_lock` for cached data |
+| `src/collectors/aredn_collector.py` | Thread safety: `_topo_lock`; `_fetch_from_node` returns tuple; IPv6 fix |
+| `src/collectors/base.py` | Moved `ReconnectStrategy` import to top-level |
+| `src/collectors/hamclock_collector.py` | Regex band key matching with negative lookbehind |
+| `src/collectors/mqtt_subscriber.py` | `get_all_nodes` no longer mutates store |
+| `src/utils/config.py` | Thread safety: `_lock` on all settings access; `cors_allowed_origin` config key |
+| `src/utils/config_drift.py` | Lock on `total_drifts`; `_normalize_value` for type-safe comparison |
+| `src/utils/connection_manager.py` | `is_locked` uses `_holder is not None` instead of acquire/release probe |
+| `src/utils/meshtastic_api_proxy.py` | CORS configurable; `_serve_forever_safe` wraps serve_forever |
+| `src/utils/node_state.py` | `deque` for heartbeats; lock on `total_transitions` |
+| `src/utils/perf_monitor.py` | Lock on `get_memory_usage`; `_memory_usage_locked` avoids deadlock |
+| `src/utils/plugin_lifecycle.py` | Thread safety: `_lock` for all state access; listeners outside lock |
+| `src/utils/websocket_server.py` | Explicit `server.close()` before stopping event loop |
+| `src/map_server.py` | CORS configurable; 404 for short paths; class-level route table |
+| `web/sw-tiles.js` | LRU via delete+re-insert on hit; `{r}` placeholder; amortized eviction |
+| `tests/test_aredn_hardening.py` | Updated for `_fetch_from_node` tuple return |
+| `tests/test_node_state.py` | Updated for deque heartbeats |
+
+### Test Results
+
+- **Before:** 670 passed, 22 skipped
+- **After:** 670 passed, 22 skipped, 0 failures, 0 regressions
+
+### Session Entropy Watch
+
+- Session stayed focused throughout — systematic task list with 17 tracked items
+- All 13 medium-severity issues fixed
+- 10 low-severity quick wins completed
+- Found and fixed a deadlock introduced by own lock addition (perf_monitor)
+- Zero regressions at final checkpoint
+- No scope creep — strictly fixes from Session 13 review findings
+
+---
+
 ## Session 13: Code Review & Health Check
 
 **Date:** 2026-02-12

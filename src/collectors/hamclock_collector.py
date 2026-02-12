@@ -25,6 +25,7 @@ OpenHamClock: https://github.com/accius/openhamclock (MIT, port 3000).
 import json
 import logging
 import math
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -255,15 +256,22 @@ class HamClockCollector(BaseCollector):
         parsed = _parse_key_value(raw)
         bands: Dict[str, str] = {}
 
+        # Use negative lookbehind to avoid false positives
+        # (e.g., "140" matching "40", "100" matching "10")
+        _band_re = re.compile(r'(?<!\d)(80|40|30|20|17|15|12|10)m?\b', re.IGNORECASE)
+
         for key, value in parsed.items():
-            key_lower = key.lower()
-            if "80" in key_lower or "40" in key_lower:
+            match = _band_re.search(key)
+            if not match:
+                continue
+            band_num = match.group(1)
+            if band_num in ("80", "40"):
                 bands["80m-40m"] = value
-            elif "30" in key_lower or "20" in key_lower:
+            elif band_num in ("30", "20"):
                 bands["30m-20m"] = value
-            elif "17" in key_lower or "15" in key_lower:
+            elif band_num in ("17", "15"):
                 bands["17m-15m"] = value
-            elif "12" in key_lower or "10" in key_lower:
+            elif band_num in ("12", "10"):
                 bands["12m-10m"] = value
 
         return {"bands": bands, "raw": parsed} if bands else None
