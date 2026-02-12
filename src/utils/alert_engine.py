@@ -13,9 +13,11 @@ Alert types:
     congestion_high  - Channel utilization exceeded threshold
     signal_poor      - SNR dropped below threshold
 
-Delivery:
-    Alerts are published to the EventBus for consumption by WebSocket clients,
-    webhook dispatchers, or MQTT publishers.
+Delivery channels:
+    - EventBus: ALERT_FIRED events for WebSocket broadcast to browser clients
+    - MQTT publish: Alerts published to configurable topic for external consumers
+    - Webhooks: HTTP POST to registered URLs
+    - Callback: Direct function callback for in-process consumers
 
 Thread-safe: all state behind a lock.
 """
@@ -210,6 +212,8 @@ class AlertEngine:
         rules: Optional[List[AlertRule]] = None,
         max_history: int = MAX_ALERT_HISTORY,
         on_alert: Optional[Callable[["Alert"], None]] = None,
+        mqtt_client: Optional[Any] = None,
+        mqtt_topic: str = "meshforge/alerts",
     ):
         self._lock = threading.Lock()
         self._rules: Dict[str, AlertRule] = {}
@@ -220,6 +224,11 @@ class AlertEngine:
         self._webhooks: List[str] = []
         self._alert_counter = 0
         self._total_alerts_fired = 0
+
+        # MQTT publish delivery
+        self._mqtt_client = mqtt_client
+        self._mqtt_topic = mqtt_topic
+        self._mqtt_publish_count = 0
 
         # Load rules — copy defaults to avoid shared mutation
         import copy
@@ -471,6 +480,8 @@ class AlertEngine:
                 "history_size": len(self._history),
                 "by_severity": by_severity,
                 "by_type": by_type,
+                "mqtt_enabled": self._mqtt_client is not None,
+                "mqtt_publish_count": self._mqtt_publish_count,
             }
 
     def add_webhook(self, url: str) -> None:
@@ -493,6 +504,31 @@ class AlertEngine:
         with self._lock:
             return list(self._webhooks)
 
+    def set_mqtt_client(self, client: Any, topic: str = "meshforge/alerts") -> None:
+        """Configure MQTT client for alert publishing.
+
+        Args:
+            client: A paho-mqtt Client instance (must be connected).
+            topic: MQTT topic to publish alerts to. Severity-specific
+                   sub-topics are used: {topic}/{severity} (e.g.
+                   meshforge/alerts/critical).
+        """
+        with self._lock:
+            self._mqtt_client = client
+            self._mqtt_topic = topic
+        logger.info("MQTT alert publishing configured: topic=%s", topic)
+
+    def remove_mqtt_client(self) -> None:
+        """Remove the MQTT client (disables MQTT alert publishing)."""
+        with self._lock:
+            self._mqtt_client = None
+
+    @property
+    def mqtt_publish_count(self) -> int:
+        """Number of alerts successfully published via MQTT."""
+        with self._lock:
+            return self._mqtt_publish_count
+
     def clear_cooldowns(self) -> None:
         """Clear all cooldown timers (useful for testing)."""
         with self._lock:
@@ -507,12 +543,43 @@ class AlertEngine:
             except Exception as e:
                 logger.debug("Alert callback error: %s", e)
 
+        # MQTT publish delivery (best-effort)
+        self._publish_mqtt(alert)
+
         # Webhook delivery (best-effort, non-blocking)
         with self._lock:
             webhooks = list(self._webhooks)
 
         for url in webhooks:
             self._send_webhook(url, alert)
+
+    def _publish_mqtt(self, alert: Alert) -> None:
+        """Publish an alert to MQTT topic (best-effort).
+
+        Publishes to both the base topic and a severity-specific sub-topic:
+          - meshforge/alerts        (all alerts)
+          - meshforge/alerts/{severity}  (filtered by severity)
+        """
+        with self._lock:
+            client = self._mqtt_client
+            topic = self._mqtt_topic
+        if not client:
+            return
+
+        try:
+            payload = json.dumps(alert.to_dict())
+            # Publish to base topic
+            client.publish(topic, payload, qos=1)
+            # Publish to severity sub-topic for filtered subscriptions
+            severity_topic = f"{topic}/{alert.severity}"
+            client.publish(severity_topic, payload, qos=1)
+            with self._lock:
+                self._mqtt_publish_count += 1
+            logger.debug(
+                "MQTT alert published to %s for %s", topic, alert.alert_id,
+            )
+        except Exception as e:
+            logger.debug("MQTT alert publish failed: %s", e)
 
     def _send_webhook(self, url: str, alert: Alert) -> None:
         """Send an alert to a webhook URL (best-effort)."""

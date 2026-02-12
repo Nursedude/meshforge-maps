@@ -23,7 +23,8 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .collectors.aggregator import DataAggregator
-from .utils.alert_engine import AlertEngine
+from .utils.alert_engine import Alert, AlertEngine
+from .utils.analytics import HistoricalAnalytics
 from .utils.config import NETWORK_COLORS, TILE_PROVIDERS, MapsConfig
 from .utils.config_drift import ConfigDriftDetector
 from .utils.event_bus import Event, EventBus, EventType, NodeEvent
@@ -93,6 +94,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     def _get_alert_engine(self) -> Optional[AlertEngine]:
         return getattr(self.server, "_mf_alert_engine", None)
 
+    def _get_analytics(self) -> Optional[HistoricalAnalytics]:
+        return getattr(self.server, "_mf_analytics", None)
+
     # Route name -> method name mapping (built once, not per request)
     _ROUTE_TABLE = {
         "": "_serve_map",
@@ -123,6 +127,11 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/alerts/active": "_serve_active_alerts",
         "/api/alerts/rules": "_serve_alert_rules",
         "/api/alerts/summary": "_serve_alert_summary",
+        "/api/analytics/growth": "_serve_analytics_growth",
+        "/api/analytics/activity": "_serve_analytics_activity",
+        "/api/analytics/ranking": "_serve_analytics_ranking",
+        "/api/analytics/summary": "_serve_analytics_summary",
+        "/api/analytics/alert-trends": "_serve_analytics_alert_trends",
     }
 
     def do_GET(self) -> None:
@@ -662,6 +671,104 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
         self._send_json(engine.get_summary())
 
+    # ------------------------------------------------------------------
+    # Analytics endpoints
+    # ------------------------------------------------------------------
+
+    def _serve_analytics_growth(self) -> None:
+        """Serve network growth time-series (unique nodes per bucket)."""
+        analytics = self._get_analytics()
+        if not analytics:
+            self._send_json({"error": "Analytics not available"}, 503)
+            return
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        since = _safe_query_param(query, "since")
+        until = _safe_query_param(query, "until")
+        bucket = _safe_query_param(query, "bucket", "3600")
+        try:
+            since_ts = int(since) if since else None
+            until_ts = int(until) if until else None
+            bucket_s = int(bucket) if bucket else 3600
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid query parameters"}, 400)
+            return
+        self._send_json(analytics.network_growth(
+            since=since_ts, until=until_ts, bucket_seconds=bucket_s,
+        ))
+
+    def _serve_analytics_activity(self) -> None:
+        """Serve activity heatmap (observations by hour of day)."""
+        analytics = self._get_analytics()
+        if not analytics:
+            self._send_json({"error": "Analytics not available"}, 503)
+            return
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        since = _safe_query_param(query, "since")
+        until = _safe_query_param(query, "until")
+        try:
+            since_ts = int(since) if since else None
+            until_ts = int(until) if until else None
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid query parameters"}, 400)
+            return
+        self._send_json(analytics.activity_heatmap(
+            since=since_ts, until=until_ts,
+        ))
+
+    def _serve_analytics_ranking(self) -> None:
+        """Serve node activity ranking (most active nodes)."""
+        analytics = self._get_analytics()
+        if not analytics:
+            self._send_json({"error": "Analytics not available"}, 503)
+            return
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        since = _safe_query_param(query, "since")
+        limit_str = _safe_query_param(query, "limit", "50")
+        try:
+            since_ts = int(since) if since else None
+            limit = max(1, min(int(limit_str) if limit_str else 50, 200))
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid query parameters"}, 400)
+            return
+        self._send_json(analytics.node_activity_ranking(
+            since=since_ts, limit=limit,
+        ))
+
+    def _serve_analytics_summary(self) -> None:
+        """Serve high-level network analytics summary."""
+        analytics = self._get_analytics()
+        if not analytics:
+            self._send_json({"error": "Analytics not available"}, 503)
+            return
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        since = _safe_query_param(query, "since")
+        try:
+            since_ts = int(since) if since else None
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid query parameters"}, 400)
+            return
+        self._send_json(analytics.network_summary(since=since_ts))
+
+    def _serve_analytics_alert_trends(self) -> None:
+        """Serve alert trend aggregation (alerts per time bucket)."""
+        analytics = self._get_analytics()
+        if not analytics:
+            self._send_json({"error": "Analytics not available"}, 503)
+            return
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        bucket = _safe_query_param(query, "bucket", "3600")
+        try:
+            bucket_s = int(bucket) if bucket else 3600
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid query parameters"}, 400)
+            return
+        self._send_json(analytics.alert_trends(bucket_seconds=bucket_s))
+
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
         aggregator = self._get_aggregator()
@@ -796,6 +903,19 @@ class MapServer:
         # Alert engine for threshold-based monitoring
         self._alert_engine = AlertEngine()
 
+        # Historical analytics (read-only aggregation over history + alerts)
+        self._analytics = HistoricalAnalytics(
+            node_history=self._node_history,
+            alert_engine=self._alert_engine,
+        )
+
+        # Wire MQTT client to alert engine for publish delivery
+        if self._aggregator.mqtt_subscriber and self._aggregator.mqtt_subscriber._client:
+            mqtt_topic = config.get("mqtt_alert_topic", "meshforge/alerts")
+            self._alert_engine.set_mqtt_client(
+                self._aggregator.mqtt_subscriber._client, mqtt_topic,
+            )
+
         # Wire node eviction cleanup to drift detector and state tracker
         if self._aggregator.mqtt_subscriber:
             self._aggregator.mqtt_subscriber.store._on_node_removed = (
@@ -838,6 +958,7 @@ class MapServer:
                 self._server._mf_node_state = self._node_state  # type: ignore[attr-defined]
                 self._server._mf_health_scorer = self._health_scorer  # type: ignore[attr-defined]
                 self._server._mf_alert_engine = self._alert_engine  # type: ignore[attr-defined]
+                self._server._mf_analytics = self._analytics  # type: ignore[attr-defined]
                 if self._proxy:
                     self._server._mf_proxy = self._proxy  # type: ignore[attr-defined]
 
@@ -922,16 +1043,35 @@ class MapServer:
         self._node_state.record_heartbeat(event.node_id)
 
     def _handle_telemetry_for_alerts(self, event: Event) -> None:
-        """Evaluate alert rules against incoming telemetry data."""
+        """Evaluate alert rules against incoming telemetry data.
+
+        Triggered alerts are published as ALERT_FIRED events on the EventBus,
+        which propagates them to WebSocket clients via the wildcard subscriber.
+        """
         if not isinstance(event, NodeEvent):
             return
         props = event.data or {}
         # Get health score if available
         health_entry = self._health_scorer.get_node_score(event.node_id)
         health_score = health_entry["score"] if health_entry else None
-        self._alert_engine.evaluate_node(
+        triggered = self._alert_engine.evaluate_node(
             event.node_id, props, health_score=health_score,
         )
+        # Publish each triggered alert as an ALERT_FIRED event
+        for alert in triggered:
+            self._publish_alert_event(alert)
+
+    def _publish_alert_event(self, alert: "Alert") -> None:
+        """Publish an alert as an ALERT_FIRED event on the EventBus."""
+        try:
+            alert_event = Event(
+                event_type=EventType.ALERT_FIRED,
+                source="alert_engine",
+                data=alert.to_dict(),
+            )
+            self._aggregator.event_bus.publish(alert_event)
+        except Exception as e:
+            logger.debug("Failed to publish alert event: %s", e)
 
     def _start_websocket(self, ws_port: int) -> None:
         """Start the WebSocket server and wire it to the event bus.
