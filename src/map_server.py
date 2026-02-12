@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .collectors.aggregator import DataAggregator
+from .utils.alert_engine import AlertEngine
 from .utils.config import NETWORK_COLORS, TILE_PROVIDERS, MapsConfig
 from .utils.config_drift import ConfigDriftDetector
 from .utils.event_bus import Event, EventBus, EventType, NodeEvent
@@ -89,6 +90,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     def _get_health_scorer(self) -> Optional[NodeHealthScorer]:
         return getattr(self.server, "_mf_health_scorer", None)
 
+    def _get_alert_engine(self) -> Optional[AlertEngine]:
+        return getattr(self.server, "_mf_alert_engine", None)
+
     # Route name -> method name mapping (built once, not per request)
     _ROUTE_TABLE = {
         "": "_serve_map",
@@ -115,6 +119,10 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/node-health": "_serve_all_node_health",
         "/api/node-health/summary": "_serve_node_health_summary",
         "/api/perf": "_serve_perf_stats",
+        "/api/alerts": "_serve_alerts",
+        "/api/alerts/active": "_serve_active_alerts",
+        "/api/alerts/rules": "_serve_alert_rules",
+        "/api/alerts/summary": "_serve_alert_summary",
     }
 
     def do_GET(self) -> None:
@@ -613,6 +621,47 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
         self._send_json(aggregator.perf_monitor.get_stats())
 
+    def _serve_alerts(self) -> None:
+        """Serve alert history with optional filters."""
+        engine = self._get_alert_engine()
+        if not engine:
+            self._send_json({"error": "Alert engine not available"}, 503)
+            return
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        limit = int(_safe_query_param(query, "limit", "50") or "50")
+        severity = _safe_query_param(query, "severity")
+        node_id = _safe_query_param(query, "node_id")
+        self._send_json({
+            "alerts": engine.get_alert_history(
+                limit=limit, severity=severity, node_id=node_id,
+            ),
+        })
+
+    def _serve_active_alerts(self) -> None:
+        """Serve currently active (unacknowledged) alerts."""
+        engine = self._get_alert_engine()
+        if not engine:
+            self._send_json({"error": "Alert engine not available"}, 503)
+            return
+        self._send_json({"alerts": engine.get_active_alerts()})
+
+    def _serve_alert_rules(self) -> None:
+        """Serve configured alert rules."""
+        engine = self._get_alert_engine()
+        if not engine:
+            self._send_json({"error": "Alert engine not available"}, 503)
+            return
+        self._send_json({"rules": engine.list_rules()})
+
+    def _serve_alert_summary(self) -> None:
+        """Serve alert summary statistics."""
+        engine = self._get_alert_engine()
+        if not engine:
+            self._send_json({"error": "Alert engine not available"}, 503)
+            return
+        self._send_json(engine.get_summary())
+
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
         aggregator = self._get_aggregator()
@@ -673,6 +722,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "circuit_breakers": circuit_breaker_states,
             "websocket": websocket_stats,
             "event_bus": event_bus_stats,
+            "alerts": self._get_alert_engine().get_summary() if self._get_alert_engine() else None,
         })
 
     def _send_json(self, data: Any, status: int = 200) -> None:
@@ -743,6 +793,9 @@ class MapServer:
         # Per-node health scoring
         self._health_scorer = NodeHealthScorer()
 
+        # Alert engine for threshold-based monitoring
+        self._alert_engine = AlertEngine()
+
         # Wire node eviction cleanup to drift detector and state tracker
         if self._aggregator.mqtt_subscriber:
             self._aggregator.mqtt_subscriber.store._on_node_removed = (
@@ -784,6 +837,7 @@ class MapServer:
                 self._server._mf_config_drift = self._config_drift  # type: ignore[attr-defined]
                 self._server._mf_node_state = self._node_state  # type: ignore[attr-defined]
                 self._server._mf_health_scorer = self._health_scorer  # type: ignore[attr-defined]
+                self._server._mf_alert_engine = self._alert_engine  # type: ignore[attr-defined]
                 if self._proxy:
                     self._server._mf_proxy = self._proxy  # type: ignore[attr-defined]
 
@@ -820,6 +874,11 @@ class MapServer:
                 )
                 self._aggregator.event_bus.subscribe(
                     EventType.NODE_INFO, self._handle_heartbeat,
+                )
+
+                # Subscribe alert engine to telemetry events for evaluation
+                self._aggregator.event_bus.subscribe(
+                    EventType.NODE_TELEMETRY, self._handle_telemetry_for_alerts,
                 )
 
                 # Start Meshtastic API proxy
@@ -861,6 +920,18 @@ class MapServer:
         if not isinstance(event, NodeEvent):
             return
         self._node_state.record_heartbeat(event.node_id)
+
+    def _handle_telemetry_for_alerts(self, event: Event) -> None:
+        """Evaluate alert rules against incoming telemetry data."""
+        if not isinstance(event, NodeEvent):
+            return
+        props = event.data or {}
+        # Get health score if available
+        health_entry = self._health_scorer.get_node_score(event.node_id)
+        health_score = health_entry["score"] if health_entry else None
+        self._alert_engine.evaluate_node(
+            event.node_id, props, health_score=health_score,
+        )
 
     def _start_websocket(self, ws_port: int) -> None:
         """Start the WebSocket server and wire it to the event bus.
@@ -969,6 +1040,10 @@ class MapServer:
     @property
     def aggregator(self) -> DataAggregator:
         return self._aggregator
+
+    @property
+    def alert_engine(self) -> AlertEngine:
+        return self._alert_engine
 
     @property
     def node_history(self) -> Optional[NodeHistoryDB]:
