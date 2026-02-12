@@ -113,7 +113,11 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
         })
 
     def _serve_node(self, node_id: str) -> None:
-        """Serve a single node by ID."""
+        """Serve a single node by ID.
+
+        Uses direct O(1) lookup via store.get_node() when available,
+        falling back to linear scan for older store implementations.
+        """
         store = self._get_store()
         proxy = self._get_proxy()
         if proxy:
@@ -123,12 +127,20 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Store not available"}, 503)
             return
 
-        nodes = store.get_all_nodes()
-        for node in nodes:
-            nid = node.get("id", "")
-            if nid == node_id or nid.lstrip("!") == node_id.lstrip("!"):
+        # Prefer O(1) lookup if the store supports it
+        if hasattr(store, "get_node"):
+            node = store.get_node(node_id)
+            if node is not None:
                 self._send_json(_format_node_meshtastic(node))
                 return
+        else:
+            # Fallback: linear scan for stores without get_node()
+            nodes = store.get_all_nodes()
+            for node in nodes:
+                nid = node.get("id", "")
+                if nid == node_id or nid.lstrip("!") == node_id.lstrip("!"):
+                    self._send_json(_format_node_meshtastic(node))
+                    return
 
         self._send_json({"error": f"Node {node_id} not found"}, 404)
 
@@ -172,12 +184,18 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
             status = 500
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
         cors_origin = self._get_cors_origin()
         if cors_origin:
             self.send_header("Access-Control-Allow-Origin", cors_origin)
         self.end_headers()
         self.wfile.write(body)
+
+    server_version = "MeshForge-Proxy/1.0"
+
+    def version_string(self) -> str:
+        return self.server_version
 
     def log_message(self, format: str, *args: Any) -> None:
         logger.debug("Proxy HTTP %s", format % args)
@@ -353,10 +371,15 @@ class MeshtasticApiProxy:
         }
 
     def set_store(self, store: Any) -> None:
-        """Update the MQTT node store reference (for late binding)."""
+        """Update the MQTT node store reference (for late binding).
+
+        Both the proxy and the server attributes are updated atomically
+        so that in-flight request handlers see a consistent store.
+        """
         self._mqtt_store = store
-        if self._server:
-            self._server._mf_mqtt_store = store  # type: ignore[attr-defined]
+        server = self._server
+        if server is not None:
+            server._mf_mqtt_store = store  # type: ignore[attr-defined]
 
     def start(self) -> bool:
         """Start the proxy server in a background thread.

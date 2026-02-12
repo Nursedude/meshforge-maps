@@ -789,6 +789,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         body = buf.getvalue().encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
         self.send_header(
             "Content-Disposition",
             f'attachment; filename="{filename}"',
@@ -971,12 +972,18 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             status = 500
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
         cors_origin = self._get_cors_origin()
         if cors_origin:
             self.send_header("Access-Control-Allow-Origin", cors_origin)
         self.end_headers()
         self.wfile.write(body)
+
+    server_version = "MeshForge-Maps/1.0"
+
+    def version_string(self) -> str:
+        return self.server_version
 
     def _find_map_file(self) -> Optional[Path]:
         """Locate the map HTML file."""
@@ -1132,9 +1139,13 @@ class MapServer:
                     EventType.NODE_TELEMETRY, self._handle_telemetry_for_alerts,
                 )
 
-                # Start Meshtastic API proxy
+                # Start Meshtastic API proxy (non-fatal if it fails)
                 if self._proxy:
-                    self._proxy.start()
+                    if not self._proxy.start():
+                        logger.warning(
+                            "Meshtastic API proxy failed to start; "
+                            "map server continues without proxy"
+                        )
 
                 # Start WebSocket server on adjacent port
                 self._start_websocket(port + 1)

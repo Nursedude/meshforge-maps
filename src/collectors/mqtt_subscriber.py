@@ -231,6 +231,21 @@ class MQTTNodeStore:
         with self._lock:
             self._neighbors[node_id] = neighbors
 
+    def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """Return a single node by ID, or None if not found.
+
+        Accepts IDs with or without '!' prefix. Returns a copy.
+        """
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                # Try alternate form: with/without '!' prefix
+                alt = node_id.lstrip("!") if node_id.startswith("!") else f"!{node_id}"
+                node = self._nodes.get(alt)
+            if node is None:
+                return None
+            return dict(node)
+
     def get_all_nodes(self) -> List[Dict[str, Any]]:
         """Return all non-stale nodes with valid coordinates.
 

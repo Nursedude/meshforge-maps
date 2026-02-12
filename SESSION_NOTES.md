@@ -2,6 +2,98 @@
 
 ---
 
+## Session 21: Fix meshtasticd HTTP API Connection Issues
+
+**Date:** 2026-02-12
+**Branch:** `claude/fix-meshtasticd-http-api-Qr1hQ`
+**Scope:** Audit and fix HTTP API connection issues in meshtasticd collector, API proxy, and map server
+**Version:** 0.7.0-beta (no version bump)
+
+### Summary
+
+Systematic audit of all meshtasticd HTTP API connection code identified 13 issues
+across 4 files. Fixed the 7 highest-impact issues: timeout race condition, missing
+retry logic, missing Content-Length headers, Server header version leakage, proxy
+startup failure handling, O(n) node lookup, and thread-safe store swaps.
+13 new tests (898 total). Zero regressions.
+
+### Issues Found (Audit)
+
+| # | Severity | File | Issue |
+|---|----------|------|-------|
+| 1 | CRITICAL | meshtastic_collector.py | Timeout mismatch: lock timeout (5s) = urlopen timeout (5s) — race condition |
+| 2 | CRITICAL | meshtastic_collector.py | No retry logic in `_fetch_from_api()` for transient failures |
+| 3 | CRITICAL | meshtastic_api_proxy.py, map_server.py | Missing Content-Length header in JSON/CSV responses |
+| 4 | HIGH | meshtastic_api_proxy.py, map_server.py | Server header leaks Python version info |
+| 5 | HIGH | map_server.py | Proxy startup failure silently ignored after HTTP server already running |
+| 6 | HIGH | meshtastic_api_proxy.py | `_serve_node()` scans all nodes O(n) per single-node request |
+| 7 | HIGH | meshtastic_api_proxy.py | Store swap via `set_store()` not atomic for in-flight handlers |
+| 8-13 | MEDIUM-LOW | Various | Stats consistency, connection drops, circuit breaker edge cases |
+
+### Fixes Applied
+
+#### 1. Timeout Mismatch Fix (`meshtastic_collector.py`)
+- HTTP timeout now `connection_timeout - 1.0` (floor 1.0s) so lock is never released while request is in-flight
+- Previously both were 5.0s, causing a race where the lock could expire during an active HTTP request
+
+#### 2. Retry Logic for Transient Failures (`meshtastic_collector.py`)
+- `_fetch_from_api()` now retries once (0.5s delay) on `URLError`/`OSError` before giving up
+- Does NOT retry on `JSONDecodeError` (permanent parse failures)
+- Distinguishes transient connection issues from permanent errors
+
+#### 3. Content-Length Header (`meshtastic_api_proxy.py`, `map_server.py`)
+- All JSON responses now include `Content-Length` header
+- CSV export responses also include `Content-Length`
+- Prevents HTTP/1.0 client hangs and improper connection handling
+
+#### 4. Server Header Hardening (`meshtastic_api_proxy.py`, `map_server.py`)
+- Override `server_version` and `version_string()` on both handler classes
+- Proxy returns `MeshForge-Proxy/1.0`, map server returns `MeshForge-Maps/1.0`
+- No longer leaks Python version in HTTP responses
+
+#### 5. Proxy Startup Failure Handling (`map_server.py`)
+- `proxy.start()` return value now checked; failure logged as warning
+- Map server continues operating without proxy (non-fatal degradation)
+- Previously proxy startup failure was silently ignored
+
+#### 6. O(1) Node Lookup (`mqtt_subscriber.py`, `meshtastic_api_proxy.py`)
+- New `MQTTNodeStore.get_node(node_id)` method: O(1) dict lookup with `!` prefix normalization
+- Proxy `_serve_node()` uses `get_node()` when available, falls back to scan for older stores
+- Previously scanned all nodes linearly per single-node request
+
+#### 7. Thread-Safe Store Swap (`meshtastic_api_proxy.py`)
+- `set_store()` reads server reference once into local variable
+- Prevents reading stale `self._server` after concurrent stop/restart
+
+### Test Coverage Added (13 new tests)
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `test_mqtt_subscriber.py` | +6 | `get_node()` exact match, prefix normalization, not-found, copy semantics, empty store |
+| `test_collectors.py` | +3 | Retry on transient failure, timeout calculation, no retry on JSON error |
+| `test_meshtastic_api_proxy.py` | +4 | Content-Length header, Server header, O(1) node lookup, prefix-less lookup |
+
+### Test Results
+- **Before:** 885 passed, 22 skipped
+- **After:** 898 passed (+13 new), 22 skipped, 0 failures, 0 regressions
+
+### Files Modified (5)
+- `src/collectors/meshtastic_collector.py` — Timeout fix, retry logic
+- `src/collectors/mqtt_subscriber.py` — `get_node()` O(1) lookup method
+- `src/utils/meshtastic_api_proxy.py` — Content-Length, Server header, O(1) lookup, thread-safe set_store
+- `src/map_server.py` — Content-Length, Server header, proxy startup check
+- `tests/test_mqtt_subscriber.py` — 6 new tests for get_node()
+- `tests/test_collectors.py` — 3 new tests for retry logic
+- `tests/test_meshtastic_api_proxy.py` — 4 new tests for response headers and lookup
+
+### Architecture Notes
+- Retry logic is intentionally limited to 1 retry inside `_fetch_from_api()` — higher-level retries still happen at the `BaseCollector.collect()` level via `ReconnectStrategy`
+- Content-Length is critical for HTTP clients that don't support chunked encoding
+- O(1) node lookup via `get_node()` supports both `!`-prefixed and bare hex IDs
+- Session stopped cleanly — no entropy detected
+
+---
+
 ## Session 20: Analytics Frontend, CSV/JSON Export, TUI Search & Event Filtering
 
 **Date:** 2026-02-12

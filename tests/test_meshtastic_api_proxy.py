@@ -298,5 +298,91 @@ class TestMeshtasticApiProxy(unittest.TestCase):
             proxy.stop()
 
 
+class TestProxyResponseHeaders(unittest.TestCase):
+    """Test HTTP response header improvements."""
+
+    def test_content_length_header(self):
+        """JSON responses include Content-Length header."""
+        store = MQTTNodeStore()
+        proxy = MeshtasticApiProxy(mqtt_store=store, port=19409)
+        try:
+            proxy.start()
+            time.sleep(0.1)
+
+            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
+            conn.request("GET", "/api/v1/nodes")
+            resp = conn.getresponse()
+            body = resp.read()
+            conn.close()
+
+            content_length = resp.getheader("Content-Length")
+            self.assertIsNotNone(content_length)
+            self.assertEqual(int(content_length), len(body))
+        finally:
+            proxy.stop()
+
+    def test_server_header_not_python(self):
+        """Server header should not leak Python version."""
+        store = MQTTNodeStore()
+        proxy = MeshtasticApiProxy(mqtt_store=store, port=19410)
+        try:
+            proxy.start()
+            time.sleep(0.1)
+
+            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
+            conn.request("GET", "/api/v1/stats")
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+
+            server = resp.getheader("Server")
+            self.assertNotIn("Python", server)
+            self.assertIn("MeshForge", server)
+        finally:
+            proxy.stop()
+
+    def test_single_node_via_get_node(self):
+        """Direct node lookup via get_node() for O(1) performance."""
+        store = MQTTNodeStore()
+        store.update_position("!ff001122", 42.0, -107.0)
+        store.update_nodeinfo("!ff001122", long_name="LookupTest")
+        proxy = MeshtasticApiProxy(mqtt_store=store, port=19411)
+        try:
+            proxy.start()
+            time.sleep(0.1)
+
+            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
+            conn.request("GET", "/api/v1/nodes/!ff001122")
+            resp = conn.getresponse()
+            data = json.loads(resp.read().decode())
+            conn.close()
+
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(data["user"]["id"], "!ff001122")
+            self.assertEqual(data["user"]["longName"], "LookupTest")
+        finally:
+            proxy.stop()
+
+    def test_single_node_lookup_without_prefix(self):
+        """Node lookup without ! prefix matches stored node with prefix."""
+        store = MQTTNodeStore()
+        store.update_position("!aabb3344", 43.0, -108.0)
+        proxy = MeshtasticApiProxy(mqtt_store=store, port=19412)
+        try:
+            proxy.start()
+            time.sleep(0.1)
+
+            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
+            conn.request("GET", "/api/v1/nodes/aabb3344")
+            resp = conn.getresponse()
+            data = json.loads(resp.read().decode())
+            conn.close()
+
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(data["user"]["id"], "!aabb3344")
+        finally:
+            proxy.stop()
+
+
 if __name__ == "__main__":
     unittest.main()
