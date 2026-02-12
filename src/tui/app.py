@@ -128,7 +128,7 @@ def draw_hbar(win: Any, y: int, x: int, value: float, width: int,
 class TuiApp:
     """Main TUI application controller."""
 
-    TAB_NAMES = ["Dashboard", "Nodes", "Alerts", "Propagation"]
+    TAB_NAMES = ["Dashboard", "Nodes", "Alerts", "Propagation", "Topology", "Events"]
 
     def __init__(self, host: str = "127.0.0.1", port: int = 8808):
         self._client = MapDataClient(host, port)
@@ -149,6 +149,19 @@ class TuiApp:
         # Node table sort: (column_index, reverse)
         self._node_sort: Tuple[int, bool] = (0, False)
 
+        # Node detail drill-down state
+        self._detail_node_id: Optional[str] = None
+        self._detail_scroll: int = 0
+        self._node_cursor: int = 0  # cursor position in node list
+
+        # Event log ring buffer (for Events tab)
+        self._event_log: List[Dict[str, Any]] = []
+        self._event_log_max = 500
+
+        # WebSocket state
+        self._ws_connected = False
+        self._ws_thread: Optional[threading.Thread] = None
+
     def run(self) -> None:
         """Launch the TUI (blocks until quit)."""
         curses.wrapper(self._main)
@@ -166,6 +179,10 @@ class TuiApp:
         # Start background data fetcher
         fetch_thread = threading.Thread(target=self._fetch_loop, daemon=True)
         fetch_thread.start()
+
+        # Start WebSocket listener for push updates
+        self._ws_thread = threading.Thread(target=self._ws_listen_loop, daemon=True)
+        self._ws_thread.start()
 
         # Initial data fetch
         self._refresh_data()
@@ -218,12 +235,22 @@ class TuiApp:
                 new_cache["nodes"] = self._client.nodes_geojson()
                 new_cache["all_node_health"] = self._client.all_node_health()
                 new_cache["all_node_states"] = self._client.all_node_states()
+                # Fetch detail data if drilling into a node
+                nid = self._detail_node_id
+                if nid:
+                    new_cache["detail_health"] = self._client.node_health(nid)
+                    new_cache["detail_history"] = self._client.node_history(nid)
+                    new_cache["detail_alerts"] = self._client.node_alerts(nid)
+                    new_cache["config_drift"] = self._client.config_drift()
             elif tab == 2:  # Alerts
                 new_cache["alerts"] = self._client.alerts()
                 new_cache["active_alerts"] = self._client.active_alerts()
                 new_cache["alert_rules"] = self._client.alert_rules()
             elif tab == 3:  # Propagation
                 new_cache["hamclock"] = self._client.hamclock()
+            elif tab == 4:  # Topology
+                new_cache["topo"] = self._client.topology_geojson()
+                new_cache["nodes"] = self._client.nodes_geojson()
 
             with self._data_lock:
                 self._cache.update(new_cache)
@@ -246,60 +273,126 @@ class TuiApp:
         if key == -1:
             return
 
-        # Quit
+        # Quit (q exits detail view first, then app)
         if key in (ord("q"), ord("Q")):
+            if self._detail_node_id:
+                self._detail_node_id = None
+                self._detail_scroll = 0
+                return
             self._running = False
             return
 
-        # Tab switching by number
-        if key in (ord("1"), ord("2"), ord("3"), ord("4")):
-            new_tab = key - ord("1")
-            if new_tab != self._active_tab:
+        # Escape exits detail view
+        if key == 27:
+            if self._detail_node_id:
+                self._detail_node_id = None
+                self._detail_scroll = 0
+                return
+
+        # Tab switching by number (1-6)
+        tab_keys = [ord("1"), ord("2"), ord("3"), ord("4"), ord("5"), ord("6")]
+        if key in tab_keys:
+            new_tab = tab_keys.index(key)
+            if new_tab < len(self.TAB_NAMES) and new_tab != self._active_tab:
+                self._detail_node_id = None  # exit detail view on tab switch
+                self._detail_scroll = 0
                 self._active_tab = new_tab
-                self._refresh_data()  # fetch tab-specific data
+                self._refresh_data()
             return
 
         # Tab switching by arrow / tab key
         if key == ord("\t") or key == curses.KEY_RIGHT:
+            self._detail_node_id = None
+            self._detail_scroll = 0
             self._active_tab = (self._active_tab + 1) % len(self.TAB_NAMES)
             self._refresh_data()
             return
         if key == curses.KEY_BTAB or key == curses.KEY_LEFT:
+            self._detail_node_id = None
+            self._detail_scroll = 0
             self._active_tab = (self._active_tab - 1) % len(self.TAB_NAMES)
             self._refresh_data()
             return
 
-        # Scroll
+        # In node detail view, scroll the detail
+        if self._detail_node_id and self._active_tab == 1:
+            if key == curses.KEY_DOWN or key == ord("j"):
+                self._detail_scroll += 1
+                return
+            if key == curses.KEY_UP or key == ord("k"):
+                self._detail_scroll = max(0, self._detail_scroll - 1)
+                return
+            if key == curses.KEY_PPAGE:
+                self._detail_scroll = max(0, self._detail_scroll - 20)
+                return
+            if key == curses.KEY_NPAGE:
+                self._detail_scroll += 20
+                return
+            if key == curses.KEY_HOME or key == ord("g"):
+                self._detail_scroll = 0
+                return
+            if key in (ord("r"), ord("R")):
+                self._refresh_data()
+                return
+            return
+
+        # Scroll (normal tab scrolling)
         if key == curses.KEY_DOWN or key == ord("j"):
+            if self._active_tab == 1 and not self._detail_node_id:
+                self._node_cursor += 1
             self._scroll[self._active_tab] += 1
             return
         if key == curses.KEY_UP or key == ord("k"):
+            if self._active_tab == 1 and not self._detail_node_id:
+                self._node_cursor = max(0, self._node_cursor - 1)
             self._scroll[self._active_tab] = max(0, self._scroll[self._active_tab] - 1)
             return
         if key == curses.KEY_PPAGE:  # Page Up
+            if self._active_tab == 1 and not self._detail_node_id:
+                self._node_cursor = max(0, self._node_cursor - 20)
             self._scroll[self._active_tab] = max(0, self._scroll[self._active_tab] - 20)
             return
         if key == curses.KEY_NPAGE:  # Page Down
+            if self._active_tab == 1 and not self._detail_node_id:
+                self._node_cursor += 20
             self._scroll[self._active_tab] += 20
             return
         if key == curses.KEY_HOME or key == ord("g"):
+            if self._active_tab == 1 and not self._detail_node_id:
+                self._node_cursor = 0
             self._scroll[self._active_tab] = 0
             return
+
+        # Enter: drill into node detail (Nodes tab)
+        if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            if self._active_tab == 1 and not self._detail_node_id:
+                self._enter_node_detail()
+                return
 
         # Manual refresh
         if key in (ord("r"), ord("R")):
             self._refresh_data()
             return
 
-        # Node sort toggle (Nodes tab)
-        if key == ord("s") and self._active_tab == 1:
+        # Node sort toggle (Nodes tab, not in detail view)
+        if key == ord("s") and self._active_tab == 1 and not self._detail_node_id:
             col, rev = self._node_sort
             self._node_sort = (col, not rev)
             return
-        if key == ord("S") and self._active_tab == 1:
+        if key == ord("S") and self._active_tab == 1 and not self._detail_node_id:
             col, rev = self._node_sort
             self._node_sort = ((col + 1) % 5, False)
             return
+
+    def _enter_node_detail(self) -> None:
+        """Enter node detail view for the node under cursor."""
+        with self._data_lock:
+            cache = dict(self._cache)
+        node_rows = self._build_node_rows(cache)
+        if 0 <= self._node_cursor < len(node_rows):
+            self._detail_node_id = node_rows[self._node_cursor].get("full_id")
+            self._detail_scroll = 0
+            self._refresh_data()
 
     def _draw(self) -> None:
         """Render the full TUI frame."""
@@ -338,11 +431,18 @@ class TuiApp:
             if tab == 0:
                 self._draw_dashboard(content_top, content_height, cols, cache)
             elif tab == 1:
-                self._draw_nodes(content_top, content_height, cols, cache)
+                if self._detail_node_id:
+                    self._draw_node_detail(content_top, content_height, cols, cache)
+                else:
+                    self._draw_nodes(content_top, content_height, cols, cache)
             elif tab == 2:
                 self._draw_alerts(content_top, content_height, cols, cache)
             elif tab == 3:
                 self._draw_propagation(content_top, content_height, cols, cache)
+            elif tab == 4:
+                self._draw_topology(content_top, content_height, cols, cache)
+            elif tab == 5:
+                self._draw_events(content_top, content_height, cols)
 
         self._stdscr.refresh()
 
@@ -389,8 +489,16 @@ class TuiApp:
             safe_addstr(self._stdscr, y, len(status) + 3,
                         f"Updated {ago}s ago", attr)
 
+        # WebSocket indicator
+        with self._data_lock:
+            ws_on = self._ws_connected
+        ws_str = "  WS:ON" if ws_on else ""
+        if ws_str:
+            safe_addstr(self._stdscr, y, len(status) + 3 + 16,
+                        ws_str, attr | curses.A_BOLD)
+
         # Right: keybindings hint
-        hint = "q:Quit  r:Refresh  Tab:Switch  j/k:Scroll"
+        hint = "q:Quit  r:Refresh  1-6:Tab  j/k:Scroll"
         safe_addstr(self._stdscr, y, cols - len(hint) - 2, hint, attr)
 
     # ── Dashboard Tab ──────────────────────────────────────────────
@@ -509,18 +617,13 @@ class TuiApp:
 
     # ── Nodes Tab ──────────────────────────────────────────────────
 
-    def _draw_nodes(self, top: int, height: int, cols: int,
-                    cache: Dict[str, Any]) -> None:
-        win = self._stdscr
-        scroll = self._scroll[1]
-
+    def _build_node_rows(self, cache: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Build sorted node row list from cache data."""
         nodes_data = cache.get("nodes") or {}
         features = nodes_data.get("features", [])
         health_data = cache.get("all_node_health") or {}
         states_data = cache.get("all_node_states") or {}
 
-        # Build a merged node table
-        node_rows: List[Dict[str, Any]] = []
         health_map = {}
         if isinstance(health_data, dict):
             for nid, info in health_data.items():
@@ -535,6 +638,7 @@ class TuiApp:
                     if isinstance(info, dict):
                         state_map[nid] = info
 
+        node_rows: List[Dict[str, Any]] = []
         for feat in features:
             props = feat.get("properties", {})
             nid = props.get("id", props.get("node_id", "?"))
@@ -546,6 +650,7 @@ class TuiApp:
             s = state_map.get(nid, {})
             state = s.get("state", "?")
             node_rows.append({
+                "full_id": str(nid),
                 "id": str(nid)[:12],
                 "name": str(name)[:18],
                 "source": str(source)[:10],
@@ -554,7 +659,6 @@ class TuiApp:
                 "state": state,
             })
 
-        # Sort
         sort_keys = ["id", "name", "source", "score", "state"]
         sort_col, sort_rev = self._node_sort
         sort_col = min(sort_col, len(sort_keys) - 1)
@@ -563,11 +667,27 @@ class TuiApp:
             node_rows.sort(key=lambda r: r.get(sk, ""), reverse=sort_rev)
         except TypeError:
             pass
+        return node_rows
+
+    def _draw_nodes(self, top: int, height: int, cols: int,
+                    cache: Dict[str, Any]) -> None:
+        win = self._stdscr
+        scroll = self._scroll[1]
+
+        node_rows = self._build_node_rows(cache)
+
+        # Clamp cursor
+        total = len(node_rows)
+        if total > 0:
+            self._node_cursor = max(0, min(self._node_cursor, total - 1))
+
+        sort_keys = ["id", "name", "source", "score", "state"]
+        sort_col = min(self._node_sort[0], len(sort_keys) - 1)
+        sort_rev = self._node_sort[1]
 
         # Header
-        total = len(node_rows)
         safe_addstr(win, top, 1,
-                    f" NODES ({total})  [s]toggle sort  [S]next column  "
+                    f" NODES ({total})  [s]sort  [S]col  Enter:detail  "
                     f"Sort: {sort_keys[sort_col]} {'desc' if sort_rev else 'asc'}",
                     curses.A_BOLD)
 
@@ -580,50 +700,204 @@ class TuiApp:
                     " " * max(0, cols - len(col_hdr)),
                     curses.color_pair(CP_HIGHLIGHT))
 
-        # Rows
+        # Auto-scroll to keep cursor visible
         row_start = top + 2
         avail = height - 2
+        if self._node_cursor < scroll:
+            self._scroll[1] = self._node_cursor
+            scroll = self._scroll[1]
+        elif self._node_cursor >= scroll + avail:
+            self._scroll[1] = self._node_cursor - avail + 1
+            scroll = self._scroll[1]
+
         visible = node_rows[scroll:scroll + avail]
         for i, nr in enumerate(visible):
             y = row_start + i
+            abs_idx = scroll + i
+            is_cursor = (abs_idx == self._node_cursor)
             score = nr["score"]
             label = nr["label"]
             state = nr["state"]
 
-            id_str = f"  {nr['id']:<14}"
+            # Cursor highlight
+            if is_cursor:
+                safe_addstr(win, y, 0, " " * min(cols - 1, 80),
+                            curses.color_pair(CP_HIGHLIGHT))
+
+            cursor_marker = "> " if is_cursor else "  "
+            id_str = f"{cursor_marker}{nr['id']:<14}"
             name_str = f"{nr['name']:<20}"
             src_str = f"{nr['source']:<12}"
 
-            safe_addstr(win, y, 0, id_str, 0)
-            safe_addstr(win, y, len(id_str), name_str, 0)
-            safe_addstr(win, y, len(id_str) + len(name_str), src_str, 0)
+            row_attr = curses.color_pair(CP_HIGHLIGHT) if is_cursor else 0
+            safe_addstr(win, y, 0, id_str, row_attr)
+            safe_addstr(win, y, len(id_str), name_str, row_attr)
+            safe_addstr(win, y, len(id_str) + len(name_str), src_str, row_attr)
 
             score_x = len(id_str) + len(name_str) + len(src_str)
             if score >= 0:
                 score_str = f"{score:>5.0f} "
-                safe_addstr(win, y, score_x, score_str, health_color(label))
+                sc_attr = health_color(label)
+                if is_cursor:
+                    sc_attr = curses.color_pair(CP_HIGHLIGHT)
+                safe_addstr(win, y, score_x, score_str, sc_attr)
                 safe_addstr(win, y, score_x + len(score_str),
-                            f"{label:<10}", health_color(label))
+                            f"{label:<10}", sc_attr)
             else:
                 safe_addstr(win, y, score_x, "    - ", curses.A_DIM)
                 safe_addstr(win, y, score_x + 6, "          ", curses.A_DIM)
 
             state_x = score_x + 16
-            state_attr = 0
-            if state == "stable":
+            if is_cursor:
+                state_attr = curses.color_pair(CP_HIGHLIGHT)
+            elif state == "stable":
                 state_attr = curses.color_pair(CP_SOURCE_ONLINE)
             elif state == "intermittent":
                 state_attr = curses.color_pair(CP_ALERT_WARNING)
             elif state == "offline":
                 state_attr = curses.color_pair(CP_SOURCE_OFFLINE)
+            else:
+                state_attr = 0
             safe_addstr(win, y, state_x, state, state_attr)
 
         # Scroll indicator
         if total > avail:
-            pct = (scroll / max(1, total - avail)) * 100
             safe_addstr(win, top + height - 1, cols - 20,
                         f"[{scroll+1}-{min(scroll+avail, total)}/{total}]",
                         curses.A_DIM)
+
+    # ── Node Detail View ─────────────────────────────────────────
+
+    def _draw_node_detail(self, top: int, height: int, cols: int,
+                          cache: Dict[str, Any]) -> None:
+        """Draw detailed view for a single node."""
+        win = self._stdscr
+        scroll = self._detail_scroll
+        nid = self._detail_node_id or "?"
+
+        lines: List[Tuple[str, int]] = []
+
+        # Title bar
+        lines.append((f" NODE DETAIL: {nid}  [Esc/q]back  [r]refresh",
+                       curses.A_BOLD | curses.A_UNDERLINE))
+        lines.append(("", 0))
+
+        # Find basic node info from nodes list
+        node_rows = self._build_node_rows(cache)
+        node_info = None
+        for nr in node_rows:
+            if nr.get("full_id") == nid:
+                node_info = nr
+                break
+
+        if node_info:
+            lines.append((" IDENTITY", curses.A_BOLD | curses.A_UNDERLINE))
+            lines.append((f"  ID:     {node_info['full_id']}", 0))
+            lines.append((f"  Name:   {node_info['name']}", 0))
+            lines.append((f"  Source: {node_info['source']}", 0))
+            lines.append((f"  State:  {node_info['state']}", 0))
+            lines.append(("", 0))
+
+        # Health breakdown
+        detail_health = cache.get("detail_health") or {}
+        if detail_health:
+            lines.append((" HEALTH SCORE", curses.A_BOLD | curses.A_UNDERLINE))
+            total_score = detail_health.get("score", detail_health.get("total_score", -1))
+            status = detail_health.get("status", detail_health.get("label", "?"))
+            lines.append((f"  Overall: {total_score:.0f}/100  ({status})",
+                           health_color(status)))
+
+            components = detail_health.get("components", {})
+            if components:
+                lines.append(("", 0))
+                lines.append(("  Component Breakdown:", curses.A_BOLD))
+                for comp_name, comp_data in components.items():
+                    if isinstance(comp_data, dict):
+                        c_score = comp_data.get("score", 0)
+                        c_max = comp_data.get("max", 0)
+                        pct = (c_score / c_max * 100) if c_max > 0 else 0
+                        bar_w = min(20, cols - 45)
+                        filled = int(pct / 100 * bar_w) if bar_w > 0 else 0
+                        bar = "\u2588" * filled + "\u2591" * (bar_w - filled)
+                        detail_parts = []
+                        for k, v in comp_data.items():
+                            if k not in ("score", "max"):
+                                detail_parts.append(f"{k}={v}")
+                        detail_str = "  ".join(detail_parts)
+                        lines.append((f"  {comp_name:<12} {c_score:>5.1f}/{c_max:<4} "
+                                      f"[{bar}]", 0))
+                        if detail_str:
+                            lines.append((f"    {detail_str}", curses.A_DIM))
+            lines.append(("", 0))
+        else:
+            lines.append((" HEALTH SCORE", curses.A_BOLD | curses.A_UNDERLINE))
+            lines.append(("  No health data available for this node.", curses.A_DIM))
+            lines.append(("", 0))
+
+        # Observation history
+        detail_history = cache.get("detail_history") or {}
+        observations = detail_history.get("observations", [])
+        lines.append((" RECENT OBSERVATIONS", curses.A_BOLD | curses.A_UNDERLINE))
+        if observations:
+            obs_hdr = f"  {'Time':<10}{'Lat':>10}{'Lon':>11}{'SNR':>6}{'Batt':>6}{'Network':<12}"
+            lines.append((obs_hdr, curses.color_pair(CP_HIGHLIGHT)))
+            for obs in observations[:20]:
+                ts = obs.get("timestamp", 0)
+                time_str = _format_ts(ts)
+                lat = obs.get("latitude", 0)
+                lon = obs.get("longitude", 0)
+                snr = obs.get("snr")
+                batt = obs.get("battery")
+                net = obs.get("network", "?")
+                snr_str = f"{snr:>5.1f}" if snr is not None else "    -"
+                batt_str = f"{batt:>4}%" if batt is not None else "    -"
+                lines.append((f"  {time_str:<10}{lat:>10.5f}{lon:>11.5f}"
+                              f"{snr_str}{batt_str} {net}", 0))
+        else:
+            lines.append(("  No observation history available.", curses.A_DIM))
+        lines.append(("", 0))
+
+        # Config drift for this node
+        drift_data = cache.get("config_drift") or {}
+        recent_drifts = drift_data.get("recent_drifts", [])
+        node_drifts = [d for d in recent_drifts
+                       if isinstance(d, dict) and d.get("node_id") == nid]
+        lines.append((" CONFIG DRIFT", curses.A_BOLD | curses.A_UNDERLINE))
+        if node_drifts:
+            for d in node_drifts[:10]:
+                field = d.get("field", "?")
+                old = d.get("old_value", "?")
+                new = d.get("new_value", "?")
+                sev = d.get("severity", "info")
+                ts = d.get("timestamp", 0)
+                time_str = _format_ts(ts)
+                lines.append((f"  [{sev.upper():<8}] {field}: {old} -> {new}  ({time_str})",
+                               severity_color(sev)))
+        else:
+            lines.append(("  No configuration changes detected.", curses.A_DIM))
+        lines.append(("", 0))
+
+        # Node-specific alerts
+        detail_alerts = cache.get("detail_alerts") or {}
+        alert_list = detail_alerts if isinstance(detail_alerts, list) else detail_alerts.get("alerts", [])
+        lines.append((" NODE ALERTS", curses.A_BOLD | curses.A_UNDERLINE))
+        if alert_list:
+            for al in alert_list[:15]:
+                if isinstance(al, dict):
+                    sev = al.get("severity", "info")
+                    atype = al.get("alert_type", al.get("type", "?"))
+                    msg = al.get("message", "")[:50]
+                    ts = al.get("timestamp", 0)
+                    time_str = _format_ts(ts)
+                    lines.append((f"  [{sev.upper():<8}] {atype:<20} {time_str}  {msg}",
+                                   severity_color(sev)))
+        else:
+            lines.append(("  No alerts for this node.", curses.A_DIM))
+
+        # Render scrolled
+        visible = lines[scroll:scroll + height]
+        for i, (text, attr) in enumerate(visible):
+            safe_addstr(win, top + i, 0, text, attr, cols)
 
     # ── Alerts Tab ─────────────────────────────────────────────────
 
@@ -830,6 +1104,362 @@ class TuiApp:
         visible = lines[scroll:scroll + height]
         for i, (text, attr) in enumerate(visible):
             safe_addstr(win, top + i, 0, text, attr, cols)
+
+    # ── Topology Tab ──────────────────────────────────────────────
+
+    def _draw_topology(self, top: int, height: int, cols: int,
+                       cache: Dict[str, Any]) -> None:
+        """Draw ASCII topology visualization of mesh links."""
+        win = self._stdscr
+        scroll = self._scroll[4]
+
+        topo_data = cache.get("topo") or {}
+        features = topo_data.get("features", [])
+        nodes_data = cache.get("nodes") or {}
+        node_features = nodes_data.get("features", [])
+
+        lines: List[Tuple[str, int]] = []
+        lines.append(("", 0))
+
+        # Build node name lookup
+        node_names: Dict[str, str] = {}
+        for feat in node_features:
+            props = feat.get("properties", {})
+            nid = props.get("id", props.get("node_id", ""))
+            name = props.get("name", props.get("long_name", str(nid)[:8]))
+            node_names[str(nid)] = str(name)[:12]
+
+        # Build adjacency from topology links
+        links: List[Dict[str, Any]] = []
+        adjacency: Dict[str, List[Tuple[str, float, str]]] = {}
+        for feat in features:
+            props = feat.get("properties", {})
+            src = str(props.get("source", ""))
+            tgt = str(props.get("target", ""))
+            snr = props.get("snr", 0)
+            quality = props.get("quality", "unknown")
+            if src and tgt:
+                links.append({"source": src, "target": tgt, "snr": snr,
+                              "quality": quality})
+                adjacency.setdefault(src, []).append((tgt, snr, quality))
+                adjacency.setdefault(tgt, []).append((src, snr, quality))
+
+        link_count = len(links)
+        node_count = len(adjacency)
+
+        lines.append((" MESH TOPOLOGY", curses.A_BOLD | curses.A_UNDERLINE))
+        lines.append((f"  {node_count} nodes, {link_count} links", 0))
+        lines.append(("", 0))
+
+        if not links:
+            lines.append(("  No topology data available.", curses.A_DIM))
+            lines.append(("  Topology requires active mesh links (MQTT/AREDN).", 0))
+        else:
+            # Link quality legend
+            lines.append((" LINK QUALITY LEGEND", curses.A_BOLD | curses.A_UNDERLINE))
+            lines.append(("  === excellent (SNR>=8dB)   --- good (5-8dB)   "
+                          "... marginal (0-5dB)   ~~~ poor (<0dB)",
+                          curses.A_DIM))
+            lines.append(("", 0))
+
+            # ASCII topology: show each node and its neighbors
+            lines.append((" ADJACENCY MAP", curses.A_BOLD | curses.A_UNDERLINE))
+
+            # Sort nodes by number of connections (hubs first)
+            sorted_nodes = sorted(adjacency.keys(),
+                                  key=lambda n: len(adjacency[n]),
+                                  reverse=True)
+
+            for nid in sorted_nodes:
+                neighbors = adjacency[nid]
+                name = node_names.get(nid, str(nid)[:8])
+                conn_count = len(neighbors)
+                lines.append(("", 0))
+                lines.append((f"  [{name}] ({conn_count} links)",
+                               curses.A_BOLD))
+
+                for tgt_id, snr, quality in sorted(neighbors,
+                                                    key=lambda x: x[1],
+                                                    reverse=True):
+                    tgt_name = node_names.get(tgt_id, str(tgt_id)[:8])
+                    # Pick link style based on quality
+                    if quality == "excellent":
+                        link_char = "==="
+                        la = curses.color_pair(CP_HEALTH_EXCELLENT)
+                    elif quality == "good":
+                        link_char = "---"
+                        la = curses.color_pair(CP_HEALTH_GOOD)
+                    elif quality == "marginal":
+                        link_char = "..."
+                        la = curses.color_pair(CP_HEALTH_FAIR)
+                    elif quality in ("poor", "bad"):
+                        link_char = "~~~"
+                        la = curses.color_pair(CP_HEALTH_POOR)
+                    else:
+                        link_char = "???"
+                        la = curses.A_DIM
+
+                    snr_str = f"{snr:>5.1f}dB" if snr else "   --  "
+                    lines.append((f"    {link_char}{link_char} {tgt_name:<14} "
+                                  f"SNR:{snr_str}", la))
+
+            lines.append(("", 0))
+
+            # Link table (sorted by SNR)
+            lines.append((" ALL LINKS (by SNR)", curses.A_BOLD | curses.A_UNDERLINE))
+            link_hdr = f"  {'Source':<14}{'Target':<14}{'SNR':>8}  {'Quality':<12}"
+            lines.append((link_hdr, curses.color_pair(CP_HIGHLIGHT)))
+
+            sorted_links = sorted(links, key=lambda l: l.get("snr", 0),
+                                  reverse=True)
+            for lk in sorted_links:
+                src_name = node_names.get(lk["source"], lk["source"][:10])
+                tgt_name = node_names.get(lk["target"], lk["target"][:10])
+                snr = lk.get("snr", 0)
+                quality = lk.get("quality", "?")
+                snr_str = f"{snr:>7.1f}" if snr else "     --"
+                la = _quality_color(quality)
+                lines.append((f"  {src_name:<14}{tgt_name:<14}{snr_str}  "
+                              f"{quality:<12}", la))
+
+        # Render scrolled
+        visible = lines[scroll:scroll + height]
+        for i, (text, attr) in enumerate(visible):
+            safe_addstr(win, top + i, 0, text, attr, cols)
+
+    # ── Events Tab ────────────────────────────────────────────────
+
+    def _draw_events(self, top: int, height: int, cols: int) -> None:
+        """Draw live event stream from WebSocket."""
+        win = self._stdscr
+        scroll = self._scroll[5]
+
+        lines: List[Tuple[str, int]] = []
+        lines.append(("", 0))
+
+        with self._data_lock:
+            ws_connected = self._ws_connected
+            events = list(self._event_log)
+
+        lines.append((" EVENT STREAM", curses.A_BOLD | curses.A_UNDERLINE))
+        ws_status = "CONNECTED" if ws_connected else "POLLING"
+        ws_attr = (curses.color_pair(CP_SOURCE_ONLINE) if ws_connected
+                   else curses.color_pair(CP_ALERT_WARNING))
+        lines.append((f"  WebSocket: {ws_status}   Events: {len(events)}",
+                       ws_attr))
+        lines.append(("", 0))
+
+        if not events:
+            lines.append(("  No events received yet.", curses.A_DIM))
+            lines.append(("  Events appear here as WebSocket messages arrive.", 0))
+        else:
+            # Column header
+            evt_hdr = f"  {'Time':<10}{'Type':<22}{'Source':<10}{'Node':<14}Detail"
+            lines.append((evt_hdr, curses.color_pair(CP_HIGHLIGHT)))
+
+            # Show newest first
+            for evt in reversed(events):
+                ts = evt.get("timestamp", 0)
+                time_str = _format_ts(ts)
+                etype = evt.get("type", "?")
+                source = evt.get("source", "")[:8]
+                node_id = evt.get("node_id", "")[:12]
+                # Build detail string from data
+                data = evt.get("data", {})
+                detail_parts = []
+                if isinstance(data, dict):
+                    for k in ("battery", "snr", "lat", "lon", "severity",
+                              "message"):
+                        if k in data:
+                            val = data[k]
+                            if isinstance(val, float):
+                                detail_parts.append(f"{k}={val:.1f}")
+                            else:
+                                detail_parts.append(f"{k}={val}")
+                detail_str = " ".join(detail_parts)[:40]
+
+                ea = _event_type_color(etype)
+                lines.append((f"  {time_str:<10}{etype:<22}{source:<10}"
+                              f"{node_id:<14}{detail_str}", ea))
+
+        # Render scrolled
+        visible = lines[scroll:scroll + height]
+        for i, (text, attr) in enumerate(visible):
+            safe_addstr(win, top + i, 0, text, attr, cols)
+
+    # ── WebSocket Client ──────────────────────────────────────────
+
+    def _ws_listen_loop(self) -> None:
+        """Background thread: connect to WebSocket and receive push events."""
+        import hashlib
+        import base64
+        import socket
+        import struct
+        import os
+
+        while self._running:
+            try:
+                # Get WebSocket port from status API
+                status = self._client.server_status()
+                if not status:
+                    time.sleep(5)
+                    continue
+
+                ws_info = status.get("websocket", {})
+                # Try to find WS port: could be in status.websocket.port or status.ws_port
+                ws_port = ws_info.get("port", status.get("ws_port", 0))
+                if not ws_port:
+                    # Default convention: HTTP port + 1
+                    ws_port = self._client._base.split(":")[-1]
+                    try:
+                        ws_port = int(ws_port) + 1
+                    except (ValueError, TypeError):
+                        ws_port = 8809
+
+                host = self._client._base.split("//")[-1].split(":")[0]
+
+                # WebSocket handshake
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(10)
+                sock.connect((host, int(ws_port)))
+
+                ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
+                handshake = (
+                    f"GET / HTTP/1.1\r\n"
+                    f"Host: {host}:{ws_port}\r\n"
+                    f"Upgrade: websocket\r\n"
+                    f"Connection: Upgrade\r\n"
+                    f"Sec-WebSocket-Key: {ws_key}\r\n"
+                    f"Sec-WebSocket-Version: 13\r\n"
+                    f"\r\n"
+                )
+                sock.sendall(handshake.encode("utf-8"))
+
+                # Read handshake response
+                response = b""
+                while b"\r\n\r\n" not in response:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        raise ConnectionError("WS handshake failed")
+                    response += chunk
+
+                if b"101" not in response.split(b"\r\n")[0]:
+                    raise ConnectionError("WS upgrade rejected")
+
+                with self._data_lock:
+                    self._ws_connected = True
+
+                sock.settimeout(30)
+
+                # Read WebSocket frames
+                while self._running:
+                    frame_data = self._ws_read_frame(sock)
+                    if frame_data is None:
+                        break
+                    try:
+                        import json as _json
+                        msg = _json.loads(frame_data)
+                        self._on_ws_message(msg)
+                    except (ValueError, TypeError):
+                        pass
+
+            except (OSError, ConnectionError, socket.timeout):
+                pass
+            finally:
+                with self._data_lock:
+                    self._ws_connected = False
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+            # Reconnect backoff
+            if self._running:
+                time.sleep(5)
+
+    def _ws_read_frame(self, sock: Any) -> Optional[str]:
+        """Read a single WebSocket text frame. Returns None on close/error."""
+        import struct
+
+        def _recv_exact(s: Any, n: int) -> bytes:
+            buf = b""
+            while len(buf) < n:
+                chunk = s.recv(n - len(buf))
+                if not chunk:
+                    raise ConnectionError("Connection closed")
+                buf += chunk
+            return buf
+
+        try:
+            header = _recv_exact(sock, 2)
+            opcode = header[0] & 0x0F
+            if opcode == 0x8:  # Close frame
+                return None
+            if opcode == 0x9:  # Ping -> send Pong
+                length = header[1] & 0x7F
+                if length == 126:
+                    length = struct.unpack("!H", _recv_exact(sock, 2))[0]
+                elif length == 127:
+                    length = struct.unpack("!Q", _recv_exact(sock, 8))[0]
+                payload = _recv_exact(sock, length) if length > 0 else b""
+                # Send pong
+                pong = bytes([0x8A, len(payload)]) + payload
+                sock.sendall(pong)
+                return ""  # empty string, not a real message
+
+            masked = (header[1] & 0x80) != 0
+            length = header[1] & 0x7F
+            if length == 126:
+                length = struct.unpack("!H", _recv_exact(sock, 2))[0]
+            elif length == 127:
+                length = struct.unpack("!Q", _recv_exact(sock, 8))[0]
+
+            if masked:
+                mask_key = _recv_exact(sock, 4)
+                raw = _recv_exact(sock, length)
+                data = bytes(b ^ mask_key[i % 4] for i, b in enumerate(raw))
+            else:
+                data = _recv_exact(sock, length)
+
+            if opcode == 0x1:  # Text frame
+                return data.decode("utf-8")
+            return None
+        except (OSError, ConnectionError, struct.error):
+            return None
+
+    def _on_ws_message(self, msg: Dict[str, Any]) -> None:
+        """Handle an incoming WebSocket message — add to event log and update cache."""
+        with self._data_lock:
+            self._event_log.append(msg)
+            if len(self._event_log) > self._event_log_max:
+                self._event_log = self._event_log[-self._event_log_max:]
+
+
+def _quality_color(quality: str) -> int:
+    """Map topology link quality to color pair."""
+    mapping = {
+        "excellent": CP_HEALTH_EXCELLENT,
+        "good": CP_HEALTH_GOOD,
+        "marginal": CP_HEALTH_FAIR,
+        "poor": CP_HEALTH_POOR,
+        "bad": CP_HEALTH_CRITICAL,
+    }
+    return curses.color_pair(mapping.get(quality, CP_NORMAL))
+
+
+def _event_type_color(etype: str) -> int:
+    """Map event type to color pair."""
+    if "alert" in etype:
+        return curses.color_pair(CP_ALERT_CRITICAL)
+    if "position" in etype:
+        return curses.color_pair(CP_HEALTH_GOOD)
+    if "telemetry" in etype:
+        return curses.color_pair(CP_ALERT_INFO)
+    if "topology" in etype:
+        return curses.color_pair(CP_HEALTH_FAIR)
+    if "service" in etype:
+        return curses.color_pair(CP_ALERT_WARNING)
+    return 0
 
 
 def _format_ts(ts: float) -> str:

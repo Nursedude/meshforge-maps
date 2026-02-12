@@ -2,6 +2,137 @@
 
 ---
 
+## Session 19: TUI Expansion — Node Detail, Topology, WebSocket, Events
+
+**Date:** 2026-02-12
+**Branch:** `claude/session-entropy-tracking-NNQ6B`
+**Scope:** Four TUI features: node drill-down, topology ASCII art, WebSocket push, event stream
+**Version:** 0.7.0-beta (no version bump)
+
+### Summary
+
+Expanded the TUI from 4 tabs to 6, added node detail drill-down on the Nodes tab,
+WebSocket push-based event delivery, and a live event stream tab. Zero new
+dependencies — WebSocket client uses raw stdlib sockets with manual handshake.
+
+### What Was Built
+
+#### 1. Node Detail Drill-Down (Nodes Tab → Enter)
+- Cursor-based node selection with `>` indicator and highlight bar
+- Enter key drills into full detail view; Escape/q returns to list
+- Detail view sections:
+  - **Identity**: ID, name, source, connectivity state
+  - **Health Score**: Overall score + component breakdown with bar gauges
+    (battery, signal, freshness, reliability, congestion — score/max + raw metrics)
+  - **Recent Observations**: timestamped table with lat/lon/SNR/battery/network
+  - **Config Drift**: per-node configuration changes with severity coloring
+  - **Node Alerts**: alerts filtered to the selected node
+- Scrollable with j/k, independent scroll offset from main node list
+- Auto-refreshes detail data when drill-down is active
+
+#### 2. Topology ASCII Art Tab ([5])
+- Adjacency map: each node listed with connection count, sorted by hub degree
+- Per-link quality indicators:
+  - `===` excellent (SNR >= 8dB, green)
+  - `---` good (5-8dB, green)
+  - `...` marginal (0-5dB, yellow)
+  - `~~~` poor/bad (<0dB, red)
+- All-links table sorted by SNR with quality labels
+- Node name resolution from nodes GeoJSON
+- Link quality legend at top
+
+#### 3. WebSocket Push Updates
+- Minimal WebSocket client using stdlib `socket` + `hashlib` + `struct`
+- RFC 6455 compliant handshake (HTTP Upgrade + Sec-WebSocket-Key)
+- Frame parser handles text frames, close frames, and ping/pong
+- Background thread with auto-reconnect (5s backoff on disconnect)
+- WS port discovery from `/api/status` response (websocket.port field)
+- Fallback: HTTP port + 1 convention
+- Events pushed to shared `_event_log` ring buffer under data lock
+- Status bar shows WS:ON indicator when connected
+
+#### 4. Event Stream Tab ([6])
+- Live feed of all WebSocket messages (newest first)
+- Columns: Time, Type, Source, Node, Detail
+- Color-coded by event type:
+  - Green: node.position
+  - Cyan: node.telemetry
+  - Yellow: node.topology / service events
+  - Red: alert.fired
+- Ring buffer capped at 500 events (configurable via `_event_log_max`)
+- Shows WebSocket connection status (CONNECTED/POLLING)
+
+#### 5. Data Client Extensions (`data_client.py`)
+- `node_health(node_id)`: GET `/api/nodes/{id}/health`
+- `node_history(node_id, limit)`: GET `/api/nodes/{id}/history?limit=N`
+- `node_alerts(node_id)`: GET `/api/alerts?node_id={id}`
+- `topology_geojson()`: GET `/api/topology/geojson`
+- `config_drift()`: GET `/api/config-drift`
+
+### Testing
+
+- **37 new tests** added to `tests/test_tui.py` (42 → 79 TUI tests)
+- Test classes:
+  - `TestNewDataClientAccessors`: failure-mode tests for new client methods
+  - `TestNewDataClientWithServer`: HTTP path verification with stub server
+  - `TestNodeDetailDrillDown`: detail state, Enter/Escape, cursor, build_node_rows
+  - `TestTopologyTab`: tab switching, quality color helper
+  - `TestEventsTab`: event log init, ring buffer truncation, WS message handling
+  - `TestWebSocketState`: init state, frame parsing (text, close, error)
+  - `TestDrawMethods`: draw_node_detail, draw_topology, draw_events with mock data
+- **Full suite: 858 passed, 22 skipped, 0 failures** (no regressions)
+
+### Architecture Decisions
+
+- **stdlib WebSocket client**: No `websockets` or `websocket-client` library. Raw
+  socket + struct for frame parsing. Matches project's zero-dependency philosophy.
+  Trade-off: no compression, no extensions, but sufficient for JSON event push.
+- **Ring buffer for events**: Fixed-size list with tail truncation. Simple and
+  bounded memory. Alternative was deque but list slicing is cleaner for curses.
+- **Cursor-based selection**: Added `_node_cursor` to Nodes tab rather than
+  click-based selection. Vim-style (j/k to move, Enter to select) is consistent
+  with existing TUI keybinding conventions.
+- **Shared _build_node_rows**: Extracted from _draw_nodes so both the list view
+  and _enter_node_detail can use the same sorted row data.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `src/tui/app.py` | Modified — 4 new draw methods, WebSocket client, cursor nav, 6 tabs |
+| `src/tui/data_client.py` | Modified — 5 new per-node/topology accessors |
+| `tests/test_tui.py` | Modified — 37 new tests (79 total TUI tests) |
+
+### Usage
+
+```bash
+# Tabs are now 1-6:
+# [1] Dashboard  [2] Nodes  [3] Alerts  [4] Propagation  [5] Topology  [6] Events
+
+# Node detail: on Nodes tab, use j/k to move cursor, Enter to drill in, Esc to go back
+
+# WebSocket auto-connects in background — Events tab shows live stream
+```
+
+### Session Entropy Notes
+
+Session stayed focused: four related TUI features, no scope creep. Each feature
+was implemented → tested → verified before moving to the next. Good stopping
+point — all four planned items completed.
+
+### Next Session Candidates
+
+- [ ] TUI: Resizable panels / split-pane layout
+- [ ] TUI: Configuration editing from within the TUI
+- [ ] TUI: Node detail — add trajectory GeoJSON visualization (ASCII map?)
+- [ ] TUI: Topology — interactive node selection (Enter on topology node)
+- [ ] TUI: Search/filter across nodes, alerts, events
+- [ ] TUI: Mouse support for tab switching and node selection
+- [ ] WebSocket: Subscribe to specific event types (filter server-side)
+- [ ] Events tab: Pause/resume scrolling, event type filtering
+
+---
+
 ## Session 18: Terminal User Interface (TUI)
 
 **Date:** 2026-02-12
