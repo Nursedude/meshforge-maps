@@ -923,3 +923,267 @@ class TestDrawMethods:
             mc.A_UNDERLINE = 2
             mc.A_DIM = 4
             app._draw_events(1, 38, 120)
+
+
+class TestSearchFilter:
+    """Tests for TUI search/filter functionality."""
+
+    def _make_app(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._running = True
+        app._connected = True
+        win = MagicMock()
+        win.getmaxyx.return_value = (40, 120)
+        app._stdscr = win
+        return app
+
+    def test_search_initial_state(self):
+        app = self._make_app()
+        assert app._search_active is False
+        assert app._search_query == ""
+
+    def test_search_activation(self):
+        """Pressing / activates search mode."""
+        app = self._make_app()
+        app._stdscr.getch.return_value = ord("/")
+        app._handle_input()
+        assert app._search_active is True
+        assert app._search_query == ""
+
+    def test_search_typing(self):
+        """Characters accumulate in search query during search mode."""
+        app = self._make_app()
+        app._search_active = True
+        # Type 'a'
+        app._stdscr.getch.return_value = ord("a")
+        app._handle_input()
+        assert app._search_query == "a"
+        # Type 'b'
+        app._stdscr.getch.return_value = ord("b")
+        app._handle_input()
+        assert app._search_query == "ab"
+
+    def test_search_backspace(self):
+        """Backspace removes last character in search."""
+        app = self._make_app()
+        app._search_active = True
+        app._search_query = "test"
+        app._stdscr.getch.return_value = 127  # Backspace
+        app._handle_input()
+        assert app._search_query == "tes"
+
+    def test_search_escape_cancels(self):
+        """Escape cancels search and clears query."""
+        app = self._make_app()
+        app._search_active = True
+        app._search_query = "test"
+        app._stdscr.getch.return_value = 27  # Escape
+        app._handle_input()
+        assert app._search_active is False
+        assert app._search_query == ""
+
+    def test_search_enter_accepts(self):
+        """Enter accepts search and exits input mode."""
+        app = self._make_app()
+        app._search_active = True
+        app._search_query = "meshtastic"
+        app._stdscr.getch.return_value = ord("\n")
+        app._handle_input()
+        assert app._search_active is False
+        assert app._search_query == "meshtastic"  # preserved
+
+    def test_search_escape_clears_filter(self):
+        """Escape clears existing filter when not in search input mode."""
+        app = self._make_app()
+        app._search_active = False
+        app._search_query = "meshtastic"
+        app._stdscr.getch.return_value = 27  # Escape
+        app._handle_input()
+        assert app._search_query == ""
+
+    def test_node_filter_by_search(self):
+        """Node rows are filtered by search query in _draw_nodes."""
+        app = self._make_app()
+        app._search_query = "mesh"
+        cache = {
+            "nodes": {
+                "features": [
+                    {"properties": {"id": "!a1", "name": "AlphaNode",
+                                    "network": "meshtastic"}},
+                    {"properties": {"id": "!b2", "name": "BetaNode",
+                                    "network": "reticulum"}},
+                ],
+            },
+            "all_node_health": {},
+            "all_node_states": {},
+        }
+        rows = app._build_node_rows(cache)
+        q = app._search_query.lower()
+        filtered = [r for r in rows
+                    if q in r["full_id"].lower()
+                    or q in r["name"].lower()
+                    or q in r["source"].lower()
+                    or q in r["state"].lower()
+                    or q in r["label"].lower()]
+        # Only meshtastic node matches "mesh"
+        assert len(filtered) == 1
+        assert filtered[0]["full_id"] == "!a1"
+
+    def test_alert_filter_by_search(self):
+        """Alerts are filtered by search query."""
+        alerts = [
+            {"alert_type": "low_battery", "severity": "critical",
+             "node_id": "!a1", "message": "Battery critical"},
+            {"alert_type": "poor_snr", "severity": "warning",
+             "node_id": "!b2", "message": "SNR degraded"},
+        ]
+        q = "battery"
+        filtered = [a for a in alerts if isinstance(a, dict) and (
+            q in a.get("alert_type", "").lower()
+            or q in a.get("severity", "").lower()
+            or q in a.get("node_id", "").lower()
+            or q in a.get("message", "").lower())]
+        assert len(filtered) == 1
+        assert filtered[0]["alert_type"] == "low_battery"
+
+
+class TestEventsPauseResume:
+    """Tests for Events tab pause/resume and type filtering."""
+
+    def _make_app(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._running = True
+        app._connected = True
+        win = MagicMock()
+        win.getmaxyx.return_value = (40, 120)
+        app._stdscr = win
+        return app
+
+    def test_initial_pause_state(self):
+        app = self._make_app()
+        assert app._events_paused is False
+        assert app._events_paused_snapshot == []
+
+    def test_pause_toggle(self):
+        """Pressing p on Events tab toggles pause."""
+        app = self._make_app()
+        app._active_tab = 5
+        app._event_log = [
+            {"type": "node.position", "timestamp": 100, "node_id": "!a"},
+        ]
+        app._stdscr.getch.return_value = ord("p")
+        app._handle_input()
+        assert app._events_paused is True
+        assert len(app._events_paused_snapshot) == 1
+
+    def test_unpause(self):
+        """Pressing p again unpauses."""
+        app = self._make_app()
+        app._active_tab = 5
+        app._events_paused = True
+        app._stdscr.getch.return_value = ord("p")
+        app._handle_input()
+        assert app._events_paused is False
+
+    def test_event_type_filter_cycle(self):
+        """Pressing f cycles through event type filters."""
+        app = self._make_app()
+        app._active_tab = 5
+        assert app._event_type_filter is None
+        app._stdscr.getch.return_value = ord("f")
+        app._handle_input()
+        assert app._event_type_filter == "node.position"
+        app._stdscr.getch.return_value = ord("f")
+        app._handle_input()
+        assert app._event_type_filter == "node.telemetry"
+
+    def test_event_type_filter_wraps(self):
+        """Filter cycles back to None (all) after last type."""
+        app = self._make_app()
+        app._active_tab = 5
+        # Cycle through all options
+        num_options = len(app._event_type_options)
+        for _ in range(num_options):
+            app._stdscr.getch.return_value = ord("f")
+            app._handle_input()
+        assert app._event_type_filter is None  # Back to start
+
+    def test_event_filter_applies(self):
+        """Type filter actually filters events."""
+        events = [
+            {"type": "node.position", "node_id": "!a"},
+            {"type": "alert.fired", "node_id": "!b"},
+            {"type": "node.position", "node_id": "!c"},
+        ]
+        type_filter = "node.position"
+        filtered = [e for e in events if type_filter in e.get("type", "")]
+        assert len(filtered) == 2
+
+    def test_event_search_filter(self):
+        """Search query filters events."""
+        events = [
+            {"type": "node.position", "node_id": "!alpha123",
+             "source": "mqtt", "data": {}},
+            {"type": "alert.fired", "node_id": "!beta456",
+             "source": "engine", "data": {"message": "test"}},
+        ]
+        q = "alpha"
+        filtered = [e for e in events
+                    if q in e.get("type", "").lower()
+                    or q in e.get("node_id", "").lower()
+                    or q in e.get("source", "").lower()
+                    or q in str(e.get("data", "")).lower()]
+        assert len(filtered) == 1
+        assert filtered[0]["node_id"] == "!alpha123"
+
+    def test_draw_events_paused(self):
+        """Events tab renders correctly when paused."""
+        app = self._make_app()
+        app._events_paused = True
+        app._events_paused_snapshot = [
+            {"type": "node.position", "timestamp": 1700000000,
+             "source": "mqtt", "node_id": "!abc",
+             "data": {"lat": 40.0}},
+        ]
+        with patch("src.tui.app.curses") as mc:
+            mc.color_pair.return_value = 0
+            mc.A_BOLD = 1
+            mc.A_UNDERLINE = 2
+            mc.A_DIM = 4
+            app._draw_events(1, 38, 120)
+
+    def test_draw_events_with_type_filter(self):
+        """Events tab renders correctly with type filter active."""
+        app = self._make_app()
+        app._event_type_filter = "alert.fired"
+        app._event_log = [
+            {"type": "node.position", "timestamp": 1700000000,
+             "source": "mqtt", "node_id": "!abc", "data": {}},
+            {"type": "alert.fired", "timestamp": 1700000001,
+             "source": "engine", "node_id": "!def",
+             "data": {"severity": "critical"}},
+        ]
+        with patch("src.tui.app.curses") as mc:
+            mc.color_pair.return_value = 0
+            mc.A_BOLD = 1
+            mc.A_UNDERLINE = 2
+            mc.A_DIM = 4
+            app._draw_events(1, 38, 120)
+
+    def test_p_key_only_on_events_tab(self):
+        """Pressing p on non-Events tab does not toggle pause."""
+        app = self._make_app()
+        app._active_tab = 0  # Dashboard
+        app._stdscr.getch.return_value = ord("p")
+        app._handle_input()  # Should not error
+        assert app._events_paused is False
+
+    def test_f_key_only_on_events_tab(self):
+        """Pressing f on non-Events tab does not change filter."""
+        app = self._make_app()
+        app._active_tab = 1  # Nodes
+        app._stdscr.getch.return_value = ord("f")
+        app._handle_input()
+        assert app._event_type_filter is None

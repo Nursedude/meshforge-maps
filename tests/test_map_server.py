@@ -293,3 +293,51 @@ class TestMapServerHTTPEndpoints:
         data = self._get_json("/api/proxy/stats")
         # Proxy not started because meshtastic is disabled
         assert "available" in data or "running" in data
+
+    # --- Session 20: Export endpoints ---
+
+    def _get_raw(self, path):
+        """Fetch raw bytes from endpoint."""
+        from urllib.request import urlopen, Request
+        req = Request(self.base + path)
+        with urlopen(req, timeout=5) as resp:
+            return resp.read(), resp.headers
+
+    def test_export_nodes_csv(self):
+        body, headers = self._get_raw("/api/export/nodes")
+        assert b"node_id" in body  # CSV header
+        ct = headers.get("Content-Type", "")
+        assert "text/csv" in ct
+        disp = headers.get("Content-Disposition", "")
+        assert "meshforge_nodes.csv" in disp
+
+    def test_export_nodes_json(self):
+        data = self._get_json("/api/export/nodes?format=json")
+        assert "nodes" in data
+        assert isinstance(data["nodes"], list)
+
+    def test_export_alerts_csv(self):
+        body, headers = self._get_raw("/api/export/alerts")
+        assert b"timestamp" in body  # CSV header
+        ct = headers.get("Content-Type", "")
+        assert "text/csv" in ct
+
+    def test_export_alerts_json(self):
+        data = self._get_json("/api/export/alerts?format=json")
+        assert "alerts" in data
+        assert isinstance(data["alerts"], list)
+
+    def test_export_analytics_growth_csv(self):
+        body, headers = self._get_raw("/api/export/analytics/growth")
+        assert b"timestamp" in body
+        assert "text/csv" in headers.get("Content-Type", "")
+
+    def test_export_analytics_activity_csv(self):
+        body, headers = self._get_raw("/api/export/analytics/activity")
+        assert b"hour" in body
+        assert "text/csv" in headers.get("Content-Type", "")
+
+    def test_export_analytics_ranking_csv(self):
+        body, headers = self._get_raw("/api/export/analytics/ranking")
+        assert b"rank" in body
+        assert "text/csv" in headers.get("Content-Type", "")

@@ -162,6 +162,20 @@ class TuiApp:
         self._ws_connected = False
         self._ws_thread: Optional[threading.Thread] = None
 
+        # Search/filter state
+        self._search_active = False
+        self._search_query = ""
+
+        # Events tab: pause/resume and type filter
+        self._events_paused = False
+        self._events_paused_snapshot: List[Dict[str, Any]] = []
+        self._event_type_filter: Optional[str] = None
+        self._event_type_options = [
+            None, "node.position", "node.telemetry",
+            "node.topology", "alert.fired", "service",
+        ]
+        self._event_type_filter_idx = 0
+
     def run(self) -> None:
         """Launch the TUI (blocks until quit)."""
         curses.wrapper(self._main)
@@ -273,6 +287,24 @@ class TuiApp:
         if key == -1:
             return
 
+        # ── Search input mode ──
+        if self._search_active:
+            if key == 27:  # Escape: cancel search
+                self._search_active = False
+                self._search_query = ""
+                return
+            if key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+                # Accept search and exit input mode
+                self._search_active = False
+                return
+            if key in (curses.KEY_BACKSPACE, 127, 8):
+                self._search_query = self._search_query[:-1]
+                return
+            if 32 <= key <= 126:
+                self._search_query += chr(key)
+                return
+            return  # Ignore other keys during search input
+
         # Quit (q exits detail view first, then app)
         if key in (ord("q"), ord("Q")):
             if self._detail_node_id:
@@ -383,6 +415,35 @@ class TuiApp:
             col, rev = self._node_sort
             self._node_sort = ((col + 1) % 5, False)
             return
+
+        # / : activate search
+        if key == ord("/"):
+            self._search_active = True
+            self._search_query = ""
+            return
+
+        # Escape: clear search filter (when not in search input mode)
+        if key == 27 and self._search_query:
+            self._search_query = ""
+            return
+
+        # Events tab keybindings: p=pause, f=filter type
+        if self._active_tab == 5:
+            if key == ord("p"):
+                self._events_paused = not self._events_paused
+                if self._events_paused:
+                    with self._data_lock:
+                        self._events_paused_snapshot = list(self._event_log)
+                return
+            if key == ord("f"):
+                self._event_type_filter_idx = (
+                    (self._event_type_filter_idx + 1)
+                    % len(self._event_type_options)
+                )
+                self._event_type_filter = self._event_type_options[
+                    self._event_type_filter_idx
+                ]
+                return
 
     def _enter_node_detail(self) -> None:
         """Enter node detail view for the node under cursor."""
@@ -497,8 +558,18 @@ class TuiApp:
             safe_addstr(self._stdscr, y, len(status) + 3 + 16,
                         ws_str, attr | curses.A_BOLD)
 
+        # Search bar display
+        if self._search_active:
+            search_str = f"  Search: {self._search_query}_"
+            safe_addstr(self._stdscr, y, len(status) + 3 + 20,
+                        search_str, attr | curses.A_BOLD)
+        elif self._search_query:
+            filter_str = f"  Filter: {self._search_query}  [Esc]clear"
+            safe_addstr(self._stdscr, y, len(status) + 3 + 20,
+                        filter_str, attr)
+
         # Right: keybindings hint
-        hint = "q:Quit  r:Refresh  1-6:Tab  j/k:Scroll"
+        hint = "q:Quit  r:Refresh  /:Search  1-6:Tab  j/k:Scroll"
         safe_addstr(self._stdscr, y, cols - len(hint) - 2, hint, attr)
 
     # ── Dashboard Tab ──────────────────────────────────────────────
@@ -676,6 +747,16 @@ class TuiApp:
 
         node_rows = self._build_node_rows(cache)
 
+        # Apply search filter
+        if self._search_query:
+            q = self._search_query.lower()
+            node_rows = [r for r in node_rows
+                         if q in r["full_id"].lower()
+                         or q in r["name"].lower()
+                         or q in r["source"].lower()
+                         or q in r["state"].lower()
+                         or q in r["label"].lower()]
+
         # Clamp cursor
         total = len(node_rows)
         if total > 0:
@@ -686,9 +767,11 @@ class TuiApp:
         sort_rev = self._node_sort[1]
 
         # Header
+        filter_hint = f"  Filter: '{self._search_query}'" if self._search_query else ""
         safe_addstr(win, top, 1,
                     f" NODES ({total})  [s]sort  [S]col  Enter:detail  "
-                    f"Sort: {sort_keys[sort_col]} {'desc' if sort_rev else 'asc'}",
+                    f"Sort: {sort_keys[sort_col]} {'desc' if sort_rev else 'asc'}"
+                    f"{filter_hint}",
                     curses.A_BOLD)
 
         # Column header
@@ -911,6 +994,20 @@ class TuiApp:
         rules_data = cache.get("alert_rules") or {}
         active_data = cache.get("active_alerts") or {}
         active_list = active_data if isinstance(active_data, list) else active_data.get("alerts", [])
+
+        # Apply search filter to alerts
+        if self._search_query:
+            q = self._search_query.lower()
+            alert_list = [a for a in alert_list if isinstance(a, dict) and (
+                q in a.get("alert_type", "").lower()
+                or q in a.get("severity", "").lower()
+                or q in a.get("node_id", "").lower()
+                or q in a.get("message", "").lower())]
+            active_list = [a for a in active_list if isinstance(a, dict) and (
+                q in a.get("alert_type", "").lower()
+                or q in a.get("severity", "").lower()
+                or q in a.get("node_id", "").lower()
+                or q in a.get("message", "").lower())]
 
         lines: List[Tuple[str, int]] = []
 
@@ -1239,13 +1336,34 @@ class TuiApp:
 
         with self._data_lock:
             ws_connected = self._ws_connected
-            events = list(self._event_log)
+            if self._events_paused:
+                events = list(self._events_paused_snapshot)
+            else:
+                events = list(self._event_log)
+
+        # Apply type filter
+        type_filter = self._event_type_filter
+        if type_filter:
+            events = [e for e in events
+                      if type_filter in e.get("type", "")]
+
+        # Apply search filter
+        if self._search_query:
+            q = self._search_query.lower()
+            events = [e for e in events
+                      if q in e.get("type", "").lower()
+                      or q in e.get("node_id", "").lower()
+                      or q in e.get("source", "").lower()
+                      or q in str(e.get("data", "")).lower()]
 
         lines.append((" EVENT STREAM", curses.A_BOLD | curses.A_UNDERLINE))
         ws_status = "CONNECTED" if ws_connected else "POLLING"
         ws_attr = (curses.color_pair(CP_SOURCE_ONLINE) if ws_connected
                    else curses.color_pair(CP_ALERT_WARNING))
-        lines.append((f"  WebSocket: {ws_status}   Events: {len(events)}",
+        pause_str = "  PAUSED" if self._events_paused else ""
+        filter_str = f"  Type:{type_filter}" if type_filter else ""
+        lines.append((f"  WebSocket: {ws_status}   Events: {len(events)}"
+                       f"{pause_str}{filter_str}   [p]pause [f]filter",
                        ws_attr))
         lines.append(("", 0))
 
