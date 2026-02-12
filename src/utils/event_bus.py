@@ -225,7 +225,7 @@ class EventBus:
         """Remove all subscribers and reset stats."""
         with self._lock:
             self._subscribers.clear()
-        self._stats = _BusStats()
+        self._stats.reset()
 
 
 class _BusStats:
@@ -235,6 +235,13 @@ class _BusStats:
         self._total_published = 0
         self._total_delivered = 0
         self._total_errors = 0
+
+    def reset(self) -> None:
+        """Reset all counters to zero (thread-safe)."""
+        with self._lock:
+            self._total_published = 0
+            self._total_delivered = 0
+            self._total_errors = 0
 
     def inc_published(self) -> None:
         with self._lock:

@@ -7,8 +7,10 @@ Each collector outputs standardized GeoJSON FeatureCollections.
 
 import logging
 import math
+import threading
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..utils.reconnect import ReconnectStrategy
@@ -17,6 +19,10 @@ if TYPE_CHECKING:
     from ..utils.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
+
+# Common data directory and unified cache path (shared across all collectors)
+MESHFORGE_DATA_DIR = Path.home() / ".local" / "share" / "meshforge"
+UNIFIED_CACHE_PATH = MESHFORGE_DATA_DIR / "node_cache.json"
 
 
 def validate_coordinates(
@@ -123,6 +129,32 @@ def make_feature_collection(
     }
 
 
+def deduplicate_features(
+    feature_lists: List[List[Dict[str, Any]]],
+    allow_no_id: bool = True,
+) -> List[Dict[str, Any]]:
+    """Merge multiple feature lists, deduplicating by feature ID.
+
+    Features are deduplicated by their ``properties.id`` field. The first
+    occurrence of each ID wins. Features without an ID are included
+    unconditionally when *allow_no_id* is True.
+    """
+    result: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    for features in feature_lists:
+        for feature in features:
+            if feature is None:
+                continue
+            fid = feature.get("properties", {}).get("id")
+            if fid:
+                if fid not in seen_ids:
+                    seen_ids.add(fid)
+                    result.append(feature)
+            elif allow_no_id:
+                result.append(feature)
+    return result
+
+
 class BaseCollector(ABC):
     """Abstract base for data source collectors.
 
@@ -138,6 +170,7 @@ class BaseCollector(ABC):
         circuit_breaker: Optional["CircuitBreaker"] = None,
         max_retries: int = 0,
     ):
+        self._cache_lock = threading.Lock()
         self._cache: Optional[Dict[str, Any]] = None
         self._cache_time: float = 0
         self._cache_ttl = cache_ttl_seconds
@@ -165,9 +198,10 @@ class BaseCollector(ABC):
         falling back to stale cache.
         """
         now = time.time()
-        if self._cache and (now - self._cache_time) < self._cache_ttl:
-            logger.debug("%s: returning cached data", self.source_name)
-            return self._cache
+        with self._cache_lock:
+            if self._cache and (now - self._cache_time) < self._cache_ttl:
+                logger.debug("%s: returning cached data", self.source_name)
+                return self._cache
 
         # Circuit breaker check: skip fetch if circuit is open
         cb = self._circuit_breaker
@@ -175,8 +209,9 @@ class BaseCollector(ABC):
             logger.debug(
                 "%s: circuit breaker OPEN, skipping fetch", self.source_name
             )
-            if self._cache:
-                return self._cache
+            with self._cache_lock:
+                if self._cache:
+                    return self._cache
             return make_feature_collection([], self.source_name)
 
         # Retry loop with backoff (single strategy instance preserves escalating delays)
@@ -187,8 +222,9 @@ class BaseCollector(ABC):
         for attempt in range(attempts):
             try:
                 data = self._fetch()
-                self._cache = data
-                self._cache_time = time.time()
+                with self._cache_lock:
+                    self._cache = data
+                    self._cache_time = time.time()
                 self._last_success_time = time.time()
                 self._total_collections += 1
                 count = len(data.get("features", []))
@@ -226,9 +262,10 @@ class BaseCollector(ABC):
         self._last_error_time = time.time()
         self._total_errors += 1
         logger.error("%s: collection failed: %s", self.source_name, last_error)
-        if self._cache:
-            logger.warning("%s: returning stale cache", self.source_name)
-            return self._cache
+        with self._cache_lock:
+            if self._cache:
+                logger.warning("%s: returning stale cache", self.source_name)
+                return self._cache
         return make_feature_collection([], self.source_name)
 
     @abstractmethod
@@ -240,11 +277,13 @@ class BaseCollector(ABC):
     def health_info(self) -> Dict[str, Any]:
         """Return collector health info for status reporting."""
         now = time.time()
+        with self._cache_lock:
+            has_cache = self._cache is not None
         info: Dict[str, Any] = {
             "source": self.source_name,
             "total_collections": self._total_collections,
             "total_errors": self._total_errors,
-            "has_cache": self._cache is not None,
+            "has_cache": has_cache,
         }
         if self._last_success_time:
             info["last_success_age_seconds"] = int(now - self._last_success_time)
@@ -254,5 +293,6 @@ class BaseCollector(ABC):
         return info
 
     def clear_cache(self) -> None:
-        self._cache = None
-        self._cache_time = 0
+        with self._cache_lock:
+            self._cache = None
+            self._cache_time = 0

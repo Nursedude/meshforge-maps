@@ -31,13 +31,20 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .base import BaseCollector, make_feature, make_feature_collection, validate_coordinates
+from .base import (
+    MESHFORGE_DATA_DIR,
+    UNIFIED_CACHE_PATH,
+    BaseCollector,
+    deduplicate_features,
+    make_feature,
+    make_feature_collection,
+    validate_coordinates,
+)
 
 logger = logging.getLogger(__name__)
 
-# MeshForge RNS cache locations
-RNS_CACHE_PATH = Path.home() / ".local" / "share" / "meshforge" / "rns_nodes.json"
-NODE_CACHE_PATH = Path.home() / ".local" / "share" / "meshforge" / "node_cache.json"
+# MeshForge RNS cache location
+RNS_CACHE_PATH = MESHFORGE_DATA_DIR / "rns_nodes.json"
 
 # Reticulum Community Hub (RCH) API defaults
 RCH_DEFAULT_HOST = "localhost"
@@ -76,40 +83,13 @@ class ReticulumCollector(BaseCollector):
         self._rch_api_key = rch_api_key
 
     def _fetch(self) -> Dict[str, Any]:
-        features: List[Dict[str, Any]] = []
-        seen_ids: set = set()
-
-        # Source 1: rnstatus JSON output (local Reticulum instance)
-        rns_nodes = self._fetch_from_rnstatus()
-        for f in rns_nodes:
-            fid = f["properties"].get("id")
-            if fid and fid not in seen_ids:
-                seen_ids.add(fid)
-                features.append(f)
-
-        # Source 2: Reticulum Community Hub (RCH) API
-        rch_nodes = self._fetch_from_rch()
-        for f in rch_nodes:
-            fid = f["properties"].get("id")
-            if fid and fid not in seen_ids:
-                seen_ids.add(fid)
-                features.append(f)
-
-        # Source 3: MeshForge RNS node cache
-        cache_nodes = self._fetch_from_cache()
-        for f in cache_nodes:
-            fid = f["properties"].get("id")
-            if fid and fid not in seen_ids:
-                seen_ids.add(fid)
-                features.append(f)
-
-        # Source 4: MeshForge unified node cache (RNS entries)
-        unified_nodes = self._fetch_from_unified_cache()
-        for f in unified_nodes:
-            fid = f["properties"].get("id")
-            if fid and fid not in seen_ids:
-                seen_ids.add(fid)
-                features.append(f)
+        # Collect from all sources in priority order, then deduplicate
+        features = deduplicate_features([
+            self._fetch_from_rnstatus(),    # Source 1: local rnstatus
+            self._fetch_from_rch(),          # Source 2: RCH API
+            self._fetch_from_cache(),        # Source 3: RNS node cache
+            self._fetch_from_unified_cache(),  # Source 4: unified cache
+        ], allow_no_id=False)
 
         return make_feature_collection(features, self.source_name)
 
@@ -249,26 +229,18 @@ class ReticulumCollector(BaseCollector):
         return self._read_cache_file(RNS_CACHE_PATH)
 
     def _fetch_from_unified_cache(self) -> List[Dict[str, Any]]:
-        """Read RNS nodes from MeshForge's unified node cache."""
-        features = []
-        if not NODE_CACHE_PATH.exists():
-            return features
-        try:
-            with open(NODE_CACHE_PATH, "r") as f:
-                data = json.load(f)
+        """Read RNS nodes from MeshForge's unified node cache.
 
-            if data.get("type") == "FeatureCollection":
-                for feature in data.get("features", []):
-                    props = feature.get("properties", {})
-                    if props.get("network") == "reticulum":
-                        features.append(feature)
-            logger.debug("Unified cache returned %d RNS nodes", len(features))
-        except (json.JSONDecodeError, OSError) as e:
-            logger.debug("Unified cache read failed: %s", e)
-        return features
+        Reuses _read_cache_file which already filters by reticulum network.
+        """
+        return self._read_cache_file(UNIFIED_CACHE_PATH)
 
     def _read_cache_file(self, path: Path) -> List[Dict[str, Any]]:
-        """Read a GeoJSON or node-list cache file."""
+        """Read a GeoJSON or node-list cache file.
+
+        Filters FeatureCollection entries to only include reticulum network
+        nodes, preventing non-RNS features from leaking through shared caches.
+        """
         features = []
         if not path.exists():
             return features
@@ -277,7 +249,10 @@ class ReticulumCollector(BaseCollector):
                 data = json.load(f)
 
             if data.get("type") == "FeatureCollection":
-                features = data.get("features", [])
+                for feature in data.get("features", []):
+                    props = feature.get("properties", {})
+                    if props.get("network", "reticulum") == "reticulum":
+                        features.append(feature)
             elif isinstance(data, dict):
                 for node_id, node_data in data.items():
                     if isinstance(node_data, dict):

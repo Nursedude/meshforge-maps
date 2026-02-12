@@ -409,8 +409,9 @@ class MQTTSubscriber:
         self._event_bus = event_bus
         self._client = None
         self._thread: Optional[threading.Thread] = None
-        self._running = False
-        self._connected = False
+        self._running = threading.Event()
+        self._connected = threading.Event()
+        self._stats_lock = threading.Lock()
         self._messages_received: int = 0
         self._proto = _try_import_meshtastic()
 
@@ -436,7 +437,7 @@ class MQTTSubscriber:
             logger.info("paho-mqtt not installed; MQTT live subscription disabled")
             return False
 
-        if self._running:
+        if self._running.is_set():
             return True
 
         try:
@@ -454,7 +455,7 @@ class MQTTSubscriber:
             self._client.on_message = self._on_message
             self._client.on_disconnect = self._on_disconnect
 
-            self._running = True
+            self._running.set()
             self._thread = threading.Thread(
                 target=self._run_loop,
                 name="meshforge-maps-mqtt",
@@ -466,12 +467,12 @@ class MQTTSubscriber:
             return True
         except Exception as e:
             logger.error("Failed to start MQTT subscriber: %s", e)
-            self._running = False
+            self._running.clear()
             return False
 
     def stop(self) -> None:
         """Stop the MQTT subscriber gracefully."""
-        self._running = False
+        self._running.clear()
         client = self._client
         if client:
             try:
@@ -496,19 +497,21 @@ class MQTTSubscriber:
                 logger.warning("MQTT subscriber thread did not exit within 5s")
         self._client = None
         self._thread = None
-        self._connected = False
+        self._connected.clear()
         logger.info("MQTT subscriber stopped")
 
     def get_stats(self) -> Dict[str, Any]:
         """Return MQTT subscriber statistics (upstream: monitoring integration)."""
+        with self._stats_lock:
+            messages = self._messages_received
         return {
             "broker": self._broker,
             "port": self._port,
             "topic": self._topic,
-            "connected": self._connected,
-            "running": self._running,
+            "connected": self._connected.is_set(),
+            "running": self._running.is_set(),
             "has_credentials": self._username is not None,
-            "messages_received": self._messages_received,
+            "messages_received": messages,
             "node_count": self._store.node_count,
             "protobuf_available": self._proto is not None,
         }
@@ -519,13 +522,13 @@ class MQTTSubscriber:
 
         strategy = ReconnectStrategy.for_mqtt()
         last_cleanup = time.time()
-        while self._running:
+        while self._running.is_set():
             try:
                 self._client.connect(self._broker, self._port, keepalive=60)
                 strategy.reset()  # Reset backoff on successful connection
                 self._client.loop_forever()
             except Exception as e:
-                if not self._running:
+                if not self._running.is_set():
                     break
                 delay = strategy.next_delay()
                 logger.warning(
@@ -544,15 +547,15 @@ class MQTTSubscriber:
 
     def _on_connect(self, client: Any, userdata: Any, flags: Any,
                     rc: Any, *args: Any) -> None:
-        self._connected = True
+        self._connected.set()
         logger.info("MQTT connected to %s (rc=%s), store has %d nodes",
                     self._broker, rc, self._store.node_count)
         client.subscribe(self._topic)
 
     def _on_disconnect(self, client: Any, userdata: Any, rc: Any,
                        *args: Any) -> None:
-        self._connected = False
-        if self._running:
+        self._connected.clear()
+        if self._running.is_set():
             logger.warning("MQTT disconnected (rc=%s), will reconnect", rc)
 
     def _on_message(self, client: Any, userdata: Any, msg: Any) -> None:
@@ -568,7 +571,8 @@ class MQTTSubscriber:
             )
             return
 
-        self._messages_received += 1
+        with self._stats_lock:
+            self._messages_received += 1
 
         try:
             # Try protobuf decoding first
