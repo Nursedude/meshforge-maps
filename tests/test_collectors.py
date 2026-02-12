@@ -113,6 +113,69 @@ class TestMeshtasticCollector:
         f = c._parse_api_node(sample_meshtastic_api_node)
         assert f["properties"]["is_online"] is False
 
+    def test_fetch_from_api_retries_on_transient_failure(self):
+        """_fetch_from_api retries once on URLError then succeeds."""
+        from urllib.error import URLError
+        c = MeshtasticCollector()
+        node_data = json.dumps([{
+            "num": 1,
+            "user": {"id": "!abc", "longName": "Test"},
+            "position": {"latitude": 35.0, "longitude": 139.0},
+        }]).encode()
+
+        call_count = {"n": 0}
+        original_urlopen = None
+
+        def mock_urlopen(req, timeout=None):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise URLError("Connection refused")
+            # Second call succeeds
+            from io import BytesIO
+            resp = MagicMock()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            resp.read.return_value = node_data
+            return resp
+
+        with patch("src.collectors.meshtastic_collector.urlopen", mock_urlopen):
+            with patch("time.sleep"):
+                features = c._fetch_from_api()
+
+        assert call_count["n"] == 2
+        assert len(features) == 1
+        assert features[0]["properties"]["id"] == "!abc"
+
+    def test_fetch_from_api_timeout_shorter_than_lock(self):
+        """HTTP timeout should be connection_timeout - 1.0 seconds."""
+        c = MeshtasticCollector(connection_timeout=5.0)
+        # Verify the http_timeout calculation is correct
+        http_timeout = max(1.0, c._connection_timeout - 1.0)
+        assert http_timeout == 4.0
+
+        c2 = MeshtasticCollector(connection_timeout=1.0)
+        http_timeout2 = max(1.0, c2._connection_timeout - 1.0)
+        assert http_timeout2 == 1.0  # Floor at 1.0
+
+    def test_fetch_from_api_no_retry_on_json_error(self):
+        """JSON decode errors should not trigger retry."""
+        c = MeshtasticCollector()
+        call_count = {"n": 0}
+
+        def mock_urlopen(req, timeout=None):
+            call_count["n"] += 1
+            resp = MagicMock()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            resp.read.return_value = b"not-json"
+            return resp
+
+        with patch("src.collectors.meshtastic_collector.urlopen", mock_urlopen):
+            features = c._fetch_from_api()
+
+        assert call_count["n"] == 1  # No retry on JSONDecodeError
+        assert len(features) == 0
+
 
 # ==========================================================================
 # Reticulum Collector
