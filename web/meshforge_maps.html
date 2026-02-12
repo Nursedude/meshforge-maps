@@ -593,6 +593,131 @@
             text-align: center;
             margin-top: 6px;
         }
+
+        /* Alert panel */
+        .alert-panel {
+            position: fixed;
+            bottom: 24px;
+            right: 12px;
+            width: 340px;
+            max-height: 360px;
+            background: rgba(10, 14, 26, 0.94);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(239, 83, 80, 0.2);
+            border-radius: 8px;
+            z-index: 1000;
+            display: none;
+            flex-direction: column;
+        }
+
+        .alert-panel.visible { display: flex; }
+
+        .alert-panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(239, 83, 80, 0.1);
+        }
+
+        .alert-panel-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #ef5350;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .alert-badge-count {
+            background: #ef5350;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 8px;
+            min-width: 18px;
+            text-align: center;
+        }
+
+        .alert-panel-close {
+            background: none;
+            border: none;
+            color: #78909c;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0 4px;
+            line-height: 1;
+        }
+
+        .alert-panel-close:hover { color: #ef5350; }
+
+        .alert-panel-body {
+            overflow-y: auto;
+            flex: 1;
+            max-height: 290px;
+            padding: 4px 0;
+        }
+
+        .alert-item {
+            display: flex;
+            gap: 8px;
+            padding: 8px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            font-size: 11px;
+            align-items: flex-start;
+        }
+
+        .alert-item:hover { background: rgba(239, 83, 80, 0.04); }
+
+        .alert-severity-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            margin-top: 3px;
+        }
+
+        .alert-sev-critical { background: #ef5350; }
+        .alert-sev-warning { background: #ffa726; }
+        .alert-sev-info { background: #42a5f5; }
+
+        .alert-item-body { flex: 1; min-width: 0; }
+
+        .alert-item-msg {
+            color: #e0e0e0;
+            word-break: break-word;
+        }
+
+        .alert-item-meta {
+            color: #546e7a;
+            font-size: 10px;
+            margin-top: 2px;
+        }
+
+        .alert-empty {
+            color: #546e7a;
+            font-size: 11px;
+            text-align: center;
+            padding: 24px 12px;
+        }
+
+        /* Header alert indicator badge */
+        .header-alert-badge {
+            display: none;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: rgba(239, 83, 80, 0.15);
+            border: 1px solid rgba(239, 83, 80, 0.3);
+            font-size: 11px;
+            color: #ef5350;
+            font-weight: 600;
+        }
+
+        .header-alert-badge.has-alerts { display: flex; }
     </style>
 </head>
 <body>
@@ -620,6 +745,10 @@
         <span class="stat-badge" id="mqttBadge" style="display:none">
             <span class="stat-dot" style="background:#42a5f5"></span>
             MQTT <span id="statMqtt">0</span>
+        </span>
+        <span class="header-alert-badge" id="headerAlertBadge" onclick="toggleAlertPanel()">
+            <span class="alert-sev-critical" style="width:6px;height:6px;border-radius:50;display:inline-block"></span>
+            <span id="headerAlertCount">0</span> Alerts
         </span>
     </div>
 </div>
@@ -683,6 +812,12 @@
             <input type="checkbox" id="overlayHealth" onchange="toggleHealthOverlay()">
             <span class="layer-color" style="background:#e91e63"></span>
             <span class="layer-label">Node Health</span>
+        </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="overlayAlerts" onchange="toggleAlertPanel()">
+            <span class="layer-color" style="background:#ef5350"></span>
+            <span class="layer-label">Alerts</span>
+            <span class="layer-count" id="countAlerts">0</span>
         </label>
     </div>
 
@@ -751,6 +886,18 @@
     </div>
     <div class="history-node-list" id="historyNodeList">
         <div style="color:#546e7a;font-size:11px;text-align:center;padding:12px">Loading tracked nodes...</div>
+    </div>
+</div>
+
+<div class="alert-panel" id="alertPanel">
+    <div class="alert-panel-header">
+        <span class="alert-panel-title">
+            Alerts <span class="alert-badge-count" id="alertBadgeCount">0</span>
+        </span>
+        <button class="alert-panel-close" onclick="toggleAlertPanel()">&times;</button>
+    </div>
+    <div class="alert-panel-body" id="alertPanelBody">
+        <div class="alert-empty">No alerts</div>
     </div>
 </div>
 
@@ -855,6 +1002,9 @@
     let healthOverlayActive = false;  // Whether health color-coding is enabled
     let nodeHealthScores = {};        // Cached {node_id: {score, status}} from API
     const markerRegistry = new Map(); // nodeId -> marker for O(1) WebSocket lookup
+    let alertPanelOpen = false;       // Whether alert panel is visible
+    const alertItems = [];            // In-memory alert buffer (newest first)
+    const MAX_ALERT_ITEMS = 100;      // Cap alert panel entries
 
     // Per-network layer groups (for toggle visibility)
     const networkLayers = {
@@ -916,6 +1066,9 @@
 
         // Load node data
         loadNodeData();
+
+        // Load initial active alerts from API
+        loadInitialAlerts();
 
         // Shift map down for header
         map.getContainer().style.marginTop = '48px';
@@ -1852,6 +2005,10 @@
         if (msg.type === 'node.position' && msg.lat && msg.lon && msg.node_id) {
             updateOrAddNode(msg);
         }
+        // Alert events from the alert engine via EventBus
+        if (msg.type === 'alert.fired' && msg.data) {
+            handleAlertEvent(msg.data);
+        }
         // Other event types (node.info, node.telemetry, node.topology)
         // trigger a lightweight refresh of the affected node's popup if open
         if (msg.type === 'node.info' || msg.type === 'node.telemetry') {
@@ -1898,6 +2055,103 @@
     }
 
     // =========================================================================
+    // Alert Panel
+    // =========================================================================
+
+    function toggleAlertPanel() {
+        alertPanelOpen = !alertPanelOpen;
+        var panel = document.getElementById('alertPanel');
+        var checkbox = document.getElementById('overlayAlerts');
+        if (alertPanelOpen) {
+            panel.classList.add('visible');
+        } else {
+            panel.classList.remove('visible');
+        }
+        if (checkbox) checkbox.checked = alertPanelOpen;
+    }
+
+    function handleAlertEvent(alertData) {
+        // Prepend to in-memory buffer (newest first)
+        alertItems.unshift(alertData);
+        if (alertItems.length > MAX_ALERT_ITEMS) {
+            alertItems.length = MAX_ALERT_ITEMS;
+        }
+        renderAlertPanel();
+        updateAlertBadge();
+
+        // Show toast for critical alerts
+        if (alertData.severity === 'critical') {
+            showToast('ALERT: ' + (alertData.message || alertData.alert_type), true);
+        }
+    }
+
+    function renderAlertPanel() {
+        var body = document.getElementById('alertPanelBody');
+        if (!alertItems.length) {
+            body.innerHTML = '<div class="alert-empty">No alerts</div>';
+            return;
+        }
+        var html = '';
+        for (var i = 0; i < alertItems.length; i++) {
+            var a = alertItems[i];
+            var sevClass = 'alert-sev-' + (a.severity || 'info');
+            var timeStr = '';
+            if (a.timestamp) {
+                try {
+                    timeStr = new Date(a.timestamp * 1000).toLocaleTimeString();
+                } catch (e) { /* ignore */ }
+            }
+            html += '<div class="alert-item">' +
+                '<span class="alert-severity-dot ' + sevClass + '"></span>' +
+                '<div class="alert-item-body">' +
+                    '<div class="alert-item-msg">' + esc(a.message || a.alert_type || 'Alert') + '</div>' +
+                    '<div class="alert-item-meta">' +
+                        esc(a.node_id || '') +
+                        (timeStr ? ' &middot; ' + esc(timeStr) : '') +
+                        ' &middot; ' + esc(a.severity || '') +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+        }
+        body.innerHTML = html;
+    }
+
+    function updateAlertBadge() {
+        var count = alertItems.length;
+        var badge = document.getElementById('headerAlertBadge');
+        var badgeCount = document.getElementById('headerAlertCount');
+        var panelCount = document.getElementById('alertBadgeCount');
+        var overlayCount = document.getElementById('countAlerts');
+        badgeCount.textContent = count;
+        panelCount.textContent = count;
+        if (overlayCount) overlayCount.textContent = count;
+        if (count > 0) {
+            badge.classList.add('has-alerts');
+        } else {
+            badge.classList.remove('has-alerts');
+        }
+    }
+
+    async function loadInitialAlerts() {
+        try {
+            var resp = await fetch(API_BASE + '/api/alerts/active');
+            if (!resp.ok) return;
+            var data = await resp.json();
+            var alerts = data.alerts || [];
+            // Load in chronological order (oldest first) so newest end up at top
+            for (var i = alerts.length - 1; i >= 0; i--) {
+                alertItems.push(alerts[i]);
+            }
+            if (alertItems.length > MAX_ALERT_ITEMS) {
+                alertItems.length = MAX_ALERT_ITEMS;
+            }
+            renderAlertPanel();
+            updateAlertBadge();
+        } catch (e) {
+            console.debug('Failed to load initial alerts:', e);
+        }
+    }
+
     // =========================================================================
     // Health Check (data staleness indicator)
     // =========================================================================
