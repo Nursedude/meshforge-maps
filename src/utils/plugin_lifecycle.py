@@ -23,6 +23,7 @@ Valid transitions:
 
 import enum
 import logging
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -76,6 +77,7 @@ class PluginLifecycle:
     """
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._state = PluginState.LOADED
         self._history: List[Dict[str, Any]] = [{
             "state": PluginState.LOADED.value,
@@ -87,54 +89,64 @@ class PluginLifecycle:
     @property
     def state(self) -> PluginState:
         """Current lifecycle state."""
-        return self._state
+        with self._lock:
+            return self._state
 
     @property
     def is_active(self) -> bool:
-        return self._state == PluginState.ACTIVE
+        with self._lock:
+            return self._state == PluginState.ACTIVE
 
     @property
     def is_stopped(self) -> bool:
-        return self._state in (PluginState.STOPPED, PluginState.LOADED)
+        with self._lock:
+            return self._state in (PluginState.STOPPED, PluginState.LOADED)
 
     @property
     def can_activate(self) -> bool:
-        return PluginState.ACTIVATING in _TRANSITIONS.get(self._state, set())
+        with self._lock:
+            return PluginState.ACTIVATING in _TRANSITIONS.get(self._state, set())
 
     @property
     def can_deactivate(self) -> bool:
-        return PluginState.DEACTIVATING in _TRANSITIONS.get(self._state, set())
+        with self._lock:
+            return PluginState.DEACTIVATING in _TRANSITIONS.get(self._state, set())
 
     @property
     def last_error(self) -> Optional[str]:
-        return self._error
+        with self._lock:
+            return self._error
 
     def transition_to(self, new_state: PluginState) -> None:
         """Transition to a new state, validating the transition is allowed.
 
         Raises InvalidTransitionError if the transition is not valid.
         """
-        allowed = _TRANSITIONS.get(self._state, set())
-        if new_state not in allowed:
-            raise InvalidTransitionError(
-                f"Cannot transition from {self._state.value} to {new_state.value}. "
-                f"Allowed: {[s.value for s in allowed]}"
-            )
+        with self._lock:
+            allowed = _TRANSITIONS.get(self._state, set())
+            if new_state not in allowed:
+                raise InvalidTransitionError(
+                    f"Cannot transition from {self._state.value} to {new_state.value}. "
+                    f"Allowed: {[s.value for s in allowed]}"
+                )
 
-        old_state = self._state
-        self._state = new_state
-        self._history.append({
-            "state": new_state.value,
-            "timestamp": time.time(),
-            "from": old_state.value,
-        })
+            old_state = self._state
+            self._state = new_state
+            self._history.append({
+                "state": new_state.value,
+                "timestamp": time.time(),
+                "from": old_state.value,
+            })
 
-        if new_state != PluginState.ERROR:
-            self._error = None
+            if new_state != PluginState.ERROR:
+                self._error = None
+
+            listeners = list(self._listeners)
 
         logger.debug("Plugin state: %s → %s", old_state.value, new_state.value)
 
-        for listener in self._listeners:
+        # Invoke listeners outside the lock to prevent deadlock
+        for listener in listeners:
             try:
                 listener(old_state, new_state)
             except Exception as e:
@@ -142,20 +154,23 @@ class PluginLifecycle:
 
     def record_error(self, error: str) -> None:
         """Record an error and transition to ERROR state if allowed."""
-        self._error = error
+        with self._lock:
+            self._error = error
         try:
             self.transition_to(PluginState.ERROR)
         except InvalidTransitionError:
             # Can't transition to ERROR from current state — just record it
-            logger.warning("Cannot enter ERROR state from %s, error recorded: %s",
-                          self._state.value, error)
+            with self._lock:
+                logger.warning("Cannot enter ERROR state from %s, error recorded: %s",
+                              self._state.value, error)
 
     def on_transition(self, callback: Callable[[PluginState, PluginState], None]) -> None:
         """Register a callback for state transitions.
 
         Callback receives (old_state, new_state).
         """
-        self._listeners.append(callback)
+        with self._lock:
+            self._listeners.append(callback)
 
     def activating(self) -> "_ActivatingContext":
         """Context manager for the activation phase.
@@ -176,24 +191,31 @@ class PluginLifecycle:
     @property
     def uptime_seconds(self) -> Optional[float]:
         """Seconds since entering ACTIVE state, or None if not active."""
-        if self._state != PluginState.ACTIVE:
-            return None
-        for entry in reversed(self._history):
-            if entry["state"] == PluginState.ACTIVE.value:
-                return time.time() - entry["timestamp"]
+        with self._lock:
+            if self._state != PluginState.ACTIVE:
+                return None
+            for entry in reversed(self._history):
+                if entry["state"] == PluginState.ACTIVE.value:
+                    return time.time() - entry["timestamp"]
         return None
 
     @property
     def info(self) -> Dict[str, Any]:
         """Diagnostic info for status endpoints."""
+        with self._lock:
+            state_val = self._state.value
+            can_act = PluginState.ACTIVATING in _TRANSITIONS.get(self._state, set())
+            can_deact = PluginState.DEACTIVATING in _TRANSITIONS.get(self._state, set())
+            transition_count = len(self._history) - 1
+            error = self._error
         result: Dict[str, Any] = {
-            "state": self._state.value,
-            "can_activate": self.can_activate,
-            "can_deactivate": self.can_deactivate,
-            "transition_count": len(self._history) - 1,
+            "state": state_val,
+            "can_activate": can_act,
+            "can_deactivate": can_deact,
+            "transition_count": transition_count,
         }
-        if self._error:
-            result["last_error"] = self._error
+        if error:
+            result["last_error"] = error
         uptime = self.uptime_seconds
         if uptime is not None:
             result["uptime_seconds"] = int(uptime)

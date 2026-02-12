@@ -146,12 +146,20 @@ self.addEventListener('fetch', (event) => {
 });
 
 /**
- * Cache-first strategy: return cached response, fetch from network on miss.
+ * Cache-first strategy with LRU semantics.
+ *
+ * On cache hit: delete and re-insert the entry so it moves to the end
+ * of the cache (most recently used). enforceCacheLimit evicts from the
+ * beginning (least recently used).
  */
 async function cacheFirst(request, cacheName) {
     const cache = await caches.open(cacheName);
     const cached = await cache.match(request);
     if (cached) {
+        // LRU touch: move to end by re-inserting
+        cache.delete(request).then(() => {
+            cache.put(request, cached.clone());
+        });
         return cached;
     }
     try {
@@ -159,8 +167,10 @@ async function cacheFirst(request, cacheName) {
         if (response.ok) {
             // Clone and cache the response
             cache.put(request, response.clone());
-            // Async eviction (don't block response)
-            enforceCacheLimit(cacheName, MAX_TILE_CACHE_ITEMS);
+            // Amortized eviction: only check every ~100 inserts
+            if (Math.random() < 0.01) {
+                enforceCacheLimit(cacheName, MAX_TILE_CACHE_ITEMS);
+            }
         }
         return response;
     } catch (error) {
@@ -310,7 +320,8 @@ async function precacheRegion(data, port) {
                     .replace('{z}', z)
                     .replace('{x}', x)
                     .replace('{y}', y)
-                    .replace('{s}', 'a'); // Use subdomain 'a' for precaching
+                    .replace('{s}', 'a')  // Use subdomain 'a' for precaching
+                    .replace('{r}', '');   // Non-retina tiles for precaching
                 try {
                     const existing = await cache.match(url);
                     if (existing) {

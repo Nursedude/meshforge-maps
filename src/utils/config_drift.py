@@ -61,6 +61,17 @@ TRACKED_FIELDS = {
 }
 
 
+def _normalize_value(value: Any) -> str:
+    """Normalize a config value for comparison.
+
+    Converts numeric types consistently so int(1) == float(1.0)
+    and avoids spurious drift from type differences.
+    """
+    if isinstance(value, float) and value == int(value):
+        return str(int(value))
+    return str(value)
+
+
 class ConfigDriftDetector:
     """Detects and records configuration changes for mesh nodes.
 
@@ -127,7 +138,7 @@ class ConfigDriftDetector:
             # Compare current values against snapshot
             for field, new_value in current.items():
                 old_value = previous.get(field)
-                if old_value is not None and str(old_value) != str(new_value):
+                if old_value is not None and _normalize_value(old_value) != _normalize_value(new_value):
                     severity = TRACKED_FIELDS.get(field, DriftSeverity.INFO)
                     drift = {
                         "node_id": node_id,
@@ -221,7 +232,8 @@ class ConfigDriftDetector:
 
     @property
     def total_drifts(self) -> int:
-        return self._total_drifts
+        with self._lock:
+            return self._total_drifts
 
     def remove_node(self, node_id: str) -> None:
         """Remove all tracking data for a node (e.g., after eviction)."""

@@ -89,39 +89,41 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     def _get_health_scorer(self) -> Optional[NodeHealthScorer]:
         return getattr(self.server, "_mf_health_scorer", None)
 
+    # Route name -> method name mapping (built once, not per request)
+    _ROUTE_TABLE = {
+        "": "_serve_map",
+        "/index.html": "_serve_map",
+        "/api/nodes/geojson": "_serve_geojson",
+        "/api/nodes/all": "_serve_geojson",
+        "/api/config": "_serve_config",
+        "/api/tile-providers": "_serve_tile_providers",
+        "/api/sources": "_serve_sources",
+        "/api/overlay": "_serve_overlay",
+        "/api/topology": "_serve_topology",
+        "/api/topology/geojson": "_serve_topology_geojson",
+        "/api/status": "_serve_status",
+        "/api/health": "_serve_health",
+        "/api/hamclock": "_serve_hamclock",
+        "/api/core-health": "_serve_core_health",
+        "/api/mqtt/stats": "_serve_mqtt_stats",
+        "/api/history/nodes": "_serve_tracked_nodes",
+        "/api/config-drift": "_serve_config_drift",
+        "/api/config-drift/summary": "_serve_config_drift_summary",
+        "/api/node-states": "_serve_node_states",
+        "/api/node-states/summary": "_serve_node_states_summary",
+        "/api/proxy/stats": "_serve_proxy_stats",
+        "/api/node-health": "_serve_all_node_health",
+        "/api/node-health/summary": "_serve_node_health_summary",
+        "/api/perf": "_serve_perf_stats",
+    }
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         query = parse_qs(parsed.query)
 
-        routes = {
-            "": self._serve_map,
-            "/index.html": self._serve_map,
-            "/api/nodes/geojson": self._serve_geojson,
-            "/api/nodes/all": self._serve_geojson,
-            "/api/config": self._serve_config,
-            "/api/tile-providers": self._serve_tile_providers,
-            "/api/sources": self._serve_sources,
-            "/api/overlay": self._serve_overlay,
-            "/api/topology": self._serve_topology,
-            "/api/topology/geojson": self._serve_topology_geojson,
-            "/api/status": self._serve_status,
-            "/api/health": self._serve_health,
-            "/api/hamclock": self._serve_hamclock,
-            "/api/core-health": self._serve_core_health,
-            "/api/mqtt/stats": self._serve_mqtt_stats,
-            "/api/history/nodes": self._serve_tracked_nodes,
-            "/api/config-drift": self._serve_config_drift,
-            "/api/config-drift/summary": self._serve_config_drift_summary,
-            "/api/node-states": self._serve_node_states,
-            "/api/node-states/summary": self._serve_node_states_summary,
-            "/api/proxy/stats": self._serve_proxy_stats,
-            "/api/node-health": self._serve_all_node_health,
-            "/api/node-health/summary": self._serve_node_health_summary,
-            "/api/perf": self._serve_perf_stats,
-        }
-
-        handler = routes.get(path)
+        method_name = self._ROUTE_TABLE.get(path)
+        handler = getattr(self, method_name) if method_name else None
         try:
             if handler:
                 handler()
@@ -134,6 +136,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
                         self._serve_trajectory(node_id, query)
+                else:
+                    self._send_json({"error": "Not found"}, 404)
             elif path.startswith("/api/nodes/") and path.endswith("/health"):
                 # /api/nodes/<node_id>/health
                 parts = path.split("/")
@@ -143,6 +147,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
                         self._serve_node_health(node_id)
+                else:
+                    self._send_json({"error": "Not found"}, 404)
             elif path.startswith("/api/nodes/") and path.endswith("/history"):
                 # /api/nodes/<node_id>/history
                 parts = path.split("/")
@@ -152,6 +158,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
                         self._serve_node_history(node_id, query)
+                else:
+                    self._send_json({"error": "Not found"}, 404)
             elif path.startswith("/api/snapshot/"):
                 # /api/snapshot/<timestamp>
                 parts = path.split("/")
@@ -161,6 +169,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                         self._serve_snapshot(ts)
                     except (ValueError, IndexError):
                         self._send_json({"error": "Invalid timestamp"}, 400)
+                else:
+                    self._send_json({"error": "Not found"}, 404)
             elif path.startswith("/api/nodes/"):
                 # /api/nodes/<source_name>
                 source = path.split("/")[-1]
@@ -181,13 +191,22 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+    def _get_cors_origin(self) -> Optional[str]:
+        """Get configured CORS origin, or None for same-origin (no CORS headers)."""
+        config = self._get_config()
+        if config:
+            return config.get("cors_allowed_origin")
+        return None
+
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests."""
+        cors_origin = self._get_cors_origin()
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
-        self.send_header("Access-Control-Max-Age", "86400")
+        if cors_origin:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
+            self.send_header("Access-Control-Max-Age", "86400")
         self.end_headers()
 
     def _serve_map(self) -> None:
@@ -666,7 +685,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        cors_origin = self._get_cors_origin()
+        if cors_origin:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
         self.end_headers()
         self.wfile.write(body)
 

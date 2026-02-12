@@ -11,6 +11,8 @@ import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from ..utils.reconnect import ReconnectStrategy
+
 if TYPE_CHECKING:
     from ..utils.circuit_breaker import CircuitBreaker
 
@@ -178,8 +180,6 @@ class BaseCollector(ABC):
             return make_feature_collection([], self.source_name)
 
         # Retry loop with backoff (single strategy instance preserves escalating delays)
-        from ..utils.reconnect import ReconnectStrategy
-
         last_error: Optional[Exception] = None
         attempts = 1 + self._max_retries
         strategy = ReconnectStrategy.for_collector()
