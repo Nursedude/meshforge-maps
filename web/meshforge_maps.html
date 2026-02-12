@@ -850,6 +850,7 @@
     let wsReconnectTimer = null; // Timer for WebSocket reconnect attempts
     let wsReconnectDelay = 2000; // Current reconnect delay (exponential backoff)
     let trajectoryLayers = {};   // Active trajectory polylines keyed by node_id
+    const MAX_TRAJECTORIES = 20; // Cap to prevent unbounded memory growth
     let historyPanelOpen = false;
     let healthOverlayActive = false;  // Whether health color-coding is enabled
     let nodeHealthScores = {};        // Cached {node_id: {score, status}} from API
@@ -1058,11 +1059,11 @@
         }
     }
 
-    function processGeoJSON(data) {
-        // Clear existing markers
+    function renderMarkers() {
+        // Core marker rendering from allFeatures — single source of truth
+        // for both initial load (processGeoJSON) and re-render (health overlay toggle)
         clusterGroup.clearLayers();
         directGroup.clearLayers();
-        allFeatures = data.features || [];
 
         const counts = { meshtastic: 0, reticulum: 0, aredn: 0 };
         networkLayers.meshtastic = [];
@@ -1077,10 +1078,15 @@
             const lat = coords[1];
             const lon = coords[0];
             const network = props.network || 'unknown';
-            const color = NETWORK_COLORS[network] || '#78909c';
 
-            // Create marker with visual staleness indicator
-            // Upstream: offline nodes render at 40% opacity with grayscale
+            // Determine color: health overlay or network color
+            let color;
+            if (healthOverlayActive) {
+                color = getHealthColor(props.id) || '#78909c';
+            } else {
+                color = NETWORK_COLORS[network] || '#78909c';
+            }
+
             const isStale = props.is_online === false;
             const marker = L.circleMarker([lat, lon], {
                 radius: isStale ? 5 : 7,
@@ -1089,19 +1095,15 @@
                 weight: isStale ? 1 : 2,
                 opacity: isStale ? 0.4 : 1.0,
                 fillOpacity: isStale ? 0.2 : 0.7,
-                className: isStale ? 'node-marker-stale' : '',
             });
 
-            // Bind popup
             marker.bindPopup(buildPopup(props, color));
 
-            // Track by network
             if (counts.hasOwnProperty(network)) {
                 counts[network]++;
                 networkLayers[network].push(marker);
             }
 
-            // Add to appropriate layer
             if (networkVisible[network] !== false) {
                 if (useClustering) {
                     clusterGroup.addLayer(marker);
@@ -1111,13 +1113,17 @@
             }
         }
 
-        // Update counts in UI
         document.getElementById('countMeshtastic').textContent = counts.meshtastic;
         document.getElementById('countReticulum').textContent = counts.reticulum;
         document.getElementById('countAredn').textContent = counts.aredn;
         document.getElementById('statMeshtastic').textContent = counts.meshtastic;
         document.getElementById('statReticulum').textContent = counts.reticulum;
         document.getElementById('statAredn').textContent = counts.aredn;
+    }
+
+    function processGeoJSON(data) {
+        allFeatures = data.features || [];
+        renderMarkers();
 
         // Process overlay data (space weather, terminator)
         const overlayData = data.properties?.overlay_data || {};
@@ -1551,64 +1557,7 @@
     }
 
     function rebuildMarkersFromFeatures() {
-        // Re-process stored features with current health overlay state
-        clusterGroup.clearLayers();
-        directGroup.clearLayers();
-
-        const counts = { meshtastic: 0, reticulum: 0, aredn: 0 };
-        networkLayers.meshtastic = [];
-        networkLayers.reticulum = [];
-        networkLayers.aredn = [];
-
-        for (const feature of allFeatures) {
-            const props = feature.properties || {};
-            const coords = feature.geometry?.coordinates;
-            if (!coords || coords.length < 2) continue;
-
-            const lat = coords[1];
-            const lon = coords[0];
-            const network = props.network || 'unknown';
-
-            // Determine color: health overlay or network color
-            let color;
-            if (healthOverlayActive) {
-                color = getHealthColor(props.id) || '#78909c';
-            } else {
-                color = NETWORK_COLORS[network] || '#78909c';
-            }
-
-            const isStale = props.is_online === false;
-            const marker = L.circleMarker([lat, lon], {
-                radius: isStale ? 5 : 7,
-                fillColor: color,
-                color: isStale ? '#546e7a' : color,
-                weight: isStale ? 1 : 2,
-                opacity: isStale ? 0.4 : 1.0,
-                fillOpacity: isStale ? 0.2 : 0.7,
-            });
-
-            marker.bindPopup(buildPopup(props, healthOverlayActive ? color : (NETWORK_COLORS[network] || '#78909c')));
-
-            if (counts.hasOwnProperty(network)) {
-                counts[network]++;
-                networkLayers[network].push(marker);
-            }
-
-            if (networkVisible[network] !== false) {
-                if (useClustering) {
-                    clusterGroup.addLayer(marker);
-                } else {
-                    directGroup.addLayer(marker);
-                }
-            }
-        }
-
-        document.getElementById('countMeshtastic').textContent = counts.meshtastic;
-        document.getElementById('countReticulum').textContent = counts.reticulum;
-        document.getElementById('countAredn').textContent = counts.aredn;
-        document.getElementById('statMeshtastic').textContent = counts.meshtastic;
-        document.getElementById('statReticulum').textContent = counts.reticulum;
-        document.getElementById('statAredn').textContent = counts.aredn;
+        renderMarkers();
     }
 
     // =========================================================================
@@ -1796,6 +1745,14 @@
                 '<div class="popup-row"><span class="popup-key">Points</span><span class="popup-val">' + coords.length + '</span></div>' +
                 '<div class="popup-row"><span class="popup-key">Network</span><span class="popup-val">' + esc(props.network || '') + '</span></div>'
             );
+
+            // Evict oldest trajectory if at capacity
+            var activeIds = Object.keys(trajectoryLayers);
+            if (activeIds.length >= MAX_TRAJECTORIES) {
+                var evictId = activeIds[0];
+                map.removeLayer(trajectoryLayers[evictId]);
+                delete trajectoryLayers[evictId];
+            }
 
             var group = L.layerGroup([trajectoryLine, startMarker, endMarker]).addTo(map);
             trajectoryLayers[nodeId] = group;

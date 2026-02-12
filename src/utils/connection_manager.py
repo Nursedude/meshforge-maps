@@ -47,6 +47,7 @@ class ConnectionManager:
         self._host = host
         self._port = port
         self._lock = threading.Lock()
+        self._stats_lock = threading.Lock()
         self._holder: Optional[str] = None
         self._acquire_time: float = 0
         self._total_acquisitions: int = 0
@@ -55,9 +56,16 @@ class ConnectionManager:
 
     @classmethod
     def get_instance(cls, host: str = "localhost", port: int = 4403) -> "ConnectionManager":
-        """Get or create the singleton ConnectionManager for a host:port pair."""
+        """Get or create the singleton ConnectionManager for a host:port pair.
+
+        Each class in the hierarchy gets its own _instances dict to prevent
+        subclasses from sharing a single mutable class-level dict.
+        """
         key = f"{host}:{port}"
         with cls._instances_lock:
+            # Ensure each class has its own _instances dict (not inherited)
+            if "_instances" not in cls.__dict__:
+                cls._instances = {}
             if key not in cls._instances:
                 cls._instances[key] = cls(host, port)
             return cls._instances[key]
@@ -66,7 +74,8 @@ class ConnectionManager:
     def reset_all(cls) -> None:
         """Reset all instances (for testing)."""
         with cls._instances_lock:
-            cls._instances.clear()
+            if "_instances" in cls.__dict__:
+                cls._instances.clear()
 
     def acquire(self, timeout: float = 5.0, holder: str = "") -> "_ConnectionContext":
         """Return a context manager that tries to acquire the connection lock.
@@ -85,15 +94,17 @@ class ConnectionManager:
         """Internal: attempt to acquire the lock within timeout."""
         acquired = self._lock.acquire(timeout=timeout if timeout > 0 else 0)
         if acquired:
-            self._holder = holder or "unknown"
-            self._acquire_time = time.time()
-            self._total_acquisitions += 1
+            with self._stats_lock:
+                self._holder = holder or "unknown"
+                self._acquire_time = time.time()
+                self._total_acquisitions += 1
             logger.debug(
                 "Connection lock acquired by '%s' for %s:%d",
-                self._holder, self._host, self._port,
+                holder or "unknown", self._host, self._port,
             )
             return True
-        self._total_timeouts += 1
+        with self._stats_lock:
+            self._total_timeouts += 1
         logger.debug(
             "Connection lock timeout (%.1fs) for %s:%d, held by '%s'",
             timeout, self._host, self._port, self._holder or "unknown",
@@ -102,10 +113,11 @@ class ConnectionManager:
 
     def _release(self) -> None:
         """Internal: release the connection lock."""
-        holder = self._holder
-        self._holder = None
-        self._acquire_time = 0
-        self._total_releases += 1
+        with self._stats_lock:
+            holder = self._holder
+            self._holder = None
+            self._acquire_time = 0
+            self._total_releases += 1
         try:
             self._lock.release()
         except RuntimeError:
@@ -122,28 +134,40 @@ class ConnectionManager:
         Note: inherently racy — the result may be stale by the time
         the caller acts on it.  Use acquire() for actual locking.
         """
-        return self._holder is not None
+        with self._stats_lock:
+            return self._holder is not None
 
     @property
     def holder(self) -> Optional[str]:
         """Name of the current lock holder, or None."""
-        return self._holder
+        with self._stats_lock:
+            return self._holder
 
     @property
     def stats(self) -> Dict[str, Any]:
-        """Diagnostic stats for the connection manager."""
+        """Diagnostic stats for the connection manager.
+
+        Reads all counters under the stats lock to provide a
+        consistent snapshot (avoids reading stale combinations).
+        """
+        with self._stats_lock:
+            holder = self._holder
+            acquire_time = self._acquire_time
+            total_acq = self._total_acquisitions
+            total_to = self._total_timeouts
+            total_rel = self._total_releases
         held_seconds = None
-        if self._acquire_time > 0:
-            held_seconds = round(time.time() - self._acquire_time, 1)
+        if acquire_time > 0:
+            held_seconds = round(time.time() - acquire_time, 1)
         return {
             "host": self._host,
             "port": self._port,
-            "is_locked": self.is_locked,
-            "holder": self._holder,
+            "is_locked": holder is not None,
+            "holder": holder,
             "held_seconds": held_seconds,
-            "total_acquisitions": self._total_acquisitions,
-            "total_timeouts": self._total_timeouts,
-            "total_releases": self._total_releases,
+            "total_acquisitions": total_acq,
+            "total_timeouts": total_to,
+            "total_releases": total_rel,
         }
 
 

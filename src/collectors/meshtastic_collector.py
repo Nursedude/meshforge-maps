@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .base import BaseCollector, make_feature, make_feature_collection, validate_coordinates
+from .base import MESHFORGE_DATA_DIR, BaseCollector, make_feature, make_feature_collection, validate_coordinates
 from ..utils.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ MESHTASTICD_API = "http://localhost:4403"
 NODES_ENDPOINT = "/api/v1/nodes"
 
 # Meshforge MQTT cache location
-MQTT_CACHE_PATH = Path.home() / ".local" / "share" / "meshforge" / "mqtt_nodes.json"
+MQTT_CACHE_PATH = MESHFORGE_DATA_DIR / "mqtt_nodes.json"
 
 
 class MeshtasticCollector(BaseCollector):

@@ -127,12 +127,13 @@ class NodeHistoryDB:
 
         now = timestamp if timestamp is not None else int(time.time())
 
-        # Throttle: skip if we recorded this node recently
-        last = self._last_recorded.get(node_id, 0)
-        if (now - last) < self._throttle_seconds:
-            return False
-
         with self._lock:
+            # Throttle check inside lock to prevent duplicate observations
+            # from concurrent calls passing the check simultaneously
+            last = self._last_recorded.get(node_id, 0)
+            if (now - last) < self._throttle_seconds:
+                return False
+
             try:
                 self._conn.execute(
                     """INSERT INTO observations
@@ -274,18 +275,19 @@ class NodeHistoryDB:
         if not self._conn:
             return {"type": "FeatureCollection", "features": []}
 
-        # Get most recent observation for each node before the timestamp
+        # Get most recent observation for each node before the timestamp.
+        # Use MAX(id) to break ties when multiple observations share the
+        # same timestamp for a node, preventing duplicate rows.
         query = """
             SELECT o.node_id, o.timestamp, o.latitude, o.longitude,
                    o.altitude, o.network, o.snr, o.battery, o.name
             FROM observations o
             INNER JOIN (
-                SELECT node_id, MAX(timestamp) as max_ts
+                SELECT MAX(id) as max_id
                 FROM observations
                 WHERE timestamp <= ?
                 GROUP BY node_id
-            ) latest ON o.node_id = latest.node_id
-                    AND o.timestamp = latest.max_ts
+            ) latest ON o.id = latest.max_id
         """
 
         with self._lock:
