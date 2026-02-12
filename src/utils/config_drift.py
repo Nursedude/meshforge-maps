@@ -188,7 +188,7 @@ class ConfigDriftDetector:
             result = []
             for history in self._drift_history.values():
                 for drift in history:
-                    if since and drift["timestamp"] < since:
+                    if since is not None and drift["timestamp"] < since:
                         continue
                     if severity and drift["severity"] != severity:
                         continue

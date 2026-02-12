@@ -125,7 +125,7 @@ class NodeHistoryDB:
         if not self._conn:
             return False
 
-        now = timestamp or int(time.time())
+        now = timestamp if timestamp is not None else int(time.time())
 
         # Throttle: skip if we recorded this node recently
         last = self._last_recorded.get(node_id, 0)

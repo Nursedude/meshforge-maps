@@ -120,8 +120,12 @@ class MeshtasticCollector(BaseCollector):
     def _parse_api_node(self, node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Parse a node from the meshtasticd API into a GeoJSON feature."""
         position = node.get("position", {})
-        lat = position.get("latitude") or position.get("latitudeI")
-        lon = position.get("longitude") or position.get("longitudeI")
+        lat = position.get("latitude")
+        if lat is None:
+            lat = position.get("latitudeI")
+        lon = position.get("longitude")
+        if lon is None:
+            lon = position.get("longitudeI")
 
         coords = validate_coordinates(lat, lon, convert_int=True)
         if coords is None:

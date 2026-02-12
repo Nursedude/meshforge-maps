@@ -36,7 +36,6 @@ from .. import __version__
 from ..utils.openhamclock_compat import (
     detect_variant,
     get_endpoint_map,
-    normalize_band_conditions,
     normalize_de_dx,
     normalize_spacewx,
 )
@@ -401,7 +400,7 @@ class HamClockCollector(BaseCollector):
             "available": hamclock.get("available", False),
             "source": hamclock.get("source", "unknown"),
             "host": self._hamclock_host,
-            "port": self._hamclock_port,
+            "port": hamclock.get("port", self._hamclock_port),
         }
         # Space weather
         sw = props.get("space_weather", {})
