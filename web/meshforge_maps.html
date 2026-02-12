@@ -718,6 +718,175 @@
         }
 
         .header-alert-badge.has-alerts { display: flex; }
+
+        /* Analytics panel (bottom-left, toggleable) */
+        .analytics-panel {
+            position: fixed;
+            bottom: 24px;
+            left: 12px;
+            width: 420px;
+            max-height: 480px;
+            background: rgba(10, 14, 26, 0.94);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(79, 195, 247, 0.12);
+            border-radius: 8px;
+            z-index: 1000;
+            display: none;
+            flex-direction: column;
+        }
+        .analytics-panel.visible { display: flex; }
+
+        .analytics-panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(79, 195, 247, 0.1);
+        }
+        .analytics-panel-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #4fc3f7;
+        }
+        .analytics-panel-close {
+            background: none;
+            border: none;
+            color: #78909c;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0 4px;
+            line-height: 1;
+        }
+        .analytics-panel-close:hover { color: #ef5350; }
+
+        .analytics-tabs {
+            display: flex;
+            border-bottom: 1px solid rgba(79, 195, 247, 0.08);
+        }
+        .analytics-tab {
+            flex: 1;
+            background: none;
+            border: none;
+            color: #78909c;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 8px 4px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        .analytics-tab:hover { color: #b0bec5; }
+        .analytics-tab.active {
+            color: #4fc3f7;
+            border-bottom-color: #4fc3f7;
+        }
+
+        .analytics-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px 12px;
+            max-height: 380px;
+        }
+
+        /* Sparkline SVG area */
+        .analytics-chart {
+            width: 100%;
+            height: 100px;
+            margin-bottom: 8px;
+        }
+        .analytics-chart svg { width: 100%; height: 100%; }
+
+        /* Summary grid */
+        .analytics-summary-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .analytics-stat {
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 4px;
+            padding: 6px 8px;
+            text-align: center;
+        }
+        .analytics-stat-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: #4fc3f7;
+        }
+        .analytics-stat-label {
+            font-size: 9px;
+            color: #78909c;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        /* Heatmap grid */
+        .heatmap-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 2px;
+            margin-bottom: 8px;
+        }
+        .heatmap-cell {
+            aspect-ratio: 1;
+            border-radius: 2px;
+            position: relative;
+        }
+        .heatmap-cell:hover::after {
+            content: attr(data-tip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1a1f2e;
+            color: #e0e0e0;
+            font-size: 9px;
+            padding: 2px 5px;
+            border-radius: 3px;
+            white-space: nowrap;
+            z-index: 10;
+        }
+
+        /* Ranking table */
+        .ranking-table {
+            width: 100%;
+            font-size: 11px;
+            border-collapse: collapse;
+        }
+        .ranking-table th {
+            text-align: left;
+            color: #78909c;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            padding: 4px 6px;
+            border-bottom: 1px solid rgba(79, 195, 247, 0.1);
+        }
+        .ranking-table td {
+            padding: 4px 6px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            color: #e0e0e0;
+        }
+        .ranking-table tr:hover td { background: rgba(79, 195, 247, 0.04); }
+        .ranking-rank { color: #4fc3f7; font-weight: 600; width: 24px; }
+        .ranking-node { color: #42a5f5; }
+        .ranking-count { color: #90a4ae; text-align: right; }
+        .ranking-network { color: #78909c; font-size: 10px; }
+
+        /* Export button */
+        .export-btn {
+            display: inline-block;
+            padding: 4px 10px;
+            background: rgba(79, 195, 247, 0.08);
+            border: 1px solid rgba(79, 195, 247, 0.15);
+            color: #4fc3f7;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+            margin-left: 4px;
+        }
+        .export-btn:hover { background: rgba(79, 195, 247, 0.18); }
     </style>
 </head>
 <body>
@@ -819,6 +988,11 @@
             <span class="layer-label">Alerts</span>
             <span class="layer-count" id="countAlerts">0</span>
         </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="overlayAnalytics" onchange="toggleAnalyticsPanel()">
+            <span class="layer-color" style="background:#4fc3f7"></span>
+            <span class="layer-label">Analytics</span>
+        </label>
     </div>
 
     <div class="panel-section" id="weatherSection">
@@ -898,6 +1072,26 @@
     </div>
     <div class="alert-panel-body" id="alertPanelBody">
         <div class="alert-empty">No alerts</div>
+    </div>
+</div>
+
+<div class="analytics-panel" id="analyticsPanel">
+    <div class="analytics-panel-header">
+        <span class="analytics-panel-title">Network Analytics</span>
+        <span>
+            <button class="export-btn" onclick="exportAnalytics('json')" title="Export JSON">JSON</button>
+            <button class="export-btn" onclick="exportAnalytics('csv')" title="Export CSV">CSV</button>
+            <button class="analytics-panel-close" onclick="toggleAnalyticsPanel()">&times;</button>
+        </span>
+    </div>
+    <div class="analytics-tabs">
+        <button class="analytics-tab active" data-tab="growth" onclick="switchAnalyticsTab('growth')">Growth</button>
+        <button class="analytics-tab" data-tab="activity" onclick="switchAnalyticsTab('activity')">Activity</button>
+        <button class="analytics-tab" data-tab="ranking" onclick="switchAnalyticsTab('ranking')">Ranking</button>
+        <button class="analytics-tab" data-tab="alerts" onclick="switchAnalyticsTab('alerts')">Alert Trends</button>
+    </div>
+    <div class="analytics-body" id="analyticsBody">
+        <div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">Loading analytics...</div>
     </div>
 </div>
 
@@ -2150,6 +2344,341 @@
         } catch (e) {
             console.debug('Failed to load initial alerts:', e);
         }
+    }
+
+    // =========================================================================
+    // Analytics Panel
+    // =========================================================================
+
+    let analyticsPanelOpen = false;
+    let analyticsActiveTab = 'growth';
+    let analyticsCache = {};  // Cache fetched data per tab
+
+    function toggleAnalyticsPanel() {
+        analyticsPanelOpen = !analyticsPanelOpen;
+        var panel = document.getElementById('analyticsPanel');
+        var checkbox = document.getElementById('overlayAnalytics');
+        // Hide history panel when analytics opens (same position)
+        if (analyticsPanelOpen && historyPanelOpen) {
+            toggleTrajectoryPanel();
+        }
+        if (analyticsPanelOpen) {
+            panel.classList.add('visible');
+            loadAnalyticsTab(analyticsActiveTab);
+        } else {
+            panel.classList.remove('visible');
+        }
+        if (checkbox) checkbox.checked = analyticsPanelOpen;
+    }
+
+    function switchAnalyticsTab(tab) {
+        analyticsActiveTab = tab;
+        var tabs = document.querySelectorAll('.analytics-tab');
+        for (var i = 0; i < tabs.length; i++) {
+            tabs[i].classList.toggle('active', tabs[i].dataset.tab === tab);
+        }
+        loadAnalyticsTab(tab);
+    }
+
+    async function loadAnalyticsTab(tab) {
+        var body = document.getElementById('analyticsBody');
+        body.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">Loading...</div>';
+
+        try {
+            if (tab === 'growth') {
+                var resp = await fetch(API_BASE + '/api/analytics/growth');
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                var data = await resp.json();
+                analyticsCache.growth = data;
+                renderGrowthChart(data, body);
+            } else if (tab === 'activity') {
+                var resp = await fetch(API_BASE + '/api/analytics/activity');
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                var data = await resp.json();
+                analyticsCache.activity = data;
+                renderActivityHeatmap(data, body);
+            } else if (tab === 'ranking') {
+                var resp = await fetch(API_BASE + '/api/analytics/ranking');
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                var data = await resp.json();
+                analyticsCache.ranking = data;
+                renderRankingTable(data, body);
+            } else if (tab === 'alerts') {
+                var summaryResp = await fetch(API_BASE + '/api/analytics/alert-trends');
+                if (!summaryResp.ok) throw new Error('HTTP ' + summaryResp.status);
+                var data = await summaryResp.json();
+                analyticsCache.alerts = data;
+                renderAlertTrends(data, body);
+            }
+        } catch (e) {
+            body.innerHTML = '<div style="color:#ef5350;font-size:11px;text-align:center;padding:24px">Failed to load analytics: ' + esc(e.message) + '</div>';
+        }
+    }
+
+    function renderGrowthChart(data, container) {
+        var buckets = data.buckets || [];
+        if (buckets.length === 0) {
+            container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No growth data available</div>';
+            return;
+        }
+
+        // Summary stats
+        var maxNodes = 0, totalObs = 0;
+        for (var i = 0; i < buckets.length; i++) {
+            if (buckets[i].unique_nodes > maxNodes) maxNodes = buckets[i].unique_nodes;
+            totalObs += buckets[i].observations;
+        }
+        var latestNodes = buckets[buckets.length - 1].unique_nodes;
+
+        var html = '<div class="analytics-summary-grid">' +
+            '<div class="analytics-stat"><div class="analytics-stat-value">' + latestNodes + '</div><div class="analytics-stat-label">Current Nodes</div></div>' +
+            '<div class="analytics-stat"><div class="analytics-stat-value">' + maxNodes + '</div><div class="analytics-stat-label">Peak Nodes</div></div>' +
+            '<div class="analytics-stat"><div class="analytics-stat-value">' + totalObs + '</div><div class="analytics-stat-label">Observations</div></div>' +
+            '</div>';
+
+        // SVG sparkline
+        var chartW = 396, chartH = 90, padT = 8, padB = 16, padL = 30, padR = 8;
+        var plotW = chartW - padL - padR, plotH = chartH - padT - padB;
+        var maxY = maxNodes || 1;
+
+        var points = [];
+        var areaPoints = [];
+        for (var i = 0; i < buckets.length; i++) {
+            var x = padL + (i / Math.max(1, buckets.length - 1)) * plotW;
+            var y = padT + plotH - (buckets[i].unique_nodes / maxY) * plotH;
+            points.push(x.toFixed(1) + ',' + y.toFixed(1));
+            areaPoints.push(x.toFixed(1) + ',' + y.toFixed(1));
+        }
+        // Close area path
+        areaPoints.push((padL + plotW).toFixed(1) + ',' + (padT + plotH).toFixed(1));
+        areaPoints.push(padL.toFixed(1) + ',' + (padT + plotH).toFixed(1));
+
+        html += '<div class="analytics-chart"><svg viewBox="0 0 ' + chartW + ' ' + chartH + '">' +
+            '<polygon points="' + areaPoints.join(' ') + '" fill="rgba(79,195,247,0.1)" />' +
+            '<polyline points="' + points.join(' ') + '" fill="none" stroke="#4fc3f7" stroke-width="1.5" />';
+
+        // Y-axis labels
+        html += '<text x="' + (padL - 4) + '" y="' + (padT + 4) + '" fill="#546e7a" font-size="8" text-anchor="end">' + maxY + '</text>';
+        html += '<text x="' + (padL - 4) + '" y="' + (padT + plotH) + '" fill="#546e7a" font-size="8" text-anchor="end">0</text>';
+
+        // X-axis labels (first and last timestamps)
+        var firstTs = new Date(buckets[0].timestamp * 1000);
+        var lastTs = new Date(buckets[buckets.length - 1].timestamp * 1000);
+        html += '<text x="' + padL + '" y="' + (chartH - 2) + '" fill="#546e7a" font-size="8">' + firstTs.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + '</text>';
+        html += '<text x="' + (chartW - padR) + '" y="' + (chartH - 2) + '" fill="#546e7a" font-size="8" text-anchor="end">' + lastTs.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + '</text>';
+
+        html += '</svg></div>';
+        html += '<div style="font-size:10px;color:#546e7a;text-align:center">Network growth over ' + buckets.length + ' time buckets (' + (data.bucket_seconds / 3600).toFixed(0) + 'h each)</div>';
+
+        container.innerHTML = html;
+    }
+
+    function renderActivityHeatmap(data, container) {
+        var hours = data.hours || [];
+        if (hours.length === 0) {
+            container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No activity data available</div>';
+            return;
+        }
+
+        var maxVal = Math.max.apply(null, hours) || 1;
+        var totalObs = data.total_observations || 0;
+        var peakHour = data.peak_hour;
+
+        var html = '<div class="analytics-summary-grid">' +
+            '<div class="analytics-stat"><div class="analytics-stat-value">' + totalObs + '</div><div class="analytics-stat-label">Total Obs.</div></div>' +
+            '<div class="analytics-stat"><div class="analytics-stat-value">' + (peakHour != null ? peakHour + ':00' : '--') + '</div><div class="analytics-stat-label">Peak Hour</div></div>' +
+            '<div class="analytics-stat"><div class="analytics-stat-value">' + Math.round(totalObs / 24) + '</div><div class="analytics-stat-label">Avg / Hour</div></div>' +
+            '</div>';
+
+        html += '<div style="font-size:10px;color:#78909c;margin-bottom:6px">Activity by Hour of Day (UTC)</div>';
+        html += '<div class="heatmap-grid">';
+        for (var h = 0; h < 24; h++) {
+            var intensity = hours[h] / maxVal;
+            var r = Math.round(79 * intensity);
+            var g = Math.round(195 * intensity);
+            var b = Math.round(247 * intensity);
+            var bgColor = 'rgba(' + r + ',' + g + ',' + b + ',' + (0.15 + intensity * 0.7) + ')';
+            html += '<div class="heatmap-cell" style="background:' + bgColor + '" data-tip="' + h + ':00 — ' + hours[h] + ' obs"></div>';
+        }
+        html += '</div>';
+
+        // Bar chart for hours
+        var barChartW = 396, barChartH = 80, barPadL = 24, barPadR = 8, barPadT = 4, barPadB = 14;
+        var barPlotW = barChartW - barPadL - barPadR;
+        var barPlotH = barChartH - barPadT - barPadB;
+        var barW = barPlotW / 24 - 1;
+
+        html += '<div class="analytics-chart" style="height:80px"><svg viewBox="0 0 ' + barChartW + ' ' + barChartH + '">';
+        for (var h = 0; h < 24; h++) {
+            var barH = (hours[h] / maxVal) * barPlotH;
+            var barX = barPadL + h * (barW + 1);
+            var barY = barPadT + barPlotH - barH;
+            var barColor = h === peakHour ? '#4fc3f7' : 'rgba(79,195,247,0.4)';
+            html += '<rect x="' + barX.toFixed(1) + '" y="' + barY.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + barH.toFixed(1) + '" fill="' + barColor + '" rx="1" />';
+        }
+        // X labels
+        for (var h = 0; h < 24; h += 6) {
+            html += '<text x="' + (barPadL + h * (barW + 1) + barW / 2).toFixed(1) + '" y="' + (barChartH - 2) + '" fill="#546e7a" font-size="8" text-anchor="middle">' + h + 'h</text>';
+        }
+        html += '</svg></div>';
+
+        container.innerHTML = html;
+    }
+
+    function renderRankingTable(data, container) {
+        var nodes = data.nodes || [];
+        if (nodes.length === 0) {
+            container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No ranking data available</div>';
+            return;
+        }
+
+        var html = '<table class="ranking-table"><thead><tr>' +
+            '<th>#</th><th>Node</th><th>Network</th><th style="text-align:right">Obs</th><th style="text-align:right">Active</th>' +
+            '</tr></thead><tbody>';
+
+        for (var i = 0; i < nodes.length; i++) {
+            var n = nodes[i];
+            var activeMins = Math.round(n.active_seconds / 60);
+            var activeStr = activeMins > 60 ? (activeMins / 60).toFixed(1) + 'h' : activeMins + 'm';
+            html += '<tr>' +
+                '<td class="ranking-rank">' + (i + 1) + '</td>' +
+                '<td class="ranking-node">' + esc(n.node_id) + '</td>' +
+                '<td class="ranking-network">' + esc(n.network || '') + '</td>' +
+                '<td class="ranking-count">' + n.observation_count + '</td>' +
+                '<td class="ranking-count">' + activeStr + '</td>' +
+                '</tr>';
+        }
+
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    }
+
+    function renderAlertTrends(data, container) {
+        var buckets = data.buckets || [];
+        if (buckets.length === 0) {
+            container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No alert trend data available</div>';
+            return;
+        }
+
+        var totalAlerts = data.total_alerts || 0;
+        var totalCritical = 0, totalWarning = 0, totalInfo = 0;
+        var maxBucketTotal = 0;
+        for (var i = 0; i < buckets.length; i++) {
+            totalCritical += buckets[i].critical || 0;
+            totalWarning += buckets[i].warning || 0;
+            totalInfo += buckets[i].info || 0;
+            if (buckets[i].total > maxBucketTotal) maxBucketTotal = buckets[i].total;
+        }
+
+        var html = '<div class="analytics-summary-grid">' +
+            '<div class="analytics-stat"><div class="analytics-stat-value" style="color:#ef5350">' + totalCritical + '</div><div class="analytics-stat-label">Critical</div></div>' +
+            '<div class="analytics-stat"><div class="analytics-stat-value" style="color:#ffa726">' + totalWarning + '</div><div class="analytics-stat-label">Warning</div></div>' +
+            '<div class="analytics-stat"><div class="analytics-stat-value" style="color:#42a5f5">' + totalInfo + '</div><div class="analytics-stat-label">Info</div></div>' +
+            '</div>';
+
+        // Stacked bar chart
+        var chartW = 396, chartH = 100, padL = 30, padR = 8, padT = 8, padB = 16;
+        var plotW = chartW - padL - padR, plotH = chartH - padT - padB;
+        var maxY = maxBucketTotal || 1;
+        var barW = Math.max(3, plotW / buckets.length - 1);
+
+        html += '<div class="analytics-chart"><svg viewBox="0 0 ' + chartW + ' ' + chartH + '">';
+
+        for (var i = 0; i < buckets.length; i++) {
+            var x = padL + i * (barW + 1);
+            var b = buckets[i];
+
+            // Stack: info (bottom), warning (middle), critical (top)
+            var infoH = ((b.info || 0) / maxY) * plotH;
+            var warnH = ((b.warning || 0) / maxY) * plotH;
+            var critH = ((b.critical || 0) / maxY) * plotH;
+
+            var baseY = padT + plotH;
+            if (infoH > 0) {
+                html += '<rect x="' + x.toFixed(1) + '" y="' + (baseY - infoH).toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + infoH.toFixed(1) + '" fill="#42a5f5" rx="1" />';
+            }
+            baseY -= infoH;
+            if (warnH > 0) {
+                html += '<rect x="' + x.toFixed(1) + '" y="' + (baseY - warnH).toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + warnH.toFixed(1) + '" fill="#ffa726" rx="1" />';
+            }
+            baseY -= warnH;
+            if (critH > 0) {
+                html += '<rect x="' + x.toFixed(1) + '" y="' + (baseY - critH).toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + critH.toFixed(1) + '" fill="#ef5350" rx="1" />';
+            }
+        }
+
+        // Y-axis
+        html += '<text x="' + (padL - 4) + '" y="' + (padT + 4) + '" fill="#546e7a" font-size="8" text-anchor="end">' + maxY + '</text>';
+        html += '<text x="' + (padL - 4) + '" y="' + (padT + plotH) + '" fill="#546e7a" font-size="8" text-anchor="end">0</text>';
+
+        html += '</svg></div>';
+        html += '<div style="font-size:10px;color:#546e7a;text-align:center">' + totalAlerts + ' total alerts across ' + buckets.length + ' time buckets</div>';
+
+        container.innerHTML = html;
+    }
+
+    function exportAnalytics(format) {
+        var data = analyticsCache[analyticsActiveTab];
+        if (!data) {
+            showToast('No data to export', true);
+            return;
+        }
+
+        var content, filename, mimeType;
+        if (format === 'json') {
+            content = JSON.stringify(data, null, 2);
+            filename = 'meshforge_analytics_' + analyticsActiveTab + '.json';
+            mimeType = 'application/json';
+        } else {
+            // CSV export
+            content = analyticsDataToCsv(analyticsActiveTab, data);
+            filename = 'meshforge_analytics_' + analyticsActiveTab + '.csv';
+            mimeType = 'text/csv';
+        }
+
+        var blob = new Blob([content], { type: mimeType });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('Exported ' + filename);
+    }
+
+    function analyticsDataToCsv(tab, data) {
+        var lines = [];
+        if (tab === 'growth') {
+            lines.push('timestamp,unique_nodes,observations');
+            var buckets = data.buckets || [];
+            for (var i = 0; i < buckets.length; i++) {
+                var b = buckets[i];
+                lines.push(b.timestamp + ',' + b.unique_nodes + ',' + b.observations);
+            }
+        } else if (tab === 'activity') {
+            lines.push('hour,observation_count');
+            var hours = data.hours || [];
+            for (var h = 0; h < hours.length; h++) {
+                lines.push(h + ',' + hours[h]);
+            }
+        } else if (tab === 'ranking') {
+            lines.push('rank,node_id,network,observation_count,active_seconds');
+            var nodes = data.nodes || [];
+            for (var i = 0; i < nodes.length; i++) {
+                var n = nodes[i];
+                lines.push((i + 1) + ',' + n.node_id + ',' + (n.network || '') + ',' + n.observation_count + ',' + n.active_seconds);
+            }
+        } else if (tab === 'alerts') {
+            lines.push('timestamp,critical,warning,info,total');
+            var buckets = data.buckets || [];
+            for (var i = 0; i < buckets.length; i++) {
+                var b = buckets[i];
+                lines.push(b.timestamp + ',' + (b.critical || 0) + ',' + (b.warning || 0) + ',' + (b.info || 0) + ',' + (b.total || 0));
+            }
+        }
+        return lines.join('\n');
     }
 
     // =========================================================================

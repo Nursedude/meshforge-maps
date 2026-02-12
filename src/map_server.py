@@ -132,6 +132,11 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/analytics/ranking": "_serve_analytics_ranking",
         "/api/analytics/summary": "_serve_analytics_summary",
         "/api/analytics/alert-trends": "_serve_analytics_alert_trends",
+        "/api/export/nodes": "_serve_export_nodes",
+        "/api/export/alerts": "_serve_export_alerts",
+        "/api/export/analytics/growth": "_serve_export_analytics_growth",
+        "/api/export/analytics/activity": "_serve_export_analytics_activity",
+        "/api/export/analytics/ranking": "_serve_export_analytics_ranking",
     }
 
     def do_GET(self) -> None:
@@ -768,6 +773,131 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": "Invalid query parameters"}, 400)
             return
         self._send_json(analytics.alert_trends(bucket_seconds=bucket_s))
+
+    # ------------------------------------------------------------------
+    # CSV/JSON Export endpoints
+    # ------------------------------------------------------------------
+
+    def _send_csv(self, rows: List[List[str]], filename: str) -> None:
+        """Send a CSV response with Content-Disposition for download."""
+        import csv
+        import io
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        for row in rows:
+            writer.writerow(row)
+        body = buf.getvalue().encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header(
+            "Content-Disposition",
+            f'attachment; filename="{filename}"',
+        )
+        cors_origin = self._get_cors_origin()
+        if cors_origin:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_export_nodes(self) -> None:
+        """Export node history as CSV."""
+        history = self._get_node_history()
+        if not history:
+            self._send_json({"error": "Node history not available"}, 503)
+            return
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        fmt = _safe_query_param(query, "format", "csv")
+        limit = max(1, min(int(_safe_query_param(query, "limit", "5000") or "5000"), 50000))
+
+        nodes = history.get_tracked_nodes()
+        if fmt == "json":
+            self._send_json({
+                "nodes": nodes,
+                "total": len(nodes),
+                "observation_count": history.observation_count,
+            })
+            return
+
+        rows: List[List[str]] = [["node_id", "observation_count", "first_seen", "last_seen", "network"]]
+        for n in nodes[:limit]:
+            rows.append([
+                n.get("node_id", ""),
+                str(n.get("observation_count", 0)),
+                str(n.get("first_seen", "")),
+                str(n.get("last_seen", "")),
+                n.get("network", ""),
+            ])
+        self._send_csv(rows, "meshforge_nodes.csv")
+
+    def _serve_export_alerts(self) -> None:
+        """Export alert history as CSV."""
+        engine = self._get_alert_engine()
+        if not engine:
+            self._send_json({"error": "Alert engine not available"}, 503)
+            return
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        fmt = _safe_query_param(query, "format", "csv")
+        limit = max(1, min(int(_safe_query_param(query, "limit", "500") or "500"), 5000))
+
+        alerts = engine.get_alert_history(limit=limit)
+        if fmt == "json":
+            self._send_json({"alerts": alerts, "count": len(alerts)})
+            return
+
+        rows: List[List[str]] = [["timestamp", "alert_type", "severity", "node_id", "message"]]
+        for a in alerts:
+            rows.append([
+                str(a.get("timestamp", "")),
+                a.get("alert_type", ""),
+                a.get("severity", ""),
+                a.get("node_id", ""),
+                a.get("message", ""),
+            ])
+        self._send_csv(rows, "meshforge_alerts.csv")
+
+    def _serve_export_analytics_growth(self) -> None:
+        """Export network growth data as CSV."""
+        analytics = self._get_analytics()
+        if not analytics:
+            self._send_json({"error": "Analytics not available"}, 503)
+            return
+        data = analytics.network_growth()
+        buckets = data.get("buckets", [])
+        rows: List[List[str]] = [["timestamp", "unique_nodes", "observations"]]
+        for b in buckets:
+            rows.append([str(b["timestamp"]), str(b["unique_nodes"]), str(b["observations"])])
+        self._send_csv(rows, "meshforge_growth.csv")
+
+    def _serve_export_analytics_activity(self) -> None:
+        """Export activity heatmap data as CSV."""
+        analytics = self._get_analytics()
+        if not analytics:
+            self._send_json({"error": "Analytics not available"}, 503)
+            return
+        data = analytics.activity_heatmap()
+        hours = data.get("hours", [])
+        rows: List[List[str]] = [["hour", "observation_count"]]
+        for h in range(len(hours)):
+            rows.append([str(h), str(hours[h])])
+        self._send_csv(rows, "meshforge_activity.csv")
+
+    def _serve_export_analytics_ranking(self) -> None:
+        """Export node ranking data as CSV."""
+        analytics = self._get_analytics()
+        if not analytics:
+            self._send_json({"error": "Analytics not available"}, 503)
+            return
+        data = analytics.node_activity_ranking()
+        nodes = data.get("nodes", [])
+        rows: List[List[str]] = [["rank", "node_id", "network", "observation_count", "active_seconds"]]
+        for i, n in enumerate(nodes):
+            rows.append([
+                str(i + 1), n.get("node_id", ""), n.get("network", ""),
+                str(n.get("observation_count", 0)), str(n.get("active_seconds", 0)),
+            ])
+        self._send_csv(rows, "meshforge_ranking.csv")
 
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
