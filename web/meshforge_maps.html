@@ -1732,7 +1732,7 @@
                 var nodeId = n.node_id || n.id || '';
                 var count = n.observation_count || n.count || 0;
                 var isActive = trajectoryLayers[nodeId] ? ' active' : '';
-                html += '<div class="history-node-row" onclick="toggleTrajectory(\'' + esc(nodeId) + '\')">' +
+                html += '<div class="history-node-row" data-node-id="' + esc(nodeId) + '" onclick="toggleTrajectory(this.dataset.nodeId)">' +
                     '<span class="history-node-id">' + esc(nodeId) + '</span>' +
                     '<span class="history-node-count">' + count + ' pts</span>' +
                     '<button class="trajectory-btn' + isActive + '" data-node="' + esc(nodeId) + '">' +
@@ -1935,7 +1935,7 @@
                 properties: { id: nodeId, source: msg.source || 'mqtt' },
                 geometry: { type: 'Point', coordinates: [msg.lon, msg.lat] },
             };
-            marker.bindPopup('<b>' + nodeId + '</b><br><i>Real-time update</i>');
+            marker.bindPopup('<b>' + esc(nodeId) + '</b><br><i>Real-time update</i>');
             if (useClustering && clusterGroup) {
                 clusterGroup.addLayer(marker);
             } else if (directGroup) {

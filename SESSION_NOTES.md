@@ -2,6 +2,147 @@
 
 ---
 
+## Session 13: Code Review & Health Check
+
+**Date:** 2026-02-12
+**Branch:** `claude/code-review-health-check-Y298M`
+**Scope:** Full codebase code review, defect identification, and targeted fixes
+**Version:** 0.7.0-beta (no version bump — fixes only)
+
+### Context
+
+Comprehensive code review and health check of all source modules. Systematic review of collectors, utils, core server, and frontend. Identified and fixed critical/high-severity defects. No new features — strictly review and hardening.
+
+### Baseline
+
+- **Tests:** 670 passed, 22 skipped, 0 failures (matches Session 12)
+- **TODO/FIXME/HACK markers:** None found (clean codebase)
+
+### Code Review Findings
+
+**52 issues identified across 4 severity levels:**
+
+#### Critical (2)
+
+1. **Falsy coordinate data loss** — `meshtastic_collector.py:123-124`, `mqtt_subscriber.py:642-643,646,751`: Nodes at equator (lat=0), prime meridian (lon=0), sea level (alt=0), or with SNR=0 had valid data silently discarded by truthiness checks (`or` operator, `if value`). **FIXED.**
+
+2. **health_scoring.py TypeError crash** — `_score_congestion()` line 477: When both `channel_util` and `air_util_tx` failed `float()` conversion, code fell through to `CHANNEL_UTIL_HIGH - None`, raising `TypeError`. **FIXED.**
+
+#### High (5)
+
+3. **XSS in WebSocket popup** — `meshforge_maps.html:1938`: Unescaped `nodeId` from MQTT injected into popup HTML via `bindPopup('<b>' + nodeId + '</b>')`. Added `esc()` call. **FIXED.**
+
+4. **XSS in onclick handler** — `meshforge_maps.html:1735`: `esc()` HTML-escapes but does not escape single quotes, allowing JS breakout in inline `onclick="toggleTrajectory('...')"`. Replaced with `data-node-id` attribute + `this.dataset.nodeId`. **FIXED.**
+
+5. **mqtt_subscriber deadlock risk** — `_evict_oldest_locked()` invoked `_on_node_removed` callback while lock held (line 363-369). If callback re-entered the store, deadlock. Refactored to defer callback invocation outside lock. **FIXED.**
+
+6. **map_server socket leak** — `stop()` called `server.shutdown()` but not `server.server_close()`, leaving listening socket in TIME_WAIT. **FIXED.**
+
+7. **hamclock_collector wrong port in API** — `get_hamclock_data()` always reported `self._hamclock_port` (8080) even when OpenHamClock (3000) was the active variant. Now reads port from cached collection data. **FIXED.**
+
+#### Medium (13) — Identified, Not Fixed This Session
+
+8. **Wildcard CORS** — `map_server.py:187,669` and `meshtastic_api_proxy.py:169`: `Access-Control-Allow-Origin: *` on all responses exposes node data to any website. Should be configurable or restricted to same-origin.
+
+9. **aggregator thread safety** — `_cached_overlay`, `_last_collect_time`, `_last_collect_counts` read/written without locks across threads.
+
+10. **aredn_collector thread safety** — `_lqm_links` and `_node_coords` mutated during `_fetch` and read via `get_topology_links` without synchronization.
+
+11. **config.py thread safety** — `MapsConfig._settings` read/written by multiple threads without lock protection.
+
+12. **websocket_server resource** — WebSocket `_server` not explicitly closed via `server.close()`/`wait_closed()` during shutdown, relying on GC.
+
+13. **mqtt_subscriber `get_all_nodes` side effect** — Read method mutates store state by marking stale nodes as offline.
+
+14. **meshtastic_api_proxy async failure** — Reports `_running=True` even if `serve_forever()` fails asynchronously in background thread.
+
+15. **connection_manager TOCTOU** — `is_locked` property acquires/releases lock to probe, result is immediately stale.
+
+16. **sw-tiles.js FIFO not LRU** — `enforceCacheLimit` evicts by insertion order, not access frequency. Documented as LRU but is FIFO.
+
+17. **sw-tiles.js precache template** — `{r}` retina placeholder and subdomain rotation not substituted in precached tile URLs, causing cache misses.
+
+18. **map_server no response for short node paths** — `/api/nodes/<id>` with `len(parts) < 4` sends no HTTP response, causing client hang.
+
+19. **hamclock band key matching** — Substring matching (`"80" in key`) is fragile; `Band140m` would match `"40"`.
+
+20. **plugin_lifecycle no thread safety** — State reads/writes and listener list mutations unsynchronized despite claiming thread-safety.
+
+#### Low (32) — Documented Only
+
+- Dead import: `perf_monitor.py` imported `sys` (unused). **FIXED.**
+- Dead import: `hamclock_collector.py` imported `normalize_band_conditions` (unused). **FIXED.**
+- `node_history.py:128`: `timestamp=0` treated as falsy via `or` operator. **FIXED.**
+- `circuit_breaker.py:200-203`: `failure_threshold=0` treated as falsy via `or`. **FIXED.**
+- `config_drift.py:191`: `since=0` treated as falsy, disabling time filter. **FIXED.**
+- `base.py` thread safety: `_cache`, `_cache_time` read/written without sync in `collect()`.
+- `base.py` import inside method: `ReconnectStrategy` imported on every `collect()` call.
+- `mqtt_subscriber._running/_connected`: bare booleans across threads without `threading.Event`.
+- `mqtt_subscriber._messages_received`: incremented without lock.
+- `event_bus.reset()`: replaces `_stats` object; concurrent `publish()` loses counters.
+- `node_state.add_heartbeat`: list slicing in steady state; `deque(maxlen=)` would be O(1).
+- `node_state.total_transitions`: read without lock.
+- `config_drift.total_drifts`: read without lock.
+- `perf_monitor.get_memory_usage()`: reads `_samples` without lock.
+- `reconnect.py`: entire class has no synchronization; not thread-safe.
+- `node_history` throttle check outside lock allows duplicate observations.
+- `node_history` `get_snapshot` can return duplicates for same-timestamp observations.
+- `config_drift` str comparison: `int(1)` vs `float(1.0)` produces spurious drift.
+- `openhamclock_compat` band key aliases: overlapping bands silently overwrite.
+- `connection_manager.stats`: reads multiple fields without lock; inconsistent snapshot.
+- `connection_manager._instances`: class-level mutable shared across subclasses.
+- `aredn_collector` IPv6 address: colon check false-positive for IPv6 targets.
+- `reticulum_collector` cache: `_read_cache_file` returns all features without network filter.
+- `reticulum_collector` duplicated cache-reading logic.
+- Duplicated deduplication pattern across 4 collectors + aggregator.
+- Duplicated unified cache path constant across collectors.
+- `map_server` route dispatch: dict rebuilt on every request.
+- `map_server` private attribute access: reaches into `aggregator._collectors`.
+- `meshforge_maps.html` `rebuildMarkersFromFeatures`: duplicates `processGeoJSON` marker logic.
+- `meshforge_maps.html` `trajectoryLayers`: grows without bound.
+- `meshforge_maps.html` `allFeatures`: retains references indefinitely.
+- `sw-tiles.js` `enforceCacheLimit`: runs on every tile fetch without amortization.
+
+### Files Modified (10)
+
+| File | Change |
+|------|--------|
+| `src/collectors/meshtastic_collector.py` | Falsy coordinate fix: `or` → explicit `is None` check |
+| `src/collectors/mqtt_subscriber.py` | Falsy lat/lon/alt fix; SNR always included; deadlock fix (callback outside lock) |
+| `src/collectors/hamclock_collector.py` | Removed dead import; port read from cached data |
+| `src/utils/health_scoring.py` | Re-check for both-None after conversion in `_score_congestion` |
+| `src/utils/perf_monitor.py` | Removed dead `import sys` |
+| `src/utils/node_history.py` | Timestamp falsy fix: `or` → `if is not None` |
+| `src/utils/circuit_breaker.py` | Threshold falsy fix: `or` → `if is not None` |
+| `src/utils/config_drift.py` | `since` falsy fix: `and` → `is not None` |
+| `src/map_server.py` | Added `server_close()` on shutdown |
+| `web/meshforge_maps.html` | XSS fixes: `esc()` on popup, data-attribute for onclick |
+
+### Test Results
+
+- **Before:** 670 passed, 22 skipped
+- **After:** 670 passed, 22 skipped, 0 failures, 0 regressions
+
+### Session Entropy Watch
+
+- Session stayed focused and systematic throughout
+- Systematic task list maintained (17 items tracked)
+- Code review completed across all modules before any fixes applied
+- All fixes targeted specific defects identified in review
+- No scope creep — review-only with targeted fixes
+- Zero regressions at checkpoint
+
+### Next Session Suggestions
+
+1. **Thread safety audit** — Medium-severity items 9-11, 20: Add locks to `aggregator`, `aredn_collector`, `config.py`, `plugin_lifecycle`. Significant effort, high reliability payoff.
+2. **CORS hardening** — Item 8: Make `Access-Control-Allow-Origin` configurable, default to same-origin.
+3. **WebSocket marker update bug** — `processGeoJSON` does not set `.feature` on markers, so `updateOrAddNode` can never match existing markers. Needs architectural fix.
+4. **Service worker LRU** — Item 16: Replace FIFO eviction with actual LRU using Cache API metadata or a separate timestamp index.
+5. **Missing HTTP responses** — Item 18: Add 404 for unmatched `/api/nodes/<id>` sub-routes.
+6. **Deduplication refactor** — Item from cross-cutting: Extract shared `deduplicate_features()` to `base.py`.
+
+---
+
 ## Session 12: Health Scoring, Performance Profiling, AREDN Hardening, OpenHamClock Priority
 
 **Date:** 2026-02-11

@@ -454,6 +454,10 @@ class NodeHealthScorer:
             except (ValueError, TypeError):
                 air_util_tx = None
 
+        # After conversion attempts, both may be None if both failed
+        if channel_util is None and air_util_tx is None:
+            return None
+
         if channel_util is not None and air_util_tx is not None:
             # Both: average them, then invert (lower = better)
             avg_util = (channel_util + air_util_tx) / 2

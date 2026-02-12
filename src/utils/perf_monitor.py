@@ -8,7 +8,6 @@ Thread-safe: all state behind a lock.
 """
 
 import logging
-import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional
