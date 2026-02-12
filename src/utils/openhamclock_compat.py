@@ -57,15 +57,18 @@ _DE_DX_KEY_ALIASES: Dict[str, str] = {
 }
 
 _BAND_KEY_ALIASES: Dict[str, str] = {
-    # Some OpenHamClock builds use "Band80m" instead of "80m-40m"
-    "band80m": "80m-40m",
-    "band40m": "80m-40m",
-    "band30m": "30m-20m",
-    "band20m": "30m-20m",
-    "band17m": "17m-15m",
-    "band15m": "17m-15m",
-    "band12m": "12m-10m",
-    "band10m": "12m-10m",
+    # Map individual OpenHamClock band keys to distinct canonical names.
+    # Previous mapping collapsed two bands into one key (e.g. band80m and
+    # band40m both -> "80m-40m"), silently losing whichever was processed
+    # second.  Each band now maps to its own canonical key.
+    "band80m": "80m",
+    "band40m": "40m",
+    "band30m": "30m",
+    "band20m": "20m",
+    "band17m": "17m",
+    "band15m": "15m",
+    "band12m": "12m",
+    "band10m": "10m",
 }
 
 

@@ -202,13 +202,13 @@ class TestMQTTSubscriberStopLifecycle:
         mock_thread = MagicMock()
         mock_thread.is_alive.side_effect = [True, False]
         sub._thread = mock_thread
-        sub._running = True
+        sub._running.set()
 
         sub.stop()
 
         mock_thread.join.assert_called_once_with(timeout=5)
         assert sub._thread is None
-        assert sub._connected is False
+        assert not sub._connected.is_set()
 
     def test_stop_warns_on_thread_timeout(self):
         from src.collectors.mqtt_subscriber import MQTTSubscriber
@@ -217,7 +217,7 @@ class TestMQTTSubscriberStopLifecycle:
         mock_thread = MagicMock()
         mock_thread.is_alive.return_value = True  # Thread didn't exit
         sub._thread = mock_thread
-        sub._running = True
+        sub._running.set()
 
         with patch("src.collectors.mqtt_subscriber.logger") as mock_logger:
             sub.stop()

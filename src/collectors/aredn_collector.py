@@ -24,12 +24,19 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .base import BaseCollector, make_feature, make_feature_collection, validate_coordinates
+from .base import (
+    MESHFORGE_DATA_DIR,
+    UNIFIED_CACHE_PATH,
+    BaseCollector,
+    make_feature,
+    make_feature_collection,
+    validate_coordinates,
+)
 
 logger = logging.getLogger(__name__)
 
 # MeshForge AREDN cache
-AREDN_CACHE_PATH = Path.home() / ".local" / "share" / "meshforge" / "aredn_nodes.json"
+AREDN_CACHE_PATH = MESHFORGE_DATA_DIR / "aredn_nodes.json"
 
 # Default AREDN node discovery targets
 DEFAULT_AREDN_NODES: List[str] = []
@@ -304,7 +311,7 @@ class AREDNCollector(BaseCollector):
     def _fetch_from_unified_cache(self) -> List[Dict[str, Any]]:
         """Read AREDN nodes from MeshForge's unified node cache."""
         features = []
-        unified_path = Path.home() / ".local" / "share" / "meshforge" / "node_cache.json"
+        unified_path = UNIFIED_CACHE_PATH
         if not unified_path.exists():
             return features
         try:

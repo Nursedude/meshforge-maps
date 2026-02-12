@@ -144,11 +144,20 @@ class TestNormalizeBandConditions:
     def test_normalize_band_keys(self):
         parsed = {"band80m": "Good", "band20m": "Fair"}
         result = normalize_band_conditions(parsed)
-        assert result["80m-40m"] == "Good"
-        assert result["30m-20m"] == "Fair"
+        assert result["80m"] == "Good"
+        assert result["20m"] == "Fair"
 
     def test_standard_keys_pass_through(self):
         parsed = {"80m-40m": "Good", "some_other": "value"}
         result = normalize_band_conditions(parsed)
         assert result["80m-40m"] == "Good"
         assert result["some_other"] == "value"
+
+    def test_no_overlapping_aliases(self):
+        """Each band alias maps to a distinct canonical key."""
+        parsed = {"band80m": "Good", "band40m": "Fair", "band30m": "Poor", "band20m": "Good"}
+        result = normalize_band_conditions(parsed)
+        assert result["80m"] == "Good"
+        assert result["40m"] == "Fair"
+        assert result["30m"] == "Poor"
+        assert result["20m"] == "Good"
