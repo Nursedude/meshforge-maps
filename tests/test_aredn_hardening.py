@@ -33,20 +33,20 @@ class TestNetworkFailures:
     @patch("src.collectors.aredn_collector.urlopen")
     def test_connection_refused(self, mock_urlopen, collector):
         mock_urlopen.side_effect = URLError("Connection refused")
-        result = collector._fetch_from_node("test-node.local.mesh")
-        assert result == []
+        features, links = collector._fetch_from_node("test-node.local.mesh")
+        assert features == []
 
     @patch("src.collectors.aredn_collector.urlopen")
     def test_timeout(self, mock_urlopen, collector):
         mock_urlopen.side_effect = OSError("timed out")
-        result = collector._fetch_from_node("test-node.local.mesh")
-        assert result == []
+        features, links = collector._fetch_from_node("test-node.local.mesh")
+        assert features == []
 
     @patch("src.collectors.aredn_collector.urlopen")
     def test_dns_resolution_failure(self, mock_urlopen, collector):
         mock_urlopen.side_effect = URLError("Name or service not known")
-        result = collector._fetch_from_node("nonexistent.local.mesh")
-        assert result == []
+        features, links = collector._fetch_from_node("nonexistent.local.mesh")
+        assert features == []
 
     @patch("src.collectors.aredn_collector.urlopen")
     def test_json_decode_error(self, mock_urlopen, collector):
@@ -55,8 +55,8 @@ class TestNetworkFailures:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        result = collector._fetch_from_node("test-node")
-        assert result == []
+        features, links = collector._fetch_from_node("test-node")
+        assert features == []
 
     @patch("src.collectors.aredn_collector.urlopen")
     def test_empty_response_body(self, mock_urlopen, collector):
@@ -65,8 +65,8 @@ class TestNetworkFailures:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        result = collector._fetch_from_node("test-node")
-        assert result == []
+        features, links = collector._fetch_from_node("test-node")
+        assert features == []
 
     @patch("src.collectors.aredn_collector.urlopen")
     def test_response_is_json_array_not_object(self, mock_urlopen, collector):
@@ -76,8 +76,8 @@ class TestNetworkFailures:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        result = collector._fetch_from_node("test-node")
-        assert result == []
+        features, links = collector._fetch_from_node("test-node")
+        assert features == []
 
     @patch("src.collectors.aredn_collector.urlopen")
     def test_response_missing_aredn_fields(self, mock_urlopen, collector):
@@ -87,8 +87,8 @@ class TestNetworkFailures:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        result = collector._fetch_from_node("test-node")
-        assert result == []
+        features, links = collector._fetch_from_node("test-node")
+        assert features == []
 
 
 class TestSysinfoEdgeCases:
@@ -361,7 +361,7 @@ class TestFetchDeduplication:
         unified_feature = {"properties": {"id": "KN6PLV", "network": "aredn"},
                            "geometry": {"coordinates": [-118.2, 34.2]}}
 
-        mock_node.return_value = [node_feature]
+        mock_node.return_value = ([node_feature], [])
         mock_cache.return_value = [cache_feature]
         mock_unified.return_value = [unified_feature]
 
@@ -380,7 +380,7 @@ class TestFetchDeduplication:
         f1 = {"properties": {"network": "aredn"}, "geometry": {"coordinates": [-118.0, 34.0]}}
         f2 = {"properties": {"network": "aredn"}, "geometry": {"coordinates": [-118.1, 34.1]}}
 
-        mock_node.return_value = [f1, f2]
+        mock_node.return_value = ([f1, f2], [])
         mock_cache.return_value = []
         mock_unified.return_value = []
 
@@ -397,7 +397,7 @@ class TestFetchDeduplication:
         f1 = {"properties": {"id": "", "network": "aredn"},
               "geometry": {"coordinates": [-118.0, 34.0]}}
 
-        mock_node.return_value = [f1]
+        mock_node.return_value = ([f1], [])
         mock_cache.return_value = []
         mock_unified.return_value = []
 
@@ -455,7 +455,7 @@ class TestTopologyEdgeCases:
         collector._lqm_links = [
             {"source": "old", "target": "data", "network": "aredn"},
         ]
-        with patch.object(collector, "_fetch_from_node", return_value=[]):
+        with patch.object(collector, "_fetch_from_node", return_value=([], [])):
             with patch.object(collector, "_fetch_from_cache", return_value=[]):
                 with patch.object(collector, "_fetch_from_unified_cache", return_value=[]):
                     collector._fetch()
@@ -508,9 +508,9 @@ class TestLQMFromSysinfo:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        features = collector._fetch_from_node("test")
+        features, links = collector._fetch_from_node("test")
         assert len(features) == 1  # Node parsed, no LQM links
-        assert collector._lqm_links == []
+        assert links == []
 
     @patch("src.collectors.aredn_collector.urlopen")
     def test_sysinfo_with_empty_lqm(self, mock_urlopen):
@@ -527,9 +527,9 @@ class TestLQMFromSysinfo:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        features = collector._fetch_from_node("test")
+        features, links = collector._fetch_from_node("test")
         assert len(features) == 1
-        assert collector._lqm_links == []
+        assert links == []
 
     @patch("src.collectors.aredn_collector.urlopen")
     def test_sysinfo_with_lqm_links(self, mock_urlopen):
@@ -551,9 +551,9 @@ class TestLQMFromSysinfo:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        features = collector._fetch_from_node("mynode")
+        features, links = collector._fetch_from_node("mynode")
         assert len(features) == 1
-        assert len(collector._lqm_links) == 2  # 2 valid, 1 empty name, 1 blocked
+        assert len(links) == 2  # 2 valid, 1 empty name, 1 blocked
 
 
 class TestCoordinateBuildUp:
@@ -569,7 +569,7 @@ class TestCoordinateBuildUp:
             "properties": {"id": "nodeA", "network": "aredn"},
             "geometry": {"type": "Point", "coordinates": [-118.0, 34.0]},
         }
-        mock_node.return_value = [feature]
+        mock_node.return_value = ([feature], [])
         mock_cache.return_value = []
         mock_unified.return_value = []
 
@@ -587,7 +587,7 @@ class TestCoordinateBuildUp:
             "properties": {"id": "nodeB", "network": "aredn"},
             "geometry": {"type": "Point", "coordinates": []},
         }
-        mock_node.return_value = [feature]
+        mock_node.return_value = ([feature], [])
         mock_cache.return_value = []
         mock_unified.return_value = []
 

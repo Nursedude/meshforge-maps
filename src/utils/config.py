@@ -7,6 +7,7 @@ Settings persist to ~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -32,6 +33,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "mqtt_topic": "msh/#",
     "mqtt_username": None,
     "mqtt_password": None,
+    # CORS: None = same-origin (no CORS headers sent); set to "*" or a specific origin to enable
+    "cors_allowed_origin": None,
 }
 
 # Tile provider definitions for Leaflet.js
@@ -98,6 +101,7 @@ class MapsConfig:
                 / "org.meshforge.extension.maps"
                 / "settings.json"
             )
+        self._lock = threading.Lock()
         self._settings: Dict[str, Any] = dict(DEFAULT_CONFIG)
         self.load()
 
@@ -107,9 +111,10 @@ class MapsConfig:
             try:
                 with open(self._config_path, "r") as f:
                     saved = json.load(f)
-                for key, value in saved.items():
-                    if key in DEFAULT_CONFIG:
-                        self._settings[key] = value
+                with self._lock:
+                    for key, value in saved.items():
+                        if key in DEFAULT_CONFIG:
+                            self._settings[key] = value
                 logger.info("Loaded settings from %s", self._config_path)
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Failed to load settings: %s, using defaults", e)
@@ -120,37 +125,46 @@ class MapsConfig:
         """Persist current settings to disk."""
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
         try:
+            with self._lock:
+                snapshot = dict(self._settings)
             with open(self._config_path, "w") as f:
-                json.dump(self._settings, f, indent=2)
+                json.dump(snapshot, f, indent=2)
             logger.info("Saved settings to %s", self._config_path)
         except OSError as e:
             logger.error("Failed to save settings: %s", e)
 
     def get(self, key: str, default: Any = None) -> Any:
-        return self._settings.get(key, default)
+        with self._lock:
+            return self._settings.get(key, default)
 
     def set(self, key: str, value: Any) -> None:
-        if key in DEFAULT_CONFIG:
-            self._settings[key] = value
+        with self._lock:
+            if key in DEFAULT_CONFIG:
+                self._settings[key] = value
 
     def update(self, settings: Dict[str, Any]) -> None:
-        for key, value in settings.items():
-            self.set(key, value)
+        with self._lock:
+            for key, value in settings.items():
+                if key in DEFAULT_CONFIG:
+                    self._settings[key] = value
 
     def to_dict(self) -> Dict[str, Any]:
-        return dict(self._settings)
+        with self._lock:
+            return dict(self._settings)
 
     def get_tile_providers(self) -> Dict[str, Dict[str, str]]:
         return dict(TILE_PROVIDERS)
 
     def get_enabled_sources(self) -> list:
+        with self._lock:
+            settings = dict(self._settings)
         sources = []
-        if self._settings.get("enable_meshtastic"):
+        if settings.get("enable_meshtastic"):
             sources.append("meshtastic")
-        if self._settings.get("enable_reticulum"):
+        if settings.get("enable_reticulum"):
             sources.append("reticulum")
-        if self._settings.get("enable_hamclock"):
+        if settings.get("enable_hamclock"):
             sources.append("hamclock")
-        if self._settings.get("enable_aredn"):
+        if settings.get("enable_aredn"):
             sources.append("aredn")
         return sources

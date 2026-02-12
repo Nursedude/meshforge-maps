@@ -115,9 +115,13 @@ class PerfMonitor:
     def get_memory_usage(self) -> Dict[str, Any]:
         """Get current memory usage estimates.
 
-        Uses sys.getsizeof for shallow size estimates of key data structures.
         Not a deep profiler — gives approximate memory footprint.
         """
+        with self._lock:
+            return self._memory_usage_locked()
+
+    def _memory_usage_locked(self) -> Dict[str, Any]:
+        """Internal: memory usage stats (caller must hold lock)."""
         return {
             "timing_samples": sum(
                 len(s) for s in self._samples.values()
@@ -149,7 +153,7 @@ class PerfMonitor:
                 ),
                 "sources": source_stats,
                 "cycle": cycle_stats,
-                "memory": self.get_memory_usage(),
+                "memory": self._memory_usage_locked(),
             }
 
     def _compute_stats(
