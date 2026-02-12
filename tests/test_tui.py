@@ -138,11 +138,13 @@ class TestTuiAppInit:
     def test_tab_names(self):
         from src.tui.app import TuiApp
         app = TuiApp()
-        assert len(app.TAB_NAMES) == 4
+        assert len(app.TAB_NAMES) == 6
         assert "Dashboard" in app.TAB_NAMES
         assert "Nodes" in app.TAB_NAMES
         assert "Alerts" in app.TAB_NAMES
         assert "Propagation" in app.TAB_NAMES
+        assert "Topology" in app.TAB_NAMES
+        assert "Events" in app.TAB_NAMES
 
     def test_scroll_initialized(self):
         from src.tui.app import TuiApp
@@ -417,3 +419,507 @@ class TestRefreshData:
         assert app._connected is True
         assert app._cache.get("status") == {"port": 8808}
         assert app._cache.get("node_health_summary") == {"total_nodes": 5}
+
+    def test_refresh_fetches_topology_data_on_topology_tab(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._client = MagicMock()
+        app._client.is_alive.return_value = True
+        app._client.base_url = "http://127.0.0.1:8808"
+        app._client.server_status.return_value = {"port": 8808}
+        app._client.health_check.return_value = {"status": "ok"}
+        app._client.sources.return_value = {}
+        app._client.perf_stats.return_value = {}
+        app._client.mqtt_stats.return_value = {}
+        app._client.topology_geojson.return_value = {"features": []}
+        app._client.nodes_geojson.return_value = {"features": []}
+
+        app._active_tab = 4  # Topology tab
+        app._refresh_data()
+
+        assert app._connected is True
+        app._client.topology_geojson.assert_called_once()
+
+    def test_refresh_fetches_node_detail_when_drill_down_active(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._client = MagicMock()
+        app._client.is_alive.return_value = True
+        app._client.base_url = "http://127.0.0.1:8808"
+        app._client.server_status.return_value = {"port": 8808}
+        app._client.health_check.return_value = {"status": "ok"}
+        app._client.sources.return_value = {}
+        app._client.perf_stats.return_value = {}
+        app._client.mqtt_stats.return_value = {}
+        app._client.nodes_geojson.return_value = {"features": []}
+        app._client.all_node_health.return_value = {}
+        app._client.all_node_states.return_value = {}
+        app._client.node_health.return_value = {"score": 85}
+        app._client.node_history.return_value = {"observations": []}
+        app._client.node_alerts.return_value = {"alerts": []}
+        app._client.config_drift.return_value = {"recent_drifts": []}
+
+        app._active_tab = 1  # Nodes tab
+        app._detail_node_id = "!abc123"
+        app._refresh_data()
+
+        app._client.node_health.assert_called_once_with("!abc123")
+        app._client.node_history.assert_called_once_with("!abc123")
+        app._client.node_alerts.assert_called_once_with("!abc123")
+
+
+# ── New Data Client Accessor Tests ─────────────────────────────────
+
+class TestNewDataClientAccessors:
+    """Tests for the new per-node and topology client methods."""
+
+    def test_node_health_returns_none_on_failure(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=1)
+        assert client.node_health("!abc") is None
+
+    def test_node_history_returns_none_on_failure(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=1)
+        assert client.node_history("!abc") is None
+
+    def test_node_alerts_returns_none_on_failure(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=1)
+        assert client.node_alerts("!abc") is None
+
+    def test_topology_geojson_returns_none_on_failure(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=1)
+        assert client.topology_geojson() is None
+
+    def test_config_drift_returns_none_on_failure(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=1)
+        assert client.config_drift() is None
+
+
+class TestNewDataClientWithServer:
+    """Tests for new accessors against the stub HTTP server."""
+
+    @pytest.fixture(autouse=True)
+    def _start_stub_server(self):
+        self.server = HTTPServer(("127.0.0.1", 0), _StubHandler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        yield
+        self.server.shutdown()
+
+    def test_node_health_fetches_correct_path(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=self.port)
+        result = client.node_health("!abc123")
+        assert result is not None
+        assert "/api/nodes/!abc123/health" in result["path"]
+
+    def test_node_history_fetches_correct_path(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=self.port)
+        result = client.node_history("!abc123", limit=10)
+        assert result is not None
+        assert "/api/nodes/!abc123/history" in result["path"]
+        assert "limit=10" in result["path"]
+
+    def test_node_alerts_fetches_correct_path(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=self.port)
+        result = client.node_alerts("!abc123")
+        assert result is not None
+        assert "node_id=!abc123" in result["path"]
+
+    def test_topology_geojson_fetches_correct_path(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=self.port)
+        result = client.topology_geojson()
+        assert result is not None
+        assert "/api/topology/geojson" in result["path"]
+
+
+# ── Node Detail View Tests ────────────────────────────────────────
+
+class TestNodeDetailDrillDown:
+    """Tests for node detail drill-down feature."""
+
+    def _make_app(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._running = True
+        app._stdscr = MagicMock()
+        return app
+
+    def test_init_has_detail_state(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        assert app._detail_node_id is None
+        assert app._detail_scroll == 0
+        assert app._node_cursor == 0
+
+    def test_escape_exits_detail_view(self):
+        app = self._make_app()
+        app._active_tab = 1
+        app._detail_node_id = "!abc123"
+        app._stdscr.getch.return_value = 27  # Escape
+        app._handle_input()
+        assert app._detail_node_id is None
+
+    def test_q_exits_detail_view_not_app(self):
+        app = self._make_app()
+        app._active_tab = 1
+        app._detail_node_id = "!abc123"
+        app._stdscr.getch.return_value = ord("q")
+        app._handle_input()
+        assert app._detail_node_id is None
+        assert app._running is True  # App still running
+
+    def test_q_exits_app_when_not_in_detail(self):
+        app = self._make_app()
+        app._detail_node_id = None
+        app._stdscr.getch.return_value = ord("q")
+        app._handle_input()
+        assert app._running is False
+
+    def test_tab_switch_clears_detail(self):
+        app = self._make_app()
+        app._detail_node_id = "!abc123"
+        with patch.object(app, "_refresh_data"):
+            app._stdscr.getch.return_value = ord("3")
+            app._handle_input()
+            assert app._detail_node_id is None
+            assert app._active_tab == 2
+
+    def test_enter_triggers_detail_on_nodes_tab(self):
+        app = self._make_app()
+        app._active_tab = 1
+        app._cache = {
+            "nodes": {
+                "features": [
+                    {"properties": {"id": "!abc", "name": "TestNode",
+                                    "source": "meshtastic"}}
+                ]
+            },
+            "all_node_health": {},
+            "all_node_states": {},
+        }
+        app._node_cursor = 0
+        with patch.object(app, "_refresh_data"):
+            app._stdscr.getch.return_value = ord("\n")
+            app._handle_input()
+            assert app._detail_node_id == "!abc"
+
+    def test_detail_scroll_j_k(self):
+        app = self._make_app()
+        app._active_tab = 1
+        app._detail_node_id = "!abc"
+        app._detail_scroll = 5
+        app._stdscr.getch.return_value = ord("j")
+        app._handle_input()
+        assert app._detail_scroll == 6
+
+        app._stdscr.getch.return_value = ord("k")
+        app._handle_input()
+        assert app._detail_scroll == 5
+
+    def test_build_node_rows(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        cache = {
+            "nodes": {
+                "features": [
+                    {"properties": {"id": "!abc", "name": "Alpha",
+                                    "source": "meshtastic"}},
+                    {"properties": {"id": "!def", "name": "Bravo",
+                                    "source": "aredn"}},
+                ]
+            },
+            "all_node_health": {
+                "!abc": {"score": 85, "label": "good"},
+            },
+            "all_node_states": {
+                "nodes": {
+                    "!abc": {"state": "stable"},
+                }
+            },
+        }
+        rows = app._build_node_rows(cache)
+        assert len(rows) == 2
+        assert rows[0]["full_id"] in ("!abc", "!def")
+
+    def test_node_cursor_clamping(self):
+        app = self._make_app()
+        app._active_tab = 1
+        app._node_cursor = 100
+        # Scroll down when already at large cursor
+        app._stdscr.getch.return_value = ord("j")
+        app._handle_input()
+        assert app._node_cursor == 101  # Goes up, will be clamped during draw
+
+
+# ── Topology Tab Tests ────────────────────────────────────────────
+
+class TestTopologyTab:
+    """Tests for topology ASCII art tab."""
+
+    def test_tab_switch_to_topology(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._running = True
+        app._stdscr = MagicMock()
+        with patch.object(app, "_refresh_data"):
+            app._stdscr.getch.return_value = ord("5")
+            app._handle_input()
+            assert app._active_tab == 4
+
+    def test_quality_color_helper(self):
+        from src.tui.app import _quality_color
+        with patch("src.tui.app.curses") as mock_curses:
+            mock_curses.color_pair.return_value = 42
+            result = _quality_color("excellent")
+            assert result == 42
+            result = _quality_color("unknown")
+            assert result == mock_curses.color_pair.return_value
+
+
+# ── Events Tab Tests ──────────────────────────────────────────────
+
+class TestEventsTab:
+    """Tests for the event stream tab."""
+
+    def test_tab_switch_to_events(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._running = True
+        app._stdscr = MagicMock()
+        with patch.object(app, "_refresh_data"):
+            app._stdscr.getch.return_value = ord("6")
+            app._handle_input()
+            assert app._active_tab == 5
+
+    def test_event_log_init(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        assert app._event_log == []
+        assert app._event_log_max == 500
+
+    def test_on_ws_message_appends_to_log(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        msg = {"type": "node.position", "timestamp": 1700000000,
+               "node_id": "!abc", "data": {"lat": 40.0}}
+        app._on_ws_message(msg)
+        assert len(app._event_log) == 1
+        assert app._event_log[0]["type"] == "node.position"
+
+    def test_event_log_ring_buffer_truncation(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._event_log_max = 10
+        for i in range(20):
+            app._on_ws_message({"type": "test", "seq": i})
+        assert len(app._event_log) == 10
+        # Should keep the last 10
+        assert app._event_log[0]["seq"] == 10
+        assert app._event_log[-1]["seq"] == 19
+
+    def test_event_type_color_helper(self):
+        from src.tui.app import _event_type_color
+        with patch("src.tui.app.curses") as mock_curses:
+            mock_curses.color_pair.return_value = 5
+            result = _event_type_color("alert.fired")
+            assert result == 5
+            result = _event_type_color("node.position")
+            assert result == 5
+
+
+# ── WebSocket State Tests ─────────────────────────────────────────
+
+class TestWebSocketState:
+    """Tests for WebSocket connection state management."""
+
+    def test_ws_state_init(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        assert app._ws_connected is False
+        assert app._ws_thread is None
+
+    def test_ws_read_frame_returns_none_on_close(self):
+        """Test that _ws_read_frame handles close frame correctly."""
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        # Mock socket that returns a close frame (opcode 0x8)
+        mock_sock = MagicMock()
+        # Close frame: FIN=1, opcode=8, length=0
+        mock_sock.recv.return_value = bytes([0x88, 0x00])
+        result = app._ws_read_frame(mock_sock)
+        assert result is None
+
+    def test_ws_read_frame_returns_text(self):
+        """Test that _ws_read_frame can parse a simple text frame."""
+        from src.tui.app import TuiApp
+        import struct
+        app = TuiApp()
+        mock_sock = MagicMock()
+        payload = b'{"type":"test"}'
+        # Text frame: FIN=1 opcode=1, no mask, length=payload length
+        frame = bytes([0x81, len(payload)]) + payload
+        # recv returns bytes in sequence
+        call_count = [0]
+        def fake_recv(n):
+            nonlocal call_count
+            start = call_count[0]
+            call_count[0] += n
+            return frame[start:start + n]
+        mock_sock.recv.side_effect = fake_recv
+        result = app._ws_read_frame(mock_sock)
+        assert result == '{"type":"test"}'
+
+    def test_ws_read_frame_handles_error(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = OSError("connection reset")
+        result = app._ws_read_frame(mock_sock)
+        assert result is None
+
+
+# ── Draw Method Tests (with mocked curses) ─────────────────────────
+
+class TestDrawMethods:
+    """Tests that draw methods don't crash with mock data."""
+
+    def _make_app_with_screen(self):
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._running = True
+        app._connected = True
+        win = MagicMock()
+        win.getmaxyx.return_value = (40, 120)
+        app._stdscr = win
+        return app
+
+    def test_draw_node_detail_with_data(self):
+        app = self._make_app_with_screen()
+        app._detail_node_id = "!abc123"
+        cache = {
+            "nodes": {
+                "features": [
+                    {"properties": {"id": "!abc123", "name": "TestNode",
+                                    "source": "meshtastic"}}
+                ]
+            },
+            "all_node_health": {"!abc123": {"score": 85, "label": "good"}},
+            "all_node_states": {"nodes": {"!abc123": {"state": "stable"}}},
+            "detail_health": {
+                "score": 85, "status": "good",
+                "components": {
+                    "battery": {"score": 22.5, "max": 25, "battery_level": 75},
+                    "signal": {"score": 20.0, "max": 25, "snr": 8.5},
+                }
+            },
+            "detail_history": {
+                "observations": [
+                    {"timestamp": 1700000000, "latitude": 40.0,
+                     "longitude": -105.0, "snr": 8.5, "battery": 75,
+                     "network": "meshtastic"},
+                ]
+            },
+            "detail_alerts": {"alerts": []},
+            "config_drift": {"recent_drifts": [
+                {"node_id": "!abc123", "field": "role",
+                 "old_value": "CLIENT", "new_value": "ROUTER",
+                 "severity": "warning", "timestamp": 1700000000},
+            ]},
+        }
+        with patch("src.tui.app.curses") as mc:
+            mc.color_pair.return_value = 0
+            mc.A_BOLD = 1
+            mc.A_UNDERLINE = 2
+            mc.A_DIM = 4
+            # Should not raise
+            app._draw_node_detail(1, 38, 120, cache)
+
+    def test_draw_node_detail_empty_data(self):
+        app = self._make_app_with_screen()
+        app._detail_node_id = "!missing"
+        cache = {
+            "nodes": {"features": []},
+            "all_node_health": {},
+            "all_node_states": {},
+            "detail_health": None,
+            "detail_history": None,
+            "detail_alerts": None,
+            "config_drift": None,
+        }
+        with patch("src.tui.app.curses") as mc:
+            mc.color_pair.return_value = 0
+            mc.A_BOLD = 1
+            mc.A_UNDERLINE = 2
+            mc.A_DIM = 4
+            app._draw_node_detail(1, 38, 120, cache)
+
+    def test_draw_topology_with_links(self):
+        app = self._make_app_with_screen()
+        cache = {
+            "topo": {
+                "features": [
+                    {"properties": {"source": "!a", "target": "!b",
+                                    "snr": 10.0, "quality": "excellent"}},
+                    {"properties": {"source": "!b", "target": "!c",
+                                    "snr": 3.0, "quality": "marginal"}},
+                ]
+            },
+            "nodes": {
+                "features": [
+                    {"properties": {"id": "!a", "name": "Alpha"}},
+                    {"properties": {"id": "!b", "name": "Bravo"}},
+                    {"properties": {"id": "!c", "name": "Charlie"}},
+                ]
+            },
+        }
+        with patch("src.tui.app.curses") as mc:
+            mc.color_pair.return_value = 0
+            mc.A_BOLD = 1
+            mc.A_UNDERLINE = 2
+            mc.A_DIM = 4
+            app._draw_topology(1, 38, 120, cache)
+
+    def test_draw_topology_empty(self):
+        app = self._make_app_with_screen()
+        cache = {"topo": None, "nodes": {"features": []}}
+        with patch("src.tui.app.curses") as mc:
+            mc.color_pair.return_value = 0
+            mc.A_BOLD = 1
+            mc.A_UNDERLINE = 2
+            mc.A_DIM = 4
+            app._draw_topology(1, 38, 120, cache)
+
+    def test_draw_events_empty(self):
+        app = self._make_app_with_screen()
+        with patch("src.tui.app.curses") as mc:
+            mc.color_pair.return_value = 0
+            mc.A_BOLD = 1
+            mc.A_UNDERLINE = 2
+            mc.A_DIM = 4
+            app._draw_events(1, 38, 120)
+
+    def test_draw_events_with_data(self):
+        app = self._make_app_with_screen()
+        app._event_log = [
+            {"type": "node.position", "timestamp": 1700000000,
+             "source": "mqtt", "node_id": "!abc",
+             "data": {"lat": 40.0, "snr": 8.5}},
+            {"type": "alert.fired", "timestamp": 1700000001,
+             "source": "engine", "node_id": "!def",
+             "data": {"severity": "critical", "message": "Low battery"}},
+        ]
+        with patch("src.tui.app.curses") as mc:
+            mc.color_pair.return_value = 0
+            mc.A_BOLD = 1
+            mc.A_UNDERLINE = 2
+            mc.A_DIM = 4
+            app._draw_events(1, 38, 120)

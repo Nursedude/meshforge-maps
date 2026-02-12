@@ -93,8 +93,29 @@ class MapDataClient:
     def config_drift_summary(self) -> Optional[Dict[str, Any]]:
         return self._get("/api/config-drift/summary")
 
+    def config_drift(self) -> Optional[Dict[str, Any]]:
+        return self._get("/api/config-drift")
+
     def mqtt_stats(self) -> Optional[Dict[str, Any]]:
         return self._get("/api/mqtt/stats")
+
+    # -- Per-node detail accessors --
+
+    def node_health(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch detailed health breakdown for a single node."""
+        return self._get(f"/api/nodes/{node_id}/health")
+
+    def node_history(self, node_id: str, limit: int = 50) -> Optional[Dict[str, Any]]:
+        """Fetch observation history for a single node."""
+        return self._get(f"/api/nodes/{node_id}/history?limit={limit}")
+
+    def node_alerts(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch alerts for a specific node."""
+        return self._get(f"/api/alerts?node_id={node_id}")
+
+    def topology_geojson(self) -> Optional[Dict[str, Any]]:
+        """Fetch topology as GeoJSON with link quality data."""
+        return self._get("/api/topology/geojson")
 
     def is_alive(self) -> bool:
         """Quick liveness check."""
