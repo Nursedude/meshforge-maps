@@ -6,10 +6,10 @@
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-670%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-779%20passing-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
-A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, and offline tile caching.
+A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
 
 **Runs standalone** or as a [MeshForge](https://github.com/Nursedude/meshforge) extension via plugin auto-discovery.
 
@@ -34,12 +34,25 @@ A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RM
 - **Marker clustering** -- toggleable clustering for dense node areas
 - **Node history** -- trajectory tracking and historical position playback
 
+### Alerting & Notifications
+- **Threshold-based alert engine** -- configurable rules for battery low/critical, signal poor, congestion high, health degraded, and node offline conditions with per-node cooldown throttling
+- **Multi-channel delivery** -- alerts delivered via MQTT publish (base topic + severity sub-topics), webhooks (HTTP POST), EventBus events, and direct callbacks
+- **Real-time alert panel** -- collapsible browser panel showing live alerts with severity-colored indicators, node IDs, timestamps, and toast notifications for critical alerts
+- **Alert management** -- acknowledge alerts, filter by severity/node, configurable rules with enable/disable/cooldown
+
+### Historical Analytics
+- **Network growth time-series** -- unique nodes per time bucket showing mesh expansion over time
+- **Activity heatmap** -- observation counts by hour of day (0-23) with peak activity detection
+- **Node activity ranking** -- most active nodes ranked by observation count with uptime duration
+- **Network summary** -- per-network breakdown of nodes and observations with averages
+- **Alert trend aggregation** -- alerts bucketed over time with per-severity counts (critical/warning/info)
+
 ### Operations
 - **Per-node health scoring** -- composite 0-100 score from battery, signal (SNR + hops), data freshness, connectivity reliability, and channel congestion
 - **Performance profiling** -- collection cycle timing with per-source latency percentiles (p50/p90/p99), cache hit ratios
 - **Node connectivity state machine** -- classifies nodes as new/stable/intermittent/offline based on heartbeat patterns
 - **Config drift detection** -- tracks firmware and hardware changes across nodes
-- **WebSocket real-time updates** -- event bus pushes position, telemetry, and topology changes to connected clients
+- **WebSocket real-time updates** -- event bus pushes position, telemetry, topology, and alert events to connected clients
 - **Meshtastic API proxy** -- serves meshtasticd-compatible JSON endpoints for tool interoperability
 
 ### Infrastructure
@@ -82,6 +95,8 @@ graph TB
         DRIFT["ConfigDriftDetector"]
         HISTORY["NodeHistoryDB<br/>SQLite trajectory"]
         EBUS["EventBus<br/>pub/sub decoupling"]
+        ALERT["AlertEngine<br/>threshold rules + cooldown"]
+        ANALYTICS["HistoricalAnalytics<br/>time-series aggregation"]
     end
 
     subgraph Server["HTTP Server :8808 + WebSocket :8809"]
@@ -89,7 +104,8 @@ graph TB
         API_GEO["/api/nodes/geojson"]
         API_TOPO["/api/topology/geojson"]
         API_HEALTH["/api/node-health"]
-        API_PERF["/api/perf"]
+        API_ALERT["/api/alerts"]
+        API_ANALYTICS["/api/analytics/*"]
         API_STAT["/api/status"]
         WS["MapWebSocketServer<br/>real-time broadcast"]
     end
@@ -98,8 +114,9 @@ graph TB
         MAP["Map View<br/>Leaflet + MarkerCluster"]
         TOPO["Topology Overlay<br/>SNR-colored links"]
         HOVR["Health Overlay<br/>score-colored markers"]
+        ALERTPANEL["Alert Panel<br/>live alerts + badge"]
         SW["sw-tiles.js<br/>Offline Tile Cache"]
-        PANEL["Control Panel<br/>layers, weather, health"]
+        PANEL["Control Panel<br/>layers, weather, health, alerts"]
     end
 
     MQTT -->|ServiceEnvelope protobuf| MQTTSUB
@@ -124,19 +141,28 @@ graph TB
     EBUS --> STATE
     EBUS --> DRIFT
     EBUS --> HISTORY
+    EBUS --> ALERT
     EBUS --> WS
+    ALERT -->|MQTT publish| MQTT
+    ALERT -->|ALERT_FIRED| EBUS
+
+    HISTORY --> ANALYTICS
+    ALERT --> ANALYTICS
 
     AGG --> HANDLER
     HANDLER --> API_GEO
     HANDLER --> API_TOPO
     HANDLER --> API_HEALTH
-    HANDLER --> API_PERF
+    HANDLER --> API_ALERT
+    HANDLER --> API_ANALYTICS
     HANDLER --> API_STAT
     HEALTH --> API_HEALTH
 
     API_GEO --> MAP
     API_TOPO --> TOPO
     API_HEALTH --> HOVR
+    API_ALERT --> ALERTPANEL
+    WS -->|alert.fired| ALERTPANEL
     WS --> MAP
     SW -.->|cache-first| MAP
 ```
@@ -146,34 +172,40 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant Browser
+    participant WS as WebSocket :8809
     participant Server as MapServer :8808
     participant Agg as DataAggregator
-    participant Perf as PerfMonitor
-    participant MQTT as MQTTSubscriber
-    participant Mesh as meshtasticd
-    participant RCH as RCH API
-    participant NOAA as NOAA SWPC
+    participant Alert as AlertEngine
+    participant MQTT as MQTT Broker
 
     Browser->>Server: GET /api/nodes/geojson
     Server->>Agg: collect_all()
-    Agg->>Perf: time_cycle() start
 
     par Parallel Collection
-        Agg->>Mesh: HTTP /api/v1/nodes
-        Agg->>MQTT: get_all_nodes()
-        Agg->>RCH: GET /api/v1/telemetry
-        Agg->>NOAA: GET solar flux, Kp, wind
+        Agg->>Agg: meshtasticd + MQTT + RCH + NOAA
     end
 
-    Agg->>Perf: record per-source timing
     Agg-->>Server: Merged GeoJSON FeatureCollection
     Server-->>Browser: 200 OK (GeoJSON)
 
-    Browser->>Server: GET /api/node-health
-    Server->>Server: Score all nodes (battery, SNR, freshness, reliability, congestion)
-    Server-->>Browser: 200 OK (health scores)
+    Note over Agg,Alert: Telemetry triggers alert evaluation
 
-    Note over Browser: Renders markers + topology<br/>with optional health overlay
+    Agg->>Alert: evaluate_node(props, health_score)
+    Alert->>Alert: Check rules + cooldown
+    alt Alert triggered
+        Alert->>MQTT: publish(meshforge/alerts/{severity})
+        Alert->>WS: EventBus ALERT_FIRED
+        WS-->>Browser: {"type":"alert.fired","data":{...}}
+        Note over Browser: Alert panel updates +<br/>toast for critical alerts
+    end
+
+    Browser->>Server: GET /api/analytics/growth
+    Server-->>Browser: Time-series buckets (unique nodes, observations)
+
+    Browser->>Server: GET /api/alerts/active
+    Server-->>Browser: Unacknowledged alerts
+
+    Note over Browser: Renders markers + topology +<br/>health overlay + alert panel
 ```
 
 ## Node Health Scoring
@@ -197,6 +229,59 @@ Scores normalize to 0-100 based on available components only -- a node reporting
 | 40-59 | Fair | Orange |
 | 20-39 | Poor | Red |
 | 0-19 | Critical | Dark red |
+
+## Alert Delivery
+
+Alerts are generated by the threshold-based alert engine when node telemetry crosses configured rules. Each alert is delivered through multiple channels simultaneously:
+
+```mermaid
+flowchart LR
+    subgraph Trigger["Alert Evaluation"]
+        TEL["Node Telemetry"] --> ENGINE["AlertEngine<br/>rule check + cooldown"]
+    end
+    subgraph Delivery["Multi-Channel Delivery"]
+        ENGINE --> CB["Callback<br/>(in-process)"]
+        ENGINE --> MQ["MQTT Publish<br/>meshforge/alerts/{severity}"]
+        ENGINE --> WH["Webhook<br/>HTTP POST"]
+        ENGINE --> EB["EventBus<br/>ALERT_FIRED"]
+        EB --> WS["WebSocket<br/>→ browser alert panel"]
+    end
+```
+
+### Default Alert Rules
+
+| Rule | Type | Severity | Metric | Condition | Cooldown |
+|------|------|----------|--------|-----------|----------|
+| `battery_low` | battery_low | WARNING | battery | <= 20% | 10 min |
+| `battery_critical` | battery_critical | CRITICAL | battery | <= 5% | 10 min |
+| `signal_poor` | signal_poor | WARNING | snr | <= -10 dB | 10 min |
+| `congestion_high` | congestion_high | WARNING | channel_util | >= 75% | 10 min |
+| `health_degraded` | health_degraded | WARNING | health_score | <= 20 | 10 min |
+
+### MQTT Alert Topics
+
+When an MQTT client is configured, alerts publish to two topics per alert:
+
+- **`meshforge/alerts`** -- all alerts (subscribe for full feed)
+- **`meshforge/alerts/{severity}`** -- filtered by severity (`critical`, `warning`, `info`)
+
+Alert payloads are JSON:
+
+```json
+{
+  "alert_id": "alert-42",
+  "rule_id": "battery_critical",
+  "alert_type": "battery_critical",
+  "severity": "critical",
+  "node_id": "!a1b2c3d4",
+  "metric": "battery",
+  "value": 3.0,
+  "threshold": 5.0,
+  "message": "Battery level is critical (<=5%) — node !a1b2c3d4: battery=3.0",
+  "timestamp": 1707752345.123,
+  "acknowledged": false
+}
+```
 
 ## Collector Priority
 
@@ -253,10 +338,10 @@ Per-node sysinfo API at `http://<node>.local.mesh/a/sysinfo?lqm=1`. Requires mes
 git clone https://github.com/Nursedude/meshforge-maps.git
 cd meshforge-maps
 python -m src.main
-# Opens http://127.0.0.1:8808
+# Opens http://127.0.0.1:8808 (map) + ws://127.0.0.1:8809 (real-time)
 ```
 
-No external Python dependencies required for core functionality -- uses only stdlib (`http.server`, `json`, `urllib`, `subprocess`, `threading`).
+No external Python dependencies required for core functionality -- uses only stdlib (`http.server`, `json`, `urllib`, `subprocess`, `threading`, `sqlite3`).
 
 ### As MeshForge Extension
 
@@ -275,12 +360,26 @@ When running as a MeshForge extension:
 - Configuration is stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/settings.json`
 - The extension operates independently -- MeshForge core is not required at runtime
 
-### Optional: Live MQTT Support
+### Optional Dependencies
 
 ```bash
+# Live MQTT: real-time Meshtastic node tracking + alert publishing
 pip install paho-mqtt meshtastic
-# Enables real-time Meshtastic node tracking via mqtt.meshtastic.org
+
+# WebSocket: real-time map updates + live alert delivery to browser
+pip install websockets
 ```
+
+All optional dependencies degrade gracefully -- features that require them are silently disabled when the libraries are not installed.
+
+### Upgrading
+
+```bash
+cd meshforge-maps
+git pull origin main
+```
+
+No database migrations are needed -- the SQLite node history database schema is forward-compatible. New features (alerting, analytics) activate automatically on upgrade. Configuration is preserved in `settings.json`.
 
 ## Supported Hardware
 
@@ -338,6 +437,12 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `hamclock_host` | string | `localhost` | OpenHamClock/HamClock host |
 | `openhamclock_port` | number | `3000` | OpenHamClock port (tried first) |
 | `hamclock_port` | number | `8080` | HamClock legacy port (fallback) |
+| `mqtt_broker` | string | `mqtt.meshtastic.org` | MQTT broker hostname |
+| `mqtt_port` | number | `1883` | MQTT broker port |
+| `mqtt_topic` | string | `msh/#` | MQTT subscription topic |
+| `mqtt_username` | string | `null` | MQTT auth username (private brokers) |
+| `mqtt_password` | string | `null` | MQTT auth password (private brokers) |
+| `mqtt_alert_topic` | string | `meshforge/alerts` | MQTT topic for alert publishing |
 
 ## API Endpoints
 
@@ -360,6 +465,25 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `/api/topology/geojson` | GET | Topology as GeoJSON (SNR-colored LineStrings) |
 | `/api/overlay` | GET | Space weather + solar terminator data |
 | `/api/hamclock` | GET | OpenHamClock/NOAA propagation (VOACAP, DX spots, band conditions) |
+
+### Alerting
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/alerts` | GET | Alert history (supports `?severity=`, `?node_id=`, `?limit=` filters) |
+| `/api/alerts/active` | GET | Unacknowledged alerts |
+| `/api/alerts/rules` | GET | Configured alert rules |
+| `/api/alerts/summary` | GET | Alert statistics (total fired, active, by severity/type, MQTT stats) |
+
+### Historical Analytics
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/analytics/growth` | GET | Network growth time-series (`?since=`, `?until=`, `?bucket=` in seconds) |
+| `/api/analytics/activity` | GET | Activity heatmap by hour of day (`?since=`, `?until=`) |
+| `/api/analytics/ranking` | GET | Most active nodes (`?since=`, `?limit=`) |
+| `/api/analytics/summary` | GET | High-level network statistics (`?since=`) |
+| `/api/analytics/alert-trends` | GET | Alert trend aggregation (`?bucket=` in seconds) |
 
 ### Health & Monitoring
 
@@ -418,8 +542,9 @@ flowchart LR
 ## Testing
 
 ```bash
+pip install pytest
 pytest tests/ -v
-# 670 tests covering:
+# 779 tests covering:
 #   - Base helpers, config, coordinate validation
 #   - All 4 collectors (Meshtastic, Reticulum, HamClock, AREDN)
 #   - Aggregator deduplication, MQTT node store, topology links
@@ -432,15 +557,19 @@ pytest tests/ -v
 #   - AREDN hardening (network errors, malformed responses, cache, LQM edges)
 #   - Node history DB, shared health state, topology GeoJSON
 #   - Config drift detection, node state machine
+#   - Alert engine (rules, cooldown, MQTT publish, EventBus propagation, webhooks)
+#   - Historical analytics (growth, heatmap, ranking, summary, alert trends)
 ```
 
 ## Roadmap
 
 ### Near-term
 
-- **Alerting & notifications** -- threshold-based alerts for node offline, battery low, congestion spikes, and connectivity state transitions. Delivery via webhook, MQTT publish, and optional email integration. Configurable per-node and per-network alert rules.
+- **Analytics frontend** -- browser-based charts for the analytics API endpoints (network growth sparkline, activity heatmap calendar, node ranking table). The backend API is complete; frontend visualization is next.
 
-- **Historical analytics** -- time-series dashboards built on the existing NodeHistoryDB (SQLite). Coverage heatmaps showing node density over time, uptime SLA reports, and signal quality trend charts. Export to CSV for external analysis.
+- **Email alert delivery** -- SMTP integration for the alert engine. The delivery pipeline already supports multiple channels (callback, MQTT, webhook); email is a natural extension.
+
+- **CSV/JSON export** -- export node history, alert history, and analytics data for external analysis tools. The data layer is complete; export endpoints and download UI are next.
 
 ### Medium-term
 
