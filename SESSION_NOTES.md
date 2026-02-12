@@ -2,6 +2,108 @@
 
 ---
 
+## Session 16: WebSocket Marker Fix & Alerting Foundation
+
+**Date:** 2026-02-12
+**Branch:** `claude/session-structure-setup-UtjMY`
+**Scope:** Fix architectural WebSocket marker update bug; implement alerting & notifications engine
+**Version:** 0.7.0-beta (no version bump)
+
+### Context
+
+All 52 code review issues from Session 13 resolved in Sessions 14-15. Codebase at
+zero known defects. This session addresses the final known architectural bug
+(WebSocket marker updates) and begins the first near-term roadmap item (alerting
+& notifications).
+
+### Baseline
+
+- **Tests:** 671 passed, 22 skipped, 0 failures
+
+### Changes Made
+
+#### 1. WebSocket Marker Update Bug Fix (`web/meshforge_maps.html`)
+
+**Problem:** `processGeoJSON()` / `renderMarkers()` did not attach `.feature`
+to markers. `updateOrAddNode()` searched for markers via `layer.feature.properties.id`,
+which always failed. Result: real-time WebSocket position updates created duplicate
+temporary markers instead of moving existing ones.
+
+**Fix:** Implemented a `markerRegistry` (JavaScript `Map`, keyed by node ID):
+- `renderMarkers()` populates registry as markers are created — O(1) lookup
+- `updateOrAddNode()` queries registry instead of O(n) layer scan
+- When an existing marker is found, its position is updated and the
+  corresponding `allFeatures` entry is also updated so the next `renderMarkers()`
+  call preserves the new position
+- New nodes added to the registry immediately for future WebSocket updates
+- Registry cleared on every `renderMarkers()` call to stay in sync
+
+#### 2. Alert Engine (`src/utils/alert_engine.py`, ~380 lines)
+
+New threshold-based alerting system for mesh network monitoring:
+
+- **AlertRule** dataclass: configurable metric, operator (lt/gt/eq/lte/gte),
+  threshold, severity, cooldown, network filter
+- **Alert** dataclass: generated alert with node ID, metric value, message,
+  timestamp, acknowledgment state
+- **AlertEngine** class:
+  - Rule management: add/remove/enable/disable rules
+  - `evaluate_node()`: evaluates all rules against node properties + health score
+  - `evaluate_offline()`: dedicated offline detection (absence-based)
+  - Per-node per-rule cooldown throttling (default 10 min) prevents alert storms
+  - Bounded alert history (max 500 entries, LRU trim)
+  - Alert acknowledgment
+  - Webhook delivery (best-effort POST with JSON payload)
+  - Callback delivery (`on_alert` parameter)
+  - Thread-safe: all mutable state behind lock
+
+- **5 default alert rules:**
+  - `battery_low` — battery <= 20% (warning)
+  - `battery_critical` — battery <= 5% (critical)
+  - `signal_poor` — SNR <= -10 dB (warning)
+  - `congestion_high` — channel_util >= 75% (warning)
+  - `health_degraded` — health score <= 20 (warning)
+
+#### 3. EventBus Extension (`src/utils/event_bus.py`)
+
+- Added `ALERT_FIRED` event type for alert event propagation
+
+#### 4. MapServer Integration (`src/map_server.py`)
+
+- AlertEngine instantiated in MapServer constructor
+- Wired to EventBus: `NODE_TELEMETRY` events trigger automatic rule evaluation
+- Alert summary included in `/api/status` response
+- **4 new API endpoints:**
+  - `GET /api/alerts` — alert history with limit/severity/node_id filters
+  - `GET /api/alerts/active` — unacknowledged alerts
+  - `GET /api/alerts/rules` — configured alert rules
+  - `GET /api/alerts/summary` — alert statistics
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `src/utils/alert_engine.py` | **NEW** — AlertEngine, AlertRule, Alert, default rules, webhook delivery |
+| `src/utils/event_bus.py` | +`ALERT_FIRED` event type |
+| `src/map_server.py` | AlertEngine integration, 4 new API routes, telemetry→alert wiring |
+| `web/meshforge_maps.html` | `markerRegistry` Map for O(1) WebSocket marker lookup |
+| `tests/test_alert_engine.py` | **NEW** — 54 tests covering rules, evaluation, cooldown, history, delivery, API |
+
+### Test Results
+
+- **Before:** 671 passed, 22 skipped
+- **After:** 725 passed, 22 skipped, 0 failures, 0 regressions (+54 new tests)
+
+### Session Entropy Watch
+
+Session remained focused and systematic:
+- Two clear tasks: architectural bug fix, then roadmap feature
+- Bug fix verified with checkpoint (zero regressions) before moving on
+- Alert engine designed to integrate with existing patterns (EventBus, health scorer, node state)
+- All 54 new tests pass on first run after fixing shared-state mutation bug in rule copying
+
+---
+
 ## Session 14: Medium & Low Severity Fixes
 
 **Date:** 2026-02-12
