@@ -32,25 +32,15 @@ from src.utils.health_scoring import (
 class TestHelpers:
     """Tests for module-level helper functions."""
 
-    def test_score_label_excellent(self):
-        assert _score_label(90) == "excellent"
-        assert _score_label(80) == "excellent"
-
-    def test_score_label_good(self):
-        assert _score_label(60) == "good"
-        assert _score_label(79) == "good"
-
-    def test_score_label_fair(self):
-        assert _score_label(40) == "fair"
-        assert _score_label(59) == "fair"
-
-    def test_score_label_poor(self):
-        assert _score_label(20) == "poor"
-        assert _score_label(39) == "poor"
-
-    def test_score_label_critical(self):
-        assert _score_label(0) == "critical"
-        assert _score_label(19) == "critical"
+    @pytest.mark.parametrize("score,expected", [
+        (90, "excellent"), (80, "excellent"),
+        (60, "good"), (79, "good"),
+        (40, "fair"), (59, "fair"),
+        (20, "poor"), (39, "poor"),
+        (0, "critical"), (19, "critical"),
+    ])
+    def test_score_label(self, score, expected):
+        assert _score_label(score) == expected
 
     def test_clamp(self):
         assert _clamp(5.0, 0.0, 10.0) == 5.0

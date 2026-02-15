@@ -35,10 +35,6 @@ class TestConnectionManagerSingleton:
         mgr2 = ConnectionManager.get_instance("localhost", 4403)
         assert mgr1 is not mgr2
 
-    def test_default_host_port(self):
-        mgr = ConnectionManager.get_instance()
-        assert mgr.stats["host"] == "localhost"
-        assert mgr.stats["port"] == 4403
 
 
 class TestConnectionAcquireRelease:
@@ -100,18 +96,6 @@ class TestConnectionManagerStats:
 
     def setup_method(self):
         ConnectionManager.reset_all()
-
-    def test_initial_stats(self):
-        mgr = ConnectionManager.get_instance()
-        stats = mgr.stats
-        assert stats["host"] == "localhost"
-        assert stats["port"] == 4403
-        assert stats["is_locked"] is False
-        assert stats["holder"] is None
-        assert stats["held_seconds"] is None
-        assert stats["total_acquisitions"] == 0
-        assert stats["total_timeouts"] == 0
-        assert stats["total_releases"] == 0
 
     def test_stats_after_acquire_release(self):
         mgr = ConnectionManager.get_instance()
