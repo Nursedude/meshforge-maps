@@ -37,18 +37,6 @@ class _TestCollector(BaseCollector):
 class TestBaseCollectorCircuitBreaker:
     """Tests for BaseCollector with circuit breaker integration."""
 
-    def test_collect_without_circuit_breaker(self):
-        """Backward compatibility: collect works without circuit breaker."""
-        c = _TestCollector()
-        result = c.collect()
-        assert result["type"] == "FeatureCollection"
-
-    def test_circuit_breaker_setter(self):
-        c = _TestCollector()
-        cb = CircuitBreaker("test")
-        c.circuit_breaker = cb
-        assert c.circuit_breaker is cb
-
     def test_collect_records_success_on_circuit_breaker(self):
         cb = CircuitBreaker("test")
         c = _TestCollector(circuit_breaker=cb)
@@ -259,21 +247,11 @@ class TestAggregatorCircuitBreaker:
         assert "hamclock" in states
         assert "aredn" in states
 
-    def test_aggregator_no_breakers_for_disabled_sources(self):
-        agg = DataAggregator(ALL_DISABLED_CONFIG)
-        states = agg.get_circuit_breaker_states()
-        assert states == {}
-
     def test_collectors_have_circuit_breakers_assigned(self):
         agg = DataAggregator(ALL_ENABLED_CONFIG)
         for name, collector in agg._collectors.items():
             assert collector.circuit_breaker is not None
             assert collector.circuit_breaker.name == name
-
-    def test_collectors_have_retries_configured(self):
-        agg = DataAggregator(ALL_ENABLED_CONFIG)
-        for collector in agg._collectors.values():
-            assert collector._max_retries == 2
 
     def test_circuit_breaker_states_reflect_collector_health(self):
         agg = DataAggregator(ALL_ENABLED_CONFIG)

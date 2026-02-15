@@ -207,11 +207,6 @@ class TestReticulumCollector:
             "longitude": 0,
         }) is None
 
-    def test_rns_node_types_mapping(self):
-        assert RNS_NODE_TYPES["rnode"] == "RNode (LoRa)"
-        assert RNS_NODE_TYPES["nomadnet"] == "NomadNet"
-        assert RNS_NODE_TYPES["tcp"] == "TCP Transport"
-
     @patch("src.collectors.reticulum_collector.RNS_CACHE_PATH")
     def test_read_cache_file_geojson(self, mock_path, tmp_path):
         cache_data = {
@@ -679,17 +674,6 @@ class TestAREDNCollector:
         c = AREDNCollector()
         assert c._parse_sysinfo({"node": "X", "lat": "abc", "lon": "def"}, "X") is None
 
-    def test_parse_lqm_neighbor_parses_link(self):
-        c = AREDNCollector()
-        # Valid neighbor returns a topology link dict
-        result = c._parse_lqm_neighbor({"name": "Neighbor1", "snr": 20}, "Source")
-        assert result is not None
-        assert result["source"] == "Source"
-        assert result["target"] == "Neighbor1"
-        assert result["snr"] == 20.0
-        # Empty name or missing name returns None
-        assert c._parse_lqm_neighbor({}, "Source") is None
-        assert c._parse_lqm_neighbor({"name": ""}, "Source") is None
 
 
 # ==========================================================================

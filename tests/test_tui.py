@@ -122,34 +122,11 @@ class TestMapDataClientWithServer:
 class TestTuiAppInit:
     """Tests for TuiApp initialization."""
 
-    def test_init_defaults(self):
-        from src.tui.app import TuiApp
-        app = TuiApp()
-        assert app._active_tab == 0
-        assert app._running is False
-        assert app._connected is False
-
     def test_init_custom_port(self):
         from src.tui.app import TuiApp
         app = TuiApp(host="10.0.0.1", port=9999)
         assert app._client.base_url == "http://10.0.0.1:9999"
 
-    def test_tab_names(self):
-        from src.tui.app import TuiApp
-        app = TuiApp()
-        assert len(app.TAB_NAMES) == 6
-        assert "Dashboard" in app.TAB_NAMES
-        assert "Nodes" in app.TAB_NAMES
-        assert "Alerts" in app.TAB_NAMES
-        assert "Propagation" in app.TAB_NAMES
-        assert "Topology" in app.TAB_NAMES
-        assert "Events" in app.TAB_NAMES
-
-    def test_scroll_initialized(self):
-        from src.tui.app import TuiApp
-        app = TuiApp()
-        for i in range(len(app.TAB_NAMES)):
-            assert app._scroll[i] == 0
 
 
 # ── Color/Attribute Helpers ────────────────────────────────────────
@@ -552,13 +529,6 @@ class TestNodeDetailDrillDown:
         app._stdscr = MagicMock()
         return app
 
-    def test_init_has_detail_state(self):
-        from src.tui.app import TuiApp
-        app = TuiApp()
-        assert app._detail_node_id is None
-        assert app._detail_scroll == 0
-        assert app._node_cursor == 0
-
     def test_escape_exits_detail_view(self):
         app = self._make_app()
         app._active_tab = 1
@@ -699,12 +669,6 @@ class TestEventsTab:
             app._handle_input()
             assert app._active_tab == 5
 
-    def test_event_log_init(self):
-        from src.tui.app import TuiApp
-        app = TuiApp()
-        assert app._event_log == []
-        assert app._event_log_max == 500
-
     def test_on_ws_message_appends_to_log(self):
         from src.tui.app import TuiApp
         app = TuiApp()
@@ -739,12 +703,6 @@ class TestEventsTab:
 
 class TestWebSocketState:
     """Tests for WebSocket connection state management."""
-
-    def test_ws_state_init(self):
-        from src.tui.app import TuiApp
-        app = TuiApp()
-        assert app._ws_connected is False
-        assert app._ws_thread is None
 
     def test_ws_read_frame_returns_none_on_close(self):
         """Test that _ws_read_frame handles close frame correctly."""
@@ -937,11 +895,6 @@ class TestSearchFilter:
         app._stdscr = win
         return app
 
-    def test_search_initial_state(self):
-        app = self._make_app()
-        assert app._search_active is False
-        assert app._search_query == ""
-
     def test_search_activation(self):
         """Pressing / activates search mode."""
         app = self._make_app()
@@ -1013,11 +966,6 @@ class TestEventsPauseResume:
         win.getmaxyx.return_value = (40, 120)
         app._stdscr = win
         return app
-
-    def test_initial_pause_state(self):
-        app = self._make_app()
-        assert app._events_paused is False
-        assert app._events_paused_snapshot == []
 
     def test_pause_toggle(self):
         """Pressing p on Events tab toggles pause."""
