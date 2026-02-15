@@ -376,7 +376,7 @@ monitoring directly from the terminal.
 - `TuiApp` class: curses.wrapper-based app with tabbed panel architecture
 - Color system: 16 color pairs for health scores, alert severity, source status
 - Thread-safe data refresh: background thread fetches API data every 5 seconds
-- `safe_addstr()` / `draw_hbar()` helpers: clip-safe drawing, no curses.error crashes
+- `safe_addstr()` helper: clip-safe drawing, no curses.error crashes
 - Vim-style keybindings: j/k scroll, 1-4 tab select, g home, r refresh, q quit
 
 #### 2. Dashboard Tab ([1])

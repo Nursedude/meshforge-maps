@@ -9,7 +9,7 @@ import json
 import logging
 import urllib.request
 import urllib.error
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +89,6 @@ class MapDataClient:
 
     def circuit_breaker_states(self) -> Optional[Dict[str, Any]]:
         return self._get("/api/core-health")
-
-    def config_drift_summary(self) -> Optional[Dict[str, Any]]:
-        return self._get("/api/config-drift/summary")
 
     def config_drift(self) -> Optional[Dict[str, Any]]:
         return self._get("/api/config-drift")

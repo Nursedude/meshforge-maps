@@ -10,11 +10,16 @@ Tabs:
   [4] Propagation - HF band conditions, space weather, DX spots
 """
 
+import base64
 import curses
+import json
 import logging
+import os
+import socket
+import struct
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .data_client import MapDataClient
 
@@ -102,25 +107,6 @@ def safe_addstr(win: Any, y: int, x: int, text: str,
     clipped = text[:available]
     try:
         win.addstr(y, x, clipped, attr)
-    except curses.error:
-        pass
-
-
-def draw_hbar(win: Any, y: int, x: int, value: float, width: int,
-              filled_attr: int, empty_attr: int = 0) -> None:
-    """Draw a horizontal bar gauge."""
-    rows, cols = win.getmaxyx()
-    if y >= rows or x >= cols:
-        return
-    width = min(width, cols - x - 1)
-    filled = int(value / 100.0 * width)
-    filled = max(0, min(filled, width))
-    try:
-        if filled > 0:
-            win.addstr(y, x, "\u2588" * filled, filled_attr)
-        empty = width - filled
-        if empty > 0:
-            win.addstr(y, x + filled, "\u2591" * empty, empty_attr or curses.A_DIM)
     except curses.error:
         pass
 
@@ -1409,11 +1395,6 @@ class TuiApp:
 
     def _ws_listen_loop(self) -> None:
         """Background thread: connect to WebSocket and receive push events."""
-        import hashlib
-        import base64
-        import socket
-        import struct
-        import os
 
         while self._running:
             try:
@@ -1475,8 +1456,7 @@ class TuiApp:
                     if frame_data is None:
                         break
                     try:
-                        import json as _json
-                        msg = _json.loads(frame_data)
+                        msg = json.loads(frame_data)
                         self._on_ws_message(msg)
                     except (ValueError, TypeError):
                         pass
@@ -1497,7 +1477,6 @@ class TuiApp:
 
     def _ws_read_frame(self, sock: Any) -> Optional[str]:
         """Read a single WebSocket text frame. Returns None on close/error."""
-        import struct
 
         def _recv_exact(s: Any, n: int) -> bytes:
             buf = b""

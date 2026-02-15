@@ -4,7 +4,7 @@ Tests cover:
   - MapDataClient HTTP fetching
   - TuiApp initialization and state management
   - Color/attribute helpers
-  - Drawing helpers (safe_addstr, draw_hbar)
+  - Drawing helpers (safe_addstr)
   - CLI argument parsing
 """
 
@@ -63,7 +63,6 @@ class TestMapDataClient:
         assert client.perf_stats() is None
         assert client.analytics_summary() is None
         assert client.circuit_breaker_states() is None
-        assert client.config_drift_summary() is None
         assert client.mqtt_stats() is None
 
 
@@ -1002,52 +1001,6 @@ class TestSearchFilter:
         app._handle_input()
         assert app._search_query == ""
 
-    def test_node_filter_by_search(self):
-        """Node rows are filtered by search query in _draw_nodes."""
-        app = self._make_app()
-        app._search_query = "mesh"
-        cache = {
-            "nodes": {
-                "features": [
-                    {"properties": {"id": "!a1", "name": "AlphaNode",
-                                    "network": "meshtastic"}},
-                    {"properties": {"id": "!b2", "name": "BetaNode",
-                                    "network": "reticulum"}},
-                ],
-            },
-            "all_node_health": {},
-            "all_node_states": {},
-        }
-        rows = app._build_node_rows(cache)
-        q = app._search_query.lower()
-        filtered = [r for r in rows
-                    if q in r["full_id"].lower()
-                    or q in r["name"].lower()
-                    or q in r["source"].lower()
-                    or q in r["state"].lower()
-                    or q in r["label"].lower()]
-        # Only meshtastic node matches "mesh"
-        assert len(filtered) == 1
-        assert filtered[0]["full_id"] == "!a1"
-
-    def test_alert_filter_by_search(self):
-        """Alerts are filtered by search query."""
-        alerts = [
-            {"alert_type": "low_battery", "severity": "critical",
-             "node_id": "!a1", "message": "Battery critical"},
-            {"alert_type": "poor_snr", "severity": "warning",
-             "node_id": "!b2", "message": "SNR degraded"},
-        ]
-        q = "battery"
-        filtered = [a for a in alerts if isinstance(a, dict) and (
-            q in a.get("alert_type", "").lower()
-            or q in a.get("severity", "").lower()
-            or q in a.get("node_id", "").lower()
-            or q in a.get("message", "").lower())]
-        assert len(filtered) == 1
-        assert filtered[0]["alert_type"] == "low_battery"
-
-
 class TestEventsPauseResume:
     """Tests for Events tab pause/resume and type filtering."""
 
@@ -1109,34 +1062,6 @@ class TestEventsPauseResume:
             app._stdscr.getch.return_value = ord("f")
             app._handle_input()
         assert app._event_type_filter is None  # Back to start
-
-    def test_event_filter_applies(self):
-        """Type filter actually filters events."""
-        events = [
-            {"type": "node.position", "node_id": "!a"},
-            {"type": "alert.fired", "node_id": "!b"},
-            {"type": "node.position", "node_id": "!c"},
-        ]
-        type_filter = "node.position"
-        filtered = [e for e in events if type_filter in e.get("type", "")]
-        assert len(filtered) == 2
-
-    def test_event_search_filter(self):
-        """Search query filters events."""
-        events = [
-            {"type": "node.position", "node_id": "!alpha123",
-             "source": "mqtt", "data": {}},
-            {"type": "alert.fired", "node_id": "!beta456",
-             "source": "engine", "data": {"message": "test"}},
-        ]
-        q = "alpha"
-        filtered = [e for e in events
-                    if q in e.get("type", "").lower()
-                    or q in e.get("node_id", "").lower()
-                    or q in e.get("source", "").lower()
-                    or q in str(e.get("data", "")).lower()]
-        assert len(filtered) == 1
-        assert filtered[0]["node_id"] == "!alpha123"
 
     def test_draw_events_paused(self):
         """Events tab renders correctly when paused."""
