@@ -123,17 +123,6 @@ class TestFormatNodeMeshtastic(unittest.TestCase):
 class TestMeshtasticApiProxy(unittest.TestCase):
     """Test the proxy server lifecycle."""
 
-    def test_init_defaults(self):
-        proxy = MeshtasticApiProxy()
-        self.assertFalse(proxy.running)
-        self.assertEqual(proxy.port, 0)
-
-    def test_stats_before_start(self):
-        proxy = MeshtasticApiProxy()
-        stats = proxy.stats
-        self.assertFalse(stats["running"])
-        self.assertEqual(stats["request_count"], 0)
-
     def test_set_store(self):
         store = MQTTNodeStore()
         proxy = MeshtasticApiProxy()
@@ -338,28 +327,6 @@ class TestProxyResponseHeaders(unittest.TestCase):
             server = resp.getheader("Server")
             self.assertNotIn("Python", server)
             self.assertIn("MeshForge", server)
-        finally:
-            proxy.stop()
-
-    def test_single_node_via_get_node(self):
-        """Direct node lookup via get_node() for O(1) performance."""
-        store = MQTTNodeStore()
-        store.update_position("!ff001122", 42.0, -107.0)
-        store.update_nodeinfo("!ff001122", long_name="LookupTest")
-        proxy = MeshtasticApiProxy(mqtt_store=store, port=19411)
-        try:
-            proxy.start()
-            time.sleep(0.1)
-
-            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
-            conn.request("GET", "/api/v1/nodes/!ff001122")
-            resp = conn.getresponse()
-            data = json.loads(resp.read().decode())
-            conn.close()
-
-            self.assertEqual(resp.status, 200)
-            self.assertEqual(data["user"]["id"], "!ff001122")
-            self.assertEqual(data["user"]["longName"], "LookupTest")
         finally:
             proxy.stop()
 

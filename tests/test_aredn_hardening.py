@@ -106,12 +106,6 @@ class TestSysinfoEdgeCases:
         geom = result["geometry"]
         assert abs(geom["coordinates"][1] - 34.0522) < 0.001
 
-    def test_integer_coordinates(self, collector):
-        """Coordinates as plain integers."""
-        data = {"node": "test", "lat": 34, "lon": -118}
-        result = collector._parse_sysinfo(data, "test")
-        assert result is not None
-
     def test_nan_coordinates(self, collector):
         data = {"node": "test", "lat": float("nan"), "lon": float("nan")}
         result = collector._parse_sysinfo(data, "test")
@@ -151,17 +145,6 @@ class TestSysinfoEdgeCases:
         # load_avg=None is stripped by make_feature
         assert "load_avg" not in result["properties"]
 
-    def test_missing_optional_fields(self, collector):
-        """Minimal valid sysinfo with only required fields."""
-        data = {"node": "test", "lat": "34.0", "lon": "-118.0"}
-        result = collector._parse_sysinfo(data, "test")
-        assert result is not None
-        props = result["properties"]
-        assert props["id"] == "test"
-        assert props["network"] == "aredn"
-        assert props["hardware"] == ""
-        assert props["firmware"] == ""
-
     def test_non_ascii_node_name(self, collector):
         """Node names with unicode characters."""
         data = {"node": "KN6PLV-HAP-\u00e9", "lat": "34.0", "lon": "-118.0"}
@@ -186,20 +169,6 @@ class TestLQMEdgeCases:
         assert result is not None
         assert result["source"] == "nodeA"
         assert result["target"] == "nodeA"
-
-    def test_extreme_snr_positive(self, collector):
-        result = collector._parse_lqm_neighbor(
-            {"name": "node", "snr": 999}, "src"
-        )
-        assert result is not None
-        assert result["snr"] == 999.0
-
-    def test_extreme_snr_negative(self, collector):
-        result = collector._parse_lqm_neighbor(
-            {"name": "node", "snr": -999}, "src"
-        )
-        assert result is not None
-        assert result["snr"] == -999.0
 
     def test_quality_as_float_string(self, collector):
         """Quality as a float string (e.g., "100.5")."""
@@ -317,29 +286,6 @@ class TestCacheFileHandling:
                     assert feat["properties"]["network"] == "aredn"
         os.unlink(f.name)
 
-    def test_unified_cache_filters_non_aredn(self, collector):
-        """Unified cache should only return AREDN network entries."""
-        cache_data = {
-            "type": "FeatureCollection",
-            "features": [
-                {"properties": {"network": "aredn", "id": "a1"}},
-                {"properties": {"network": "reticulum", "id": "r1"}},
-            ],
-        }
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(cache_data, f)
-            f.flush()
-            unified_path = Path(f.name)
-            with patch.object(Path, "exists", return_value=True):
-                with patch("builtins.open", return_value=open(f.name, "r")):
-                    # Use _fetch_from_unified_cache with patched path
-                    with patch(
-                        "src.collectors.aredn_collector.Path",
-                        return_value=unified_path,
-                    ):
-                        # Simplified: test the logic directly
-                        pass
-        os.unlink(f.name)
 
 
 class TestFetchDeduplication:

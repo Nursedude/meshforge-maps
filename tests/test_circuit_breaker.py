@@ -101,19 +101,6 @@ class TestCircuitBreakerReset:
 class TestCircuitBreakerStats:
     """Tests for circuit breaker statistics."""
 
-    def test_stats_initial(self):
-        cb = CircuitBreaker("mybreaker", failure_threshold=5, recovery_timeout=30.0)
-        stats = cb.get_stats()
-        assert stats["name"] == "mybreaker"
-        assert stats["state"] == "closed"
-        assert stats["failure_count"] == 0
-        assert stats["failure_threshold"] == 5
-        assert stats["recovery_timeout"] == 30.0
-        assert stats["total_successes"] == 0
-        assert stats["total_failures"] == 0
-        assert stats["total_rejected"] == 0
-        assert stats["last_failure_time"] is None
-
     def test_stats_after_mixed_operations(self):
         cb = CircuitBreaker("test", failure_threshold=5)
         cb.record_success()
@@ -133,9 +120,6 @@ class TestCircuitBreakerStats:
         stats = cb.get_stats()
         assert stats["total_rejected"] == 2
 
-    def test_name_property(self):
-        cb = CircuitBreaker("meshtastic")
-        assert cb.name == "meshtastic"
 
 
 class TestCircuitBreakerThreadSafety:

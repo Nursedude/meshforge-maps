@@ -64,31 +64,18 @@ class TestPluginStateTransitions:
         lc.transition_to(PluginState.ACTIVATING)
         assert lc.state == PluginState.ACTIVATING
 
-    def test_invalid_loaded_to_active(self):
+    @pytest.mark.parametrize("setup_transitions,invalid_target", [
+        ([], PluginState.ACTIVE),
+        ([], PluginState.DEACTIVATING),
+        ([PluginState.ACTIVATING, PluginState.ACTIVE], PluginState.ACTIVATING),
+        ([PluginState.ACTIVATING, PluginState.ACTIVE, PluginState.DEACTIVATING, PluginState.STOPPED], PluginState.ACTIVE),
+    ])
+    def test_invalid_transitions(self, setup_transitions, invalid_target):
         lc = PluginLifecycle()
+        for state in setup_transitions:
+            lc.transition_to(state)
         with pytest.raises(InvalidTransitionError):
-            lc.transition_to(PluginState.ACTIVE)
-
-    def test_invalid_loaded_to_deactivating(self):
-        lc = PluginLifecycle()
-        with pytest.raises(InvalidTransitionError):
-            lc.transition_to(PluginState.DEACTIVATING)
-
-    def test_invalid_active_to_activating(self):
-        lc = PluginLifecycle()
-        lc.transition_to(PluginState.ACTIVATING)
-        lc.transition_to(PluginState.ACTIVE)
-        with pytest.raises(InvalidTransitionError):
-            lc.transition_to(PluginState.ACTIVATING)
-
-    def test_invalid_stopped_to_active(self):
-        lc = PluginLifecycle()
-        lc.transition_to(PluginState.ACTIVATING)
-        lc.transition_to(PluginState.ACTIVE)
-        lc.transition_to(PluginState.DEACTIVATING)
-        lc.transition_to(PluginState.STOPPED)
-        with pytest.raises(InvalidTransitionError):
-            lc.transition_to(PluginState.ACTIVE)
+            lc.transition_to(invalid_target)
 
 
 class TestPluginLifecycleUptime:
