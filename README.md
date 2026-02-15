@@ -6,7 +6,7 @@
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-779%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-879%20passing-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
 A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
@@ -544,7 +544,7 @@ flowchart LR
 ```bash
 pip install pytest
 pytest tests/ -v
-# 779 tests covering:
+# 879 tests covering:
 #   - Base helpers, config, coordinate validation
 #   - All 4 collectors (Meshtastic, Reticulum, HamClock, AREDN)
 #   - Aggregator deduplication, MQTT node store, topology links
