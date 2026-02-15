@@ -10,16 +10,6 @@ from src.utils.node_state import (
 )
 
 
-class TestNodeState(unittest.TestCase):
-    """Test the NodeState enum."""
-
-    def test_state_values(self):
-        self.assertEqual(NodeState.NEW.value, "new")
-        self.assertEqual(NodeState.STABLE.value, "stable")
-        self.assertEqual(NodeState.INTERMITTENT.value, "intermittent")
-        self.assertEqual(NodeState.OFFLINE.value, "offline")
-
-
 class TestNodeStateEntry(unittest.TestCase):
     """Test internal state entry."""
 

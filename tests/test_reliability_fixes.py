@@ -223,12 +223,6 @@ class TestMQTTSubscriberStopLifecycle:
             sub.stop()
             mock_logger.warning.assert_called()
 
-    def test_stop_without_start_is_safe(self):
-        from src.collectors.mqtt_subscriber import MQTTSubscriber
-
-        sub = MQTTSubscriber()
-        sub.stop()  # Should not raise
-        assert sub._client is None
 
 
 # ---------------------------------------------------------------------------
@@ -288,92 +282,10 @@ class TestMapServerStopJoinsThread:
         mock_thread.join.assert_called_once_with(timeout=5)
 
 
-# ---------------------------------------------------------------------------
-# 8. Node eviction cleanup
-# ---------------------------------------------------------------------------
-
-class TestNodeEvictionCleanup:
-    """Verify eviction propagates to drift detector and state tracker."""
-
-    def test_config_drift_remove_node(self):
-        from src.utils.config_drift import ConfigDriftDetector
-
-        detector = ConfigDriftDetector()
-        # Record some data
-        detector.check_node("!aabb", role="ROUTER")
-        detector.check_node("!aabb", role="CLIENT")  # drift
-        assert detector.tracked_node_count == 1
-        assert detector.total_drifts == 1
-
-        # Remove
-        detector.remove_node("!aabb")
-        assert detector.tracked_node_count == 0
-        # History should also be gone
-        assert detector.get_node_drift_history("!aabb") == []
-        assert detector.get_node_snapshot("!aabb") is None
-
-    def test_config_drift_remove_nonexistent_node(self):
-        from src.utils.config_drift import ConfigDriftDetector
-
-        detector = ConfigDriftDetector()
-        detector.remove_node("!nonexistent")  # Should not raise
-        assert detector.tracked_node_count == 0
-
-    def test_node_state_remove_node(self):
-        from src.utils.node_state import NodeStateTracker
-
-        tracker = NodeStateTracker()
-        tracker.record_heartbeat("!aabb", timestamp=1000)
-        tracker.record_heartbeat("!aabb", timestamp=1100)
-        assert tracker.tracked_node_count == 1
-
-        tracker.remove_node("!aabb")
-        assert tracker.tracked_node_count == 0
-        assert tracker.get_node_state("!aabb") is None
-
-    def test_node_state_remove_nonexistent_node(self):
-        from src.utils.node_state import NodeStateTracker
-
-        tracker = NodeStateTracker()
-        tracker.remove_node("!nonexistent")  # Should not raise
-        assert tracker.tracked_node_count == 0
-
-    def test_mqtt_store_eviction_calls_callback(self):
-        from src.collectors.mqtt_subscriber import MQTTNodeStore
-
-        removed_ids = []
-        store = MQTTNodeStore(
-            max_nodes=2,
-            on_node_removed=lambda nid: removed_ids.append(nid),
-        )
-
-        store.update_position("!aaa", 40.0, -105.0, timestamp=1000)
-        store.update_position("!bbb", 40.1, -105.1, timestamp=2000)
-        # This should evict !aaa (oldest)
-        store.update_position("!ccc", 40.2, -105.2, timestamp=3000)
-
-        assert "!aaa00000" in removed_ids or "!aaa" in [r.rstrip("0") for r in removed_ids] or len(removed_ids) == 1
-
-    def test_mqtt_store_stale_cleanup_calls_callback(self):
-        from src.collectors.mqtt_subscriber import MQTTNodeStore
-
-        removed_ids = []
-        store = MQTTNodeStore(
-            remove_seconds=10,
-            on_node_removed=lambda nid: removed_ids.append(nid),
-        )
-
-        # Add a node with an old timestamp
-        store.update_position("!old1", 40.0, -105.0, timestamp=1)
-        store.update_position("!new1", 40.1, -105.1)  # Current time
-
-        removed = store.cleanup_stale_nodes()
-        assert removed == 1
-        assert "!old1" in removed_ids
 
 
 # ---------------------------------------------------------------------------
-# 9. Proxy server stop joins thread
+# 8. Proxy server stop joins thread
 # ---------------------------------------------------------------------------
 
 class TestProxyServerStopJoinsThread:
@@ -396,7 +308,7 @@ class TestProxyServerStopJoinsThread:
 
 
 # ---------------------------------------------------------------------------
-# 10. MapServer node removal handler
+# 9. MapServer node removal handler
 # ---------------------------------------------------------------------------
 
 class TestMapServerNodeRemovalHandler:

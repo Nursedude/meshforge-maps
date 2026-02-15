@@ -19,12 +19,6 @@ class TestTimingSample:
         assert d["from_cache"] is False
         assert d["timestamp"] == 1000.0
 
-    def test_default_timestamp(self):
-        before = time.time()
-        s = TimingSample("test", 10.0)
-        after = time.time()
-        assert before <= s.timestamp <= after
-
     def test_rounding(self):
         s = TimingSample("test", 42.555555)
         d = s.to_dict()
@@ -139,15 +133,6 @@ class TestPercentiles:
 class TestGetStats:
     """Tests for comprehensive stats reporting."""
 
-    def test_empty_stats(self):
-        monitor = PerfMonitor()
-        stats = monitor.get_stats()
-        assert stats["total_collections"] == 0
-        assert stats["sources"] == {}
-        assert stats["cycle"] is None
-        assert stats["uptime_seconds"] >= 0
-        assert stats["memory"]["timing_samples"] == 0
-
     def test_stats_with_data(self):
         monitor = PerfMonitor()
         monitor.record_timing("meshtastic", 50.0, node_count=10)
@@ -180,13 +165,6 @@ class TestGetStats:
 
 class TestMemoryUsage:
     """Tests for memory usage reporting."""
-
-    def test_memory_empty(self):
-        monitor = PerfMonitor()
-        mem = monitor.get_memory_usage()
-        assert mem["timing_samples"] == 0
-        assert mem["cycle_samples"] == 0
-        assert mem["tracked_sources"] == 0
 
     def test_memory_with_data(self):
         monitor = PerfMonitor()

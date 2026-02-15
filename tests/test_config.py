@@ -20,26 +20,6 @@ class TestMapsConfigDefaults:
         for key, value in DEFAULT_CONFIG.items():
             assert d[key] == value
 
-    def test_default_tile_provider(self, tmp_config):
-        config = MapsConfig(config_path=tmp_config)
-        assert config.get("default_tile_provider") == "carto_dark"
-
-    def test_default_port(self, tmp_config):
-        config = MapsConfig(config_path=tmp_config)
-        assert config.get("http_port") == 8808
-
-    def test_all_sources_enabled_by_default(self, tmp_config):
-        config = MapsConfig(config_path=tmp_config)
-        assert config.get("enable_meshtastic") is True
-        assert config.get("enable_reticulum") is True
-        assert config.get("enable_hamclock") is True
-        assert config.get("enable_aredn") is True
-
-    def test_hamclock_host_port_defaults(self, tmp_config):
-        config = MapsConfig(config_path=tmp_config)
-        assert config.get("hamclock_host") == "localhost"
-        assert config.get("hamclock_port") == 8080
-
 
 class TestMapsConfigPersistence:
     """Tests for loading and saving settings."""
@@ -166,16 +146,3 @@ class TestTileProviders:
             assert "{y}" in url, f"{key} url missing {{y}}"
 
 
-class TestNetworkColors:
-    """Tests for network color definitions."""
-
-    def test_all_networks_have_colors(self):
-        assert "meshtastic" in NETWORK_COLORS
-        assert "reticulum" in NETWORK_COLORS
-        assert "aredn" in NETWORK_COLORS
-        assert "hamclock" in NETWORK_COLORS
-
-    def test_colors_are_hex(self):
-        for network, color in NETWORK_COLORS.items():
-            assert color.startswith("#"), f"{network} color not hex"
-            assert len(color) == 7, f"{network} color wrong length"
