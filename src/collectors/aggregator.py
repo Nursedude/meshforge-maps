@@ -16,7 +16,6 @@ from .hamclock_collector import HamClockCollector
 from .meshtastic_collector import MeshtasticCollector
 from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
 from .reticulum_collector import ReticulumCollector
-from ..utils.circuit_breaker import CircuitBreakerRegistry
 from ..utils.event_bus import EventBus
 from ..utils.perf_monitor import PerfMonitor
 
@@ -44,12 +43,6 @@ class DataAggregator:
         # Performance monitor for collection timing
         self._perf_monitor = PerfMonitor()
 
-        # Circuit breaker registry for per-collector failure protection
-        self._circuit_breaker_registry = CircuitBreakerRegistry(
-            default_failure_threshold=5,
-            default_recovery_timeout=60.0,
-        )
-
         retries = DEFAULT_COLLECTOR_RETRIES
 
         # Initialize live MQTT subscriber for Meshtastic
@@ -76,17 +69,11 @@ class DataAggregator:
                 cache_ttl_seconds=cache_ttl,
                 mqtt_store=mqtt_store,
             )
-            self._collectors["meshtastic"].circuit_breaker = (
-                self._circuit_breaker_registry.get("meshtastic")
-            )
             self._collectors["meshtastic"]._max_retries = retries
 
         if config.get("enable_reticulum", True):
             self._collectors["reticulum"] = ReticulumCollector(
                 cache_ttl_seconds=cache_ttl
-            )
-            self._collectors["reticulum"].circuit_breaker = (
-                self._circuit_breaker_registry.get("reticulum")
             )
             self._collectors["reticulum"]._max_retries = retries
 
@@ -97,17 +84,11 @@ class DataAggregator:
                 openhamclock_port=config.get("openhamclock_port", 3000),
                 cache_ttl_seconds=cache_ttl,
             )
-            self._collectors["hamclock"].circuit_breaker = (
-                self._circuit_breaker_registry.get("hamclock")
-            )
             self._collectors["hamclock"]._max_retries = retries
 
         if config.get("enable_aredn", True):
             self._collectors["aredn"] = AREDNCollector(
                 cache_ttl_seconds=cache_ttl
-            )
-            self._collectors["aredn"].circuit_breaker = (
-                self._circuit_breaker_registry.get("aredn")
             )
             self._collectors["aredn"]._max_retries = retries
 
@@ -277,16 +258,8 @@ class DataAggregator:
         return self._event_bus
 
     @property
-    def circuit_breaker_registry(self) -> CircuitBreakerRegistry:
-        return self._circuit_breaker_registry
-
-    @property
     def perf_monitor(self) -> PerfMonitor:
         return self._perf_monitor
-
-    def get_circuit_breaker_states(self) -> Dict[str, Any]:
-        """Return circuit breaker stats for all registered sources."""
-        return self._circuit_breaker_registry.get_all_states()
 
     def get_source_health(self) -> Dict[str, Any]:
         """Return per-source health info for all collectors."""

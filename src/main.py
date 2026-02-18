@@ -310,12 +310,6 @@ class MeshForgeMapsPlugin(Plugin):
         spots = data.get("dxspots")
         if spots:
             lines.append(f"DX Spots: {len(spots)} active")
-        # Circuit breaker state
-        cb_states = self._server.aggregator.get_circuit_breaker_states()
-        hc_state = cb_states.get("hamclock", {})
-        if hc_state:
-            lines.append(f"Circuit Breaker: {hc_state.get('state', '?')} "
-                         f"(failures: {hc_state.get('failure_count', 0)})")
         return "\n".join(lines)
 
     def _on_node_discovered(self, data: Any) -> None:

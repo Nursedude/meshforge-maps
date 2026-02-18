@@ -176,7 +176,6 @@ class TuiApp:
                 new_cache["node_states_summary"] = self._client.node_states_summary()
                 new_cache["alert_summary"] = self._client.alert_summary()
                 new_cache["analytics_summary"] = self._client.analytics_summary()
-                new_cache["core_health"] = self._client.circuit_breaker_states()
             elif tab == 1:  # Nodes
                 new_cache["nodes"] = self._client.nodes_geojson()
                 new_cache["all_node_health"] = self._client.all_node_health()

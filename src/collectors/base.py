@@ -11,12 +11,9 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..utils.reconnect import ReconnectStrategy
-
-if TYPE_CHECKING:
-    from ..utils.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -163,8 +160,8 @@ def deduplicate_features(
 class BaseCollector(ABC):
     """Abstract base for data source collectors.
 
-    Supports optional circuit breaker integration and retry with
-    exponential backoff before falling back to stale cache.
+    Supports retry with exponential backoff before falling back to
+    stale cache.
     """
 
     source_name: str = "unknown"
@@ -172,14 +169,12 @@ class BaseCollector(ABC):
     def __init__(
         self,
         cache_ttl_seconds: int = 900,
-        circuit_breaker: Optional["CircuitBreaker"] = None,
         max_retries: int = 0,
     ):
         self._cache_lock = threading.Lock()
         self._cache: Optional[Dict[str, Any]] = None
         self._cache_time: float = 0
         self._cache_ttl = cache_ttl_seconds
-        self._circuit_breaker = circuit_breaker
         self._max_retries = max_retries
         self._last_error: Optional[str] = None
         self._last_error_time: float = 0
@@ -187,37 +182,16 @@ class BaseCollector(ABC):
         self._total_collections: int = 0
         self._total_errors: int = 0
 
-    @property
-    def circuit_breaker(self) -> Optional["CircuitBreaker"]:
-        return self._circuit_breaker
-
-    @circuit_breaker.setter
-    def circuit_breaker(self, cb: Optional["CircuitBreaker"]) -> None:
-        self._circuit_breaker = cb
-
     def collect(self) -> Dict[str, Any]:
         """Collect data, using cache if fresh enough.
 
-        If a circuit breaker is attached and OPEN, skips the fetch entirely
-        and returns cached data. Retries with exponential backoff before
-        falling back to stale cache.
+        Retries with exponential backoff before falling back to stale cache.
         """
         now = time.time()
         with self._cache_lock:
             if self._cache and (now - self._cache_time) < self._cache_ttl:
                 logger.debug("%s: returning cached data", self.source_name)
                 return self._cache
-
-        # Circuit breaker check: skip fetch if circuit is open
-        cb = self._circuit_breaker
-        if cb and not cb.can_execute():
-            logger.debug(
-                "%s: circuit breaker OPEN, skipping fetch", self.source_name
-            )
-            with self._cache_lock:
-                if self._cache:
-                    return self._cache
-            return make_feature_collection([], self.source_name)
 
         # Retry loop with backoff (single strategy instance preserves escalating delays)
         last_error: Optional[Exception] = None
@@ -233,8 +207,6 @@ class BaseCollector(ABC):
                 self._last_success_time = time.time()
                 self._total_collections += 1
                 count = len(data.get("features", []))
-                if cb:
-                    cb.record_success()
                 if attempt > 0:
                     logger.info(
                         "%s: collected %d nodes (after %d retries)",
@@ -261,8 +233,6 @@ class BaseCollector(ABC):
                     time.sleep(delay)
 
         # All attempts failed
-        if cb:
-            cb.record_failure()
         self._last_error = str(last_error) if last_error else "unknown error"
         self._last_error_time = time.time()
         self._total_errors += 1
