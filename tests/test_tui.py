@@ -139,21 +139,21 @@ class TestColorHelpers:
         # We can't fully test curses color pairs without a terminal,
         # but we can verify the function doesn't crash with valid labels.
         from src.tui.app import health_color
-        with patch("src.tui.app.curses") as mock_curses:
+        with patch("src.tui.helpers.curses") as mock_curses:
             mock_curses.color_pair.return_value = 42
             result = health_color("excellent")
             assert result == 42
 
     def test_severity_color_returns_int(self):
         from src.tui.app import severity_color
-        with patch("src.tui.app.curses") as mock_curses:
+        with patch("src.tui.helpers.curses") as mock_curses:
             mock_curses.color_pair.return_value = 99
             result = severity_color("critical")
             assert result == 99
 
     def test_health_color_unknown_label(self):
         from src.tui.app import health_color
-        with patch("src.tui.app.curses") as mock_curses:
+        with patch("src.tui.helpers.curses") as mock_curses:
             mock_curses.color_pair.return_value = 0
             result = health_color("nonexistent")
             # Falls through to CP_NORMAL = 0
@@ -161,7 +161,7 @@ class TestColorHelpers:
 
     def test_severity_color_unknown_severity(self):
         from src.tui.app import severity_color
-        with patch("src.tui.app.curses") as mock_curses:
+        with patch("src.tui.helpers.curses") as mock_curses:
             mock_curses.color_pair.return_value = 0
             result = severity_color("unknown")
             mock_curses.color_pair.assert_called_with(0)
@@ -646,7 +646,7 @@ class TestTopologyTab:
 
     def test_quality_color_helper(self):
         from src.tui.app import _quality_color
-        with patch("src.tui.app.curses") as mock_curses:
+        with patch("src.tui.helpers.curses") as mock_curses:
             mock_curses.color_pair.return_value = 42
             result = _quality_color("excellent")
             assert result == 42
@@ -691,7 +691,7 @@ class TestEventsTab:
 
     def test_event_type_color_helper(self):
         from src.tui.app import _event_type_color
-        with patch("src.tui.app.curses") as mock_curses:
+        with patch("src.tui.helpers.curses") as mock_curses:
             mock_curses.color_pair.return_value = 5
             result = _event_type_color("alert.fired")
             assert result == 5
@@ -759,6 +759,16 @@ class TestDrawMethods:
         app._stdscr = win
         return app
 
+    def _mock_curses(self):
+        """Create a pre-configured curses mock."""
+        mc = MagicMock()
+        mc.color_pair.return_value = 0
+        mc.A_BOLD = 1
+        mc.A_UNDERLINE = 2
+        mc.A_DIM = 4
+        mc.A_REVERSE = 8
+        return mc
+
     def test_draw_node_detail_with_data(self):
         app = self._make_app_with_screen()
         app._detail_node_id = "!abc123"
@@ -792,11 +802,9 @@ class TestDrawMethods:
                  "severity": "warning", "timestamp": 1700000000},
             ]},
         }
-        with patch("src.tui.app.curses") as mc:
-            mc.color_pair.return_value = 0
-            mc.A_BOLD = 1
-            mc.A_UNDERLINE = 2
-            mc.A_DIM = 4
+        mc = self._mock_curses()
+        with patch("src.tui.tabs.nodes.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
             # Should not raise
             app._draw_node_detail(1, 38, 120, cache)
 
@@ -812,11 +820,9 @@ class TestDrawMethods:
             "detail_alerts": None,
             "config_drift": None,
         }
-        with patch("src.tui.app.curses") as mc:
-            mc.color_pair.return_value = 0
-            mc.A_BOLD = 1
-            mc.A_UNDERLINE = 2
-            mc.A_DIM = 4
+        mc = self._mock_curses()
+        with patch("src.tui.tabs.nodes.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
             app._draw_node_detail(1, 38, 120, cache)
 
     def test_draw_topology_with_links(self):
@@ -838,30 +844,24 @@ class TestDrawMethods:
                 ]
             },
         }
-        with patch("src.tui.app.curses") as mc:
-            mc.color_pair.return_value = 0
-            mc.A_BOLD = 1
-            mc.A_UNDERLINE = 2
-            mc.A_DIM = 4
+        mc = self._mock_curses()
+        with patch("src.tui.tabs.topology.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
             app._draw_topology(1, 38, 120, cache)
 
     def test_draw_topology_empty(self):
         app = self._make_app_with_screen()
         cache = {"topo": None, "nodes": {"features": []}}
-        with patch("src.tui.app.curses") as mc:
-            mc.color_pair.return_value = 0
-            mc.A_BOLD = 1
-            mc.A_UNDERLINE = 2
-            mc.A_DIM = 4
+        mc = self._mock_curses()
+        with patch("src.tui.tabs.topology.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
             app._draw_topology(1, 38, 120, cache)
 
     def test_draw_events_empty(self):
         app = self._make_app_with_screen()
-        with patch("src.tui.app.curses") as mc:
-            mc.color_pair.return_value = 0
-            mc.A_BOLD = 1
-            mc.A_UNDERLINE = 2
-            mc.A_DIM = 4
+        mc = self._mock_curses()
+        with patch("src.tui.tabs.events.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
             app._draw_events(1, 38, 120)
 
     def test_draw_events_with_data(self):
@@ -874,11 +874,9 @@ class TestDrawMethods:
              "source": "engine", "node_id": "!def",
              "data": {"severity": "critical", "message": "Low battery"}},
         ]
-        with patch("src.tui.app.curses") as mc:
-            mc.color_pair.return_value = 0
-            mc.A_BOLD = 1
-            mc.A_UNDERLINE = 2
-            mc.A_DIM = 4
+        mc = self._mock_curses()
+        with patch("src.tui.tabs.events.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
             app._draw_events(1, 38, 120)
 
 
@@ -1020,11 +1018,13 @@ class TestEventsPauseResume:
              "source": "mqtt", "node_id": "!abc",
              "data": {"lat": 40.0}},
         ]
-        with patch("src.tui.app.curses") as mc:
-            mc.color_pair.return_value = 0
-            mc.A_BOLD = 1
-            mc.A_UNDERLINE = 2
-            mc.A_DIM = 4
+        mc = MagicMock()
+        mc.color_pair.return_value = 0
+        mc.A_BOLD = 1
+        mc.A_UNDERLINE = 2
+        mc.A_DIM = 4
+        with patch("src.tui.tabs.events.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
             app._draw_events(1, 38, 120)
 
     def test_draw_events_with_type_filter(self):
@@ -1038,11 +1038,13 @@ class TestEventsPauseResume:
              "source": "engine", "node_id": "!def",
              "data": {"severity": "critical"}},
         ]
-        with patch("src.tui.app.curses") as mc:
-            mc.color_pair.return_value = 0
-            mc.A_BOLD = 1
-            mc.A_UNDERLINE = 2
-            mc.A_DIM = 4
+        mc = MagicMock()
+        mc.color_pair.return_value = 0
+        mc.A_BOLD = 1
+        mc.A_UNDERLINE = 2
+        mc.A_DIM = 4
+        with patch("src.tui.tabs.events.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
             app._draw_events(1, 38, 120)
 
     def test_p_key_only_on_events_tab(self):
