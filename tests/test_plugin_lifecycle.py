@@ -1,16 +1,15 @@
-"""Tests for PluginLifecycle state machine."""
+"""Tests for PluginLifecycle state tracker."""
 
 import pytest
 
 from src.utils.plugin_lifecycle import (
-    InvalidTransitionError,
     PluginLifecycle,
     PluginState,
 )
 
 
 class TestPluginStateTransitions:
-    """Tests for valid and invalid state transitions."""
+    """Tests for state transitions."""
 
     def test_initial_state_is_loaded(self):
         lc = PluginLifecycle()
@@ -64,18 +63,11 @@ class TestPluginStateTransitions:
         lc.transition_to(PluginState.ACTIVATING)
         assert lc.state == PluginState.ACTIVATING
 
-    @pytest.mark.parametrize("setup_transitions,invalid_target", [
-        ([], PluginState.ACTIVE),
-        ([], PluginState.DEACTIVATING),
-        ([PluginState.ACTIVATING, PluginState.ACTIVE], PluginState.ACTIVATING),
-        ([PluginState.ACTIVATING, PluginState.ACTIVE, PluginState.DEACTIVATING, PluginState.STOPPED], PluginState.ACTIVE),
-    ])
-    def test_invalid_transitions(self, setup_transitions, invalid_target):
+    def test_any_transition_accepted(self):
+        """Simplified lifecycle accepts any transition."""
         lc = PluginLifecycle()
-        for state in setup_transitions:
-            lc.transition_to(state)
-        with pytest.raises(InvalidTransitionError):
-            lc.transition_to(invalid_target)
+        lc.transition_to(PluginState.ACTIVE)
+        assert lc.state == PluginState.ACTIVE
 
 
 class TestPluginLifecycleUptime:
@@ -140,14 +132,11 @@ class TestPluginLifecycleRecordError:
         assert lc.state == PluginState.ERROR
         assert lc.last_error == "connection refused"
 
-    def test_record_error_from_invalid_state_logs_warning(self):
+    def test_record_error_from_any_state(self):
         lc = PluginLifecycle()
-        # LOADED -> ERROR is not allowed in transitions
-        # But record_error should handle this gracefully
         lc.record_error("some error")
         assert lc.last_error == "some error"
-        # State should still be LOADED (can't transition)
-        assert lc.state == PluginState.LOADED
+        assert lc.state == PluginState.ERROR
 
     def test_error_cleared_on_valid_transition(self):
         lc = PluginLifecycle()

@@ -13,7 +13,6 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-    <script src="https://unpkg.com/d3@7/dist/d3.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -1823,27 +1822,41 @@
             map.removeLayer(terminatorLayer);
         }
 
-        // Calculate terminator polygon from subsolar point
-        const subLat = termData.subsolar_lat;
+        // Calculate terminator polygon from subsolar point using proper
+        // spherical geometry that accounts for solar declination year-round.
+        const subLat = termData.subsolar_lat;  // solar declination
         const subLon = termData.subsolar_lon;
         const points = [];
 
-        // Build the night-side polygon
+        const decRad = subLat * Math.PI / 180;
+
+        // For each longitude, compute the latitude where the solar zenith
+        // angle equals 90 degrees (i.e., the sun is exactly on the horizon).
+        // Formula: cos(zen) = sin(lat)*sin(dec) + cos(lat)*cos(dec)*cos(HA)
+        // At zen=90: 0 = sin(lat)*sin(dec) + cos(lat)*cos(dec)*cos(HA)
+        // Solving for lat: lat = atan(-cos(HA) * cos(dec) / sin(dec))
+        //   simplified:    lat = atan(-cos(HA) / tan(dec))
+        // This is the standard terminator formula valid for all seasons.
         for (let lng = -180; lng <= 180; lng += 2) {
-            const lngRad = lng * Math.PI / 180;
-            const subLatRad = subLat * Math.PI / 180;
-            const subLonRad = subLon * Math.PI / 180;
+            const ha = (lng - subLon) * Math.PI / 180;  // hour angle
 
-            // Solar zenith angle = 90 deg at terminator
-            // latitude where sun is at horizon for this longitude
-            const dLng = (lng - subLon) * Math.PI / 180;
-            const terminatorLat = Math.atan(-Math.cos(dLng) / Math.tan(subLatRad)) * 180 / Math.PI;
+            // Guard against near-equinox singularity (dec ~0)
+            let terminatorLat;
+            if (Math.abs(decRad) < 0.001) {
+                // At equinox the terminator is a great circle through the poles
+                terminatorLat = -Math.cos(ha) > 0 ? 90 : -90;
+                // Smooth to avoid discontinuity
+                terminatorLat = Math.atan2(-Math.cos(ha), 0.001) * 180 / Math.PI;
+            } else {
+                terminatorLat = Math.atan(-Math.cos(ha) / Math.tan(decRad)) * 180 / Math.PI;
+            }
 
+            // Clamp to valid lat range (handles polar day/night edge cases)
+            terminatorLat = Math.max(-89.99, Math.min(89.99, terminatorLat));
             points.push([terminatorLat, lng]);
         }
 
-        // Close the polygon on the dark side
-        // Determine which pole is dark
+        // Determine which pole is dark (opposite of subsolar latitude)
         const darkPole = subLat > 0 ? -90 : 90;
         const nightPoly = [];
 
@@ -2710,7 +2723,7 @@
     setInterval(function() {
         loadNodeData();
         if (showTopology) loadTopologyData();
-    }, 5 * 60 * 1000); // Refresh every 5 minutes
+    }, 60 * 1000); // Refresh every 60 seconds (WebSocket fallback)
 
     // Periodic health check (every 2 minutes)
     setInterval(checkDataHealth, 2 * 60 * 1000);

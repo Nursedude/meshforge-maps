@@ -33,8 +33,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_BROKER = "mqtt.meshtastic.org"
 DEFAULT_PORT = 1883
 DEFAULT_TOPIC = "msh/#"
-DEFAULT_KEY = "AQ=="  # Default Meshtastic encryption key (base64)
-
 # Portnum constants (from meshtastic protobuf)
 PORTNUM_POSITION = 3
 PORTNUM_NODEINFO = 4
@@ -154,14 +152,13 @@ class MQTTNodeStore:
         self._remove_seconds = remove_seconds
         self._max_nodes = max_nodes
         self._on_node_removed = on_node_removed
-        self._pending_removal_id: Optional[str] = None
 
     def update_position(self, node_id: str, lat: float, lon: float,
                         altitude: Optional[int] = None, timestamp: Optional[int] = None) -> None:
+        evicted_id = None
         with self._lock:
-            self._pending_removal_id = None
             if node_id not in self._nodes and len(self._nodes) >= self._max_nodes:
-                self._evict_oldest_locked()
+                evicted_id = self._evict_oldest_locked()
             node = self._nodes.setdefault(node_id, {"id": node_id})
             node["latitude"] = lat
             node["longitude"] = lon
@@ -170,7 +167,6 @@ class MQTTNodeStore:
             node["last_seen"] = timestamp or int(time.time())
             node["is_online"] = True
         # Invoke removal callback outside lock to prevent deadlock
-        evicted_id = self._pending_removal_id
         cb = self._on_node_removed
         if evicted_id and cb:
             try:
@@ -379,18 +375,20 @@ class MQTTNodeStore:
             logger.debug("Cleaned up %d stale nodes from MQTT store", len(removed_ids))
         return len(removed_ids)
 
-    def _evict_oldest_locked(self) -> None:
-        """Evict the oldest node to make room. Must be called with lock held."""
+    def _evict_oldest_locked(self) -> Optional[str]:
+        """Evict the oldest node to make room. Must be called with lock held.
+
+        Returns the evicted node ID, or None if no eviction occurred.
+        """
         if not self._nodes:
-            return
+            return None
         oldest_id = min(
             self._nodes,
             key=lambda nid: self._nodes[nid].get("last_seen", 0),
         )
         del self._nodes[oldest_id]
         self._neighbors.pop(oldest_id, None)
-        # Store callback + id for invocation outside lock by caller
-        self._pending_removal_id = oldest_id
+        return oldest_id
 
 
 class MQTTSubscriber:
@@ -410,6 +408,7 @@ class MQTTSubscriber:
         topic: str = DEFAULT_TOPIC,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        tls: Optional[bool] = None,
         node_store: Optional[MQTTNodeStore] = None,
         on_node_update: Optional[Callable] = None,
         event_bus: Optional[Any] = None,
@@ -419,6 +418,8 @@ class MQTTSubscriber:
         self._topic = topic
         self._username = username
         self._password = password
+        # Default to TLS when credentials are provided (protect passwords)
+        self._tls = tls if tls is not None else (username is not None)
         self._store = node_store or MQTTNodeStore()
         self._on_node_update = on_node_update
         self._event_bus = event_bus
@@ -465,6 +466,16 @@ class MQTTSubscriber:
             # Set credentials for private broker (upstream: private MQTT support)
             if self._username:
                 self._client.username_pw_set(self._username, self._password or "")
+
+            # Enable TLS for encrypted broker connections
+            if self._tls:
+                try:
+                    import ssl
+                    self._client.tls_set(cert_reqs=ssl.CERT_REQUIRED,
+                                         tls_version=ssl.PROTOCOL_TLS_CLIENT)
+                    logger.info("MQTT TLS enabled for %s:%d", self._broker, self._port)
+                except Exception as e:
+                    logger.warning("MQTT TLS setup failed: %s (continuing without TLS)", e)
 
             self._client.on_connect = self._on_connect
             self._client.on_message = self._on_message
@@ -670,7 +681,9 @@ class MQTTSubscriber:
         lat = pos.latitude_i / 1e7 if pos.latitude_i != 0 else 0.0
         lon = pos.longitude_i / 1e7 if pos.longitude_i != 0 else 0.0
 
-        if lat is not None and lon is not None and (-90 <= lat <= 90) and (-180 <= lon <= 180):
+        if (lat is not None and lon is not None
+                and (-90 <= lat <= 90) and (-180 <= lon <= 180)
+                and not (abs(lat) < 0.01 and abs(lon) < 0.01)):
             alt = _safe_int(pos.altitude, -500, 100000) if pos.altitude != 0 else 0
             self._store.update_position(node_id, lat, lon, altitude=alt)
             self._notify_update(node_id, "position", lat=lat, lon=lon)

@@ -16,6 +16,7 @@ import os
 import re
 import threading
 import time
+from dataclasses import dataclass, field
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -59,43 +60,81 @@ def _validate_node_id(node_id: str) -> bool:
     return bool(_NODE_ID_RE.match(node_id))
 
 
+@dataclass
+class MapServerContext:
+    """Typed dependency container for MapRequestHandler.
+
+    Replaces the previous pattern of monkey-patching attributes onto the
+    stdlib HTTPServer instance with ``# type: ignore[attr-defined]``.
+    """
+
+    aggregator: Optional[DataAggregator] = None
+    config: Optional[MapsConfig] = None
+    web_dir: Optional[str] = None
+    start_time: float = field(default_factory=time.time)
+    node_history: Optional[NodeHistoryDB] = None
+    shared_health: Optional[SharedHealthStateReader] = None
+    config_drift: Optional[ConfigDriftDetector] = None
+    node_state: Optional[NodeStateTracker] = None
+    health_scorer: Optional[NodeHealthScorer] = None
+    alert_engine: Optional[AlertEngine] = None
+    analytics: Optional[HistoricalAnalytics] = None
+    proxy: Optional[MeshtasticApiProxy] = None
+    ws_server: Optional[MapWebSocketServer] = None
+    api_key: Optional[str] = None
+
+
+class MeshForgeHTTPServer(HTTPServer):
+    """HTTPServer subclass with a typed context for dependency injection."""
+
+    def __init__(self, server_address: tuple, handler_class: type,
+                 context: Optional[MapServerContext] = None) -> None:
+        super().__init__(server_address, handler_class)
+        self.context = context or MapServerContext()
+
+
 class MapRequestHandler(SimpleHTTPRequestHandler):
     """HTTP request handler for MeshForge Maps.
 
-    Instance-level state is injected via the server reference rather than
-    class-level attributes, preventing multiple MapServer instances from
-    clobbering each other's state.
+    Dependencies are accessed via the typed ``server.context`` attribute
+    on the ``MeshForgeHTTPServer`` instance.
     """
 
+    server: MeshForgeHTTPServer  # type annotation for IDE support
+
+    @property
+    def _ctx(self) -> MapServerContext:
+        return self.server.context
+
     def _get_aggregator(self) -> Optional[DataAggregator]:
-        return getattr(self.server, "_mf_aggregator", None)
+        return self._ctx.aggregator
 
     def _get_config(self) -> Optional[MapsConfig]:
-        return getattr(self.server, "_mf_config", None)
+        return self._ctx.config
 
     def _get_web_dir(self) -> Optional[str]:
-        return getattr(self.server, "_mf_web_dir", None)
+        return self._ctx.web_dir
 
     def _get_node_history(self) -> Optional[NodeHistoryDB]:
-        return getattr(self.server, "_mf_node_history", None)
+        return self._ctx.node_history
 
     def _get_shared_health(self) -> Optional[SharedHealthStateReader]:
-        return getattr(self.server, "_mf_shared_health", None)
+        return self._ctx.shared_health
 
     def _get_config_drift(self) -> Optional[ConfigDriftDetector]:
-        return getattr(self.server, "_mf_config_drift", None)
+        return self._ctx.config_drift
 
     def _get_node_state(self) -> Optional[NodeStateTracker]:
-        return getattr(self.server, "_mf_node_state", None)
+        return self._ctx.node_state
 
     def _get_health_scorer(self) -> Optional[NodeHealthScorer]:
-        return getattr(self.server, "_mf_health_scorer", None)
+        return self._ctx.health_scorer
 
     def _get_alert_engine(self) -> Optional[AlertEngine]:
-        return getattr(self.server, "_mf_alert_engine", None)
+        return self._ctx.alert_engine
 
     def _get_analytics(self) -> Optional[HistoricalAnalytics]:
-        return getattr(self.server, "_mf_analytics", None)
+        return self._ctx.analytics
 
     # Route name -> method name mapping (built once, not per request)
     _ROUTE_TABLE = {
@@ -139,10 +178,31 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/export/analytics/ranking": "_serve_export_analytics_ranking",
     }
 
+    # Valid source names for /api/nodes/<source> endpoint
+    _VALID_SOURCES = {"meshtastic", "reticulum", "aredn", "hamclock", "mqtt"}
+
+    def _check_api_key(self) -> bool:
+        """Validate API key if one is configured. Returns True if authorized."""
+        api_key = self._ctx.api_key
+        if not api_key:
+            return True  # No API key configured -- all requests allowed
+        provided = self.headers.get("X-MeshForge-Key", "")
+        if provided == api_key:
+            return True
+        self._send_json({"error": "Unauthorized"}, 401)
+        return False
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         query = parse_qs(parsed.query)
+        # Store parsed query on handler for the duration of this request
+        # so handlers don't need to re-parse self.path
+        self._query = query
+
+        # API key authentication (skip for static files and map page)
+        if path.startswith("/api/") and not self._check_api_key():
+            return
 
         method_name = self._ROUTE_TABLE.get(path)
         handler = getattr(self, method_name) if method_name else None
@@ -196,7 +256,10 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             elif path.startswith("/api/nodes/"):
                 # /api/nodes/<source_name>
                 source = path.split("/")[-1]
-                self._serve_source_geojson(source)
+                if source not in self._VALID_SOURCES:
+                    self._send_json({"error": "Unknown source"}, 404)
+                else:
+                    self._serve_source_geojson(source)
             else:
                 # Serve static files from web directory
                 web_dir = self._get_web_dir()
@@ -271,7 +334,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         cfg = config.to_dict()
         cfg["network_colors"] = NETWORK_COLORS
         # Include WebSocket port so frontend can connect
-        ws_server = getattr(self.server, "_mf_ws_server", None)
+        ws_server = self._ctx.ws_server
         if ws_server:
             cfg["ws_port"] = ws_server.port
         self._send_json(cfg)
@@ -543,7 +606,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_proxy_stats(self) -> None:
         """Serve Meshtastic API proxy statistics."""
-        proxy = getattr(self.server, "_mf_proxy", None)
+        proxy = self._ctx.proxy
         if not proxy:
             self._send_json({"available": False, "status": "not_configured"})
             return
@@ -641,8 +704,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not engine:
             self._send_json({"error": "Alert engine not available"}, 503)
             return
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        query = self._query
         limit = int(_safe_query_param(query, "limit", "50") or "50")
         severity = _safe_query_param(query, "severity")
         node_id = _safe_query_param(query, "node_id")
@@ -686,8 +748,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        query = self._query
         since = _safe_query_param(query, "since")
         until = _safe_query_param(query, "until")
         bucket = _safe_query_param(query, "bucket", "3600")
@@ -708,8 +769,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        query = self._query
         since = _safe_query_param(query, "since")
         until = _safe_query_param(query, "until")
         try:
@@ -728,8 +788,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        query = self._query
         since = _safe_query_param(query, "since")
         limit_str = _safe_query_param(query, "limit", "50")
         try:
@@ -748,8 +807,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        query = self._query
         since = _safe_query_param(query, "since")
         try:
             since_ts = int(since) if since else None
@@ -764,8 +822,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        query = self._query
         bucket = _safe_query_param(query, "bucket", "3600")
         try:
             bucket_s = int(bucket) if bucket else 3600
@@ -806,8 +863,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not history:
             self._send_json({"error": "Node history not available"}, 503)
             return
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        query = self._query
         fmt = _safe_query_param(query, "format", "csv")
         limit = max(1, min(int(_safe_query_param(query, "limit", "5000") or "5000"), 50000))
 
@@ -837,8 +893,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not engine:
             self._send_json({"error": "Alert engine not available"}, 503)
             return
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        query = self._query
         fmt = _safe_query_param(query, "format", "csv")
         limit = max(1, min(int(_safe_query_param(query, "limit", "500") or "500"), 5000))
 
@@ -910,7 +965,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             mqtt_status = "connected" if aggregator.mqtt_subscriber._running.is_set() else "stopped"
             mqtt_nodes = aggregator.mqtt_subscriber.store.node_count
 
-        start_time = getattr(self.server, "_mf_start_time", None)
+        start_time = self._ctx.start_time
         uptime = int(time.time() - start_time) if start_time else None
 
         # Data age and staleness indicators (upstream improvement)
@@ -932,7 +987,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             circuit_breaker_states = aggregator.get_circuit_breaker_states()
 
         # WebSocket server stats
-        ws_server = getattr(self.server, "_mf_ws_server", None)
+        ws_server = self._ctx.ws_server
         websocket_stats = ws_server.stats if ws_server else None
 
         # Event bus stats
@@ -1082,22 +1137,24 @@ class MapServer:
         for offset in range(5):
             port = base_port + offset
             try:
-                self._server = HTTPServer(("127.0.0.1", port), MapRequestHandler)
-                # Attach instance state to the server object so handlers can
-                # access it via self.server without class-level mutation.
-                self._server._mf_aggregator = self._aggregator  # type: ignore[attr-defined]
-                self._server._mf_config = self._config  # type: ignore[attr-defined]
-                self._server._mf_web_dir = self._web_dir  # type: ignore[attr-defined]
-                self._server._mf_start_time = time.time()  # type: ignore[attr-defined]
-                self._server._mf_node_history = self._node_history  # type: ignore[attr-defined]
-                self._server._mf_shared_health = self._shared_health  # type: ignore[attr-defined]
-                self._server._mf_config_drift = self._config_drift  # type: ignore[attr-defined]
-                self._server._mf_node_state = self._node_state  # type: ignore[attr-defined]
-                self._server._mf_health_scorer = self._health_scorer  # type: ignore[attr-defined]
-                self._server._mf_alert_engine = self._alert_engine  # type: ignore[attr-defined]
-                self._server._mf_analytics = self._analytics  # type: ignore[attr-defined]
-                if self._proxy:
-                    self._server._mf_proxy = self._proxy  # type: ignore[attr-defined]
+                ctx = MapServerContext(
+                    aggregator=self._aggregator,
+                    config=self._config,
+                    web_dir=self._web_dir,
+                    start_time=time.time(),
+                    node_history=self._node_history,
+                    shared_health=self._shared_health,
+                    config_drift=self._config_drift,
+                    node_state=self._node_state,
+                    health_scorer=self._health_scorer,
+                    alert_engine=self._alert_engine,
+                    analytics=self._analytics,
+                    proxy=self._proxy,
+                    api_key=self._config.get("api_key"),
+                )
+                self._server = MeshForgeHTTPServer(
+                    ("127.0.0.1", port), MapRequestHandler, context=ctx,
+                )
 
                 self._thread = threading.Thread(
                     target=self._server.serve_forever,
@@ -1240,7 +1297,7 @@ class MapServer:
                 )
                 # Attach WS server ref so status handler can report stats
                 if self._server:
-                    self._server._mf_ws_server = self._ws_server  # type: ignore[attr-defined]
+                    self._server.context.ws_server = self._ws_server
                 return
         # All ports failed
         logger.info("WebSocket server not started (optional dependency or ports unavailable)")

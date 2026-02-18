@@ -208,6 +208,11 @@ class TuiApp:
                     self._error_msg = f"Cannot connect to {self._client.base_url}"
                 return
 
+            # Snapshot tab state under lock to avoid race with UI thread
+            with self._data_lock:
+                tab = self._active_tab
+                detail_nid = self._detail_node_id
+
             # Fetch data relevant to current tab (plus always fetch status)
             status = self._client.server_status()
             health = self._client.health_check()
@@ -222,9 +227,6 @@ class TuiApp:
                 "perf": perf,
                 "mqtt": mqtt,
             }
-
-            # Tab-specific data
-            tab = self._active_tab
             if tab == 0:  # Dashboard
                 new_cache["node_health_summary"] = self._client.node_health_summary()
                 new_cache["node_states_summary"] = self._client.node_states_summary()
@@ -236,11 +238,10 @@ class TuiApp:
                 new_cache["all_node_health"] = self._client.all_node_health()
                 new_cache["all_node_states"] = self._client.all_node_states()
                 # Fetch detail data if drilling into a node
-                nid = self._detail_node_id
-                if nid:
-                    new_cache["detail_health"] = self._client.node_health(nid)
-                    new_cache["detail_history"] = self._client.node_history(nid)
-                    new_cache["detail_alerts"] = self._client.node_alerts(nid)
+                if detail_nid:
+                    new_cache["detail_health"] = self._client.node_health(detail_nid)
+                    new_cache["detail_history"] = self._client.node_history(detail_nid)
+                    new_cache["detail_alerts"] = self._client.node_alerts(detail_nid)
                     new_cache["config_drift"] = self._client.config_drift()
             elif tab == 2:  # Alerts
                 new_cache["alerts"] = self._client.alerts()
@@ -445,7 +446,7 @@ class TuiApp:
         """Render the full TUI frame."""
         self._stdscr.erase()
         rows, cols = self._stdscr.getmaxyx()
-        if rows < 5 or cols < 40:
+        if rows < 5 or cols < 80:
             safe_addstr(self._stdscr, 0, 0, "Terminal too small")
             self._stdscr.refresh()
             return
@@ -1393,39 +1394,110 @@ class TuiApp:
 
     # ── WebSocket Client ──────────────────────────────────────────
 
-    def _ws_listen_loop(self) -> None:
-        """Background thread: connect to WebSocket and receive push events."""
+    # Maximum frame payload size to accept (16 MB) -- prevents OOM from
+    # malformed frame headers.
+    _WS_MAX_FRAME_SIZE = 16 * 1024 * 1024
 
-        while self._running:
+    def _resolve_ws_endpoint(self) -> Optional[tuple]:
+        """Resolve WebSocket host and port from server status API.
+
+        Returns (host, port) or None if unavailable.
+        """
+        status = self._client.server_status()
+        if not status:
+            return None
+
+        ws_info = status.get("websocket", {})
+        ws_port = ws_info.get("port", status.get("ws_port", 0))
+        if not ws_port:
+            ws_port = self._client._base.split(":")[-1]
             try:
-                # Get WebSocket port from status API
-                status = self._client.server_status()
-                if not status:
+                ws_port = int(ws_port) + 1
+            except (ValueError, TypeError):
+                ws_port = 8809
+
+        host = self._client._base.split("//")[-1].split(":")[0]
+        return (host, int(ws_port))
+
+    def _ws_listen_loop(self) -> None:
+        """Background thread: connect to WebSocket and receive push events.
+
+        Prefers the ``websockets`` library for a standards-compliant client.
+        Falls back to a minimal raw-socket implementation if unavailable.
+        """
+        try:
+            import asyncio as _asyncio
+            import websockets as _ws
+            self._ws_listen_loop_library(_asyncio, _ws)
+        except ImportError:
+            self._ws_listen_loop_raw()
+
+    def _ws_listen_loop_library(self, _asyncio: Any, _ws: Any) -> None:
+        """WebSocket listener using the ``websockets`` library."""
+        loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+
+        async def _listen() -> None:
+            while self._running:
+                try:
+                    endpoint = self._resolve_ws_endpoint()
+                    if not endpoint:
+                        await _asyncio.sleep(5)
+                        continue
+
+                    host, port = endpoint
+                    uri = f"ws://{host}:{port}/"
+                    async with _ws.connect(
+                        uri,
+                        max_size=self._WS_MAX_FRAME_SIZE,
+                        close_timeout=5,
+                    ) as conn:
+                        with self._data_lock:
+                            self._ws_connected = True
+                        async for raw in conn:
+                            if not self._running:
+                                break
+                            try:
+                                msg = json.loads(raw)
+                                self._on_ws_message(msg)
+                            except (ValueError, TypeError):
+                                pass
+                except Exception:
+                    pass
+                finally:
+                    with self._data_lock:
+                        self._ws_connected = False
+                if self._running:
+                    await _asyncio.sleep(5)
+
+        try:
+            loop.run_until_complete(_listen())
+        except Exception:
+            pass
+        finally:
+            loop.close()
+
+    def _ws_listen_loop_raw(self) -> None:
+        """Fallback raw-socket WebSocket listener (stdlib only)."""
+        while self._running:
+            sock = None
+            try:
+                endpoint = self._resolve_ws_endpoint()
+                if not endpoint:
                     time.sleep(5)
                     continue
 
-                ws_info = status.get("websocket", {})
-                # Try to find WS port: could be in status.websocket.port or status.ws_port
-                ws_port = ws_info.get("port", status.get("ws_port", 0))
-                if not ws_port:
-                    # Default convention: HTTP port + 1
-                    ws_port = self._client._base.split(":")[-1]
-                    try:
-                        ws_port = int(ws_port) + 1
-                    except (ValueError, TypeError):
-                        ws_port = 8809
+                host, port = endpoint
 
-                host = self._client._base.split("//")[-1].split(":")[0]
-
-                # WebSocket handshake
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(10)
-                sock.connect((host, int(ws_port)))
+                sock.connect((host, port))
 
+                # RFC 6455 handshake
                 ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
                 handshake = (
                     f"GET / HTTP/1.1\r\n"
-                    f"Host: {host}:{ws_port}\r\n"
+                    f"Host: {host}:{port}\r\n"
                     f"Upgrade: websocket\r\n"
                     f"Connection: Upgrade\r\n"
                     f"Sec-WebSocket-Key: {ws_key}\r\n"
@@ -1434,7 +1506,6 @@ class TuiApp:
                 )
                 sock.sendall(handshake.encode("utf-8"))
 
-                # Read handshake response
                 response = b""
                 while b"\r\n\r\n" not in response:
                     chunk = sock.recv(4096)
@@ -1450,7 +1521,6 @@ class TuiApp:
 
                 sock.settimeout(30)
 
-                # Read WebSocket frames
                 while self._running:
                     frame_data = self._ws_read_frame(sock)
                     if frame_data is None:
@@ -1466,12 +1536,12 @@ class TuiApp:
             finally:
                 with self._data_lock:
                     self._ws_connected = False
-                try:
-                    sock.close()
-                except Exception:
-                    pass
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
 
-            # Reconnect backoff
             if self._running:
                 time.sleep(5)
 
@@ -1498,11 +1568,15 @@ class TuiApp:
                     length = struct.unpack("!H", _recv_exact(sock, 2))[0]
                 elif length == 127:
                     length = struct.unpack("!Q", _recv_exact(sock, 8))[0]
+                if length > self._WS_MAX_FRAME_SIZE:
+                    return None  # Reject oversized frames
                 payload = _recv_exact(sock, length) if length > 0 else b""
-                # Send pong
-                pong = bytes([0x8A, len(payload)]) + payload
-                sock.sendall(pong)
-                return ""  # empty string, not a real message
+                # Send masked pong (RFC 6455 requires client-to-server masking)
+                mask = os.urandom(4)
+                masked_payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+                frame = bytes([0x8A, 0x80 | len(payload)]) + mask + masked_payload
+                sock.sendall(frame)
+                return ""
 
             masked = (header[1] & 0x80) != 0
             length = header[1] & 0x7F
@@ -1510,6 +1584,9 @@ class TuiApp:
                 length = struct.unpack("!H", _recv_exact(sock, 2))[0]
             elif length == 127:
                 length = struct.unpack("!Q", _recv_exact(sock, 8))[0]
+
+            if length > self._WS_MAX_FRAME_SIZE:
+                return None  # Reject oversized frames
 
             if masked:
                 mask_key = _recv_exact(sock, 4)

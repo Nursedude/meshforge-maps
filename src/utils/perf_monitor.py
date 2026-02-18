@@ -1,8 +1,9 @@
 """
 MeshForge Maps - Performance Monitor
 
-Instruments collection cycle timing, per-source latency, and memory usage
-for runtime diagnostics. All metrics are kept in-memory with bounded history.
+Instruments collection cycle timing and per-source latency for runtime
+diagnostics. Keeps simple counters and last/average timing -- no percentile
+calculations or bounded sample history.
 
 Thread-safe: all state behind a lock.
 """
@@ -10,45 +11,13 @@ Thread-safe: all state behind a lock.
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# Maximum timing samples to retain per source
-MAX_SAMPLES = 100
-
-
-class TimingSample:
-    """A single timing measurement."""
-
-    __slots__ = ("source", "duration_ms", "node_count", "from_cache", "timestamp")
-
-    def __init__(
-        self,
-        source: str,
-        duration_ms: float,
-        node_count: int = 0,
-        from_cache: bool = False,
-        timestamp: Optional[float] = None,
-    ):
-        self.source = source
-        self.duration_ms = duration_ms
-        self.node_count = node_count
-        self.from_cache = from_cache
-        self.timestamp = timestamp or time.time()
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "source": self.source,
-            "duration_ms": round(self.duration_ms, 2),
-            "node_count": self.node_count,
-            "from_cache": self.from_cache,
-            "timestamp": self.timestamp,
-        }
-
 
 class PerfMonitor:
-    """Tracks collection timing and memory usage.
+    """Tracks collection timing with simple counters.
 
     Usage:
         monitor = PerfMonitor()
@@ -62,13 +31,13 @@ class PerfMonitor:
         stats = monitor.get_stats()
     """
 
-    def __init__(self, max_samples: int = MAX_SAMPLES):
-        self._max_samples = max_samples
-        self._samples: Dict[str, List[TimingSample]] = {}
-        self._cycle_samples: List[TimingSample] = []  # Full cycle timings
+    def __init__(self, max_samples: int = 100):
+        # max_samples accepted for backward compat but not used
         self._lock = threading.Lock()
-        self._total_collections = 0
         self._start_time = time.time()
+        self._total_collections = 0
+        self._sources: Dict[str, Dict[str, Any]] = {}
+        self._cycle: Optional[Dict[str, Any]] = None
 
     def record_timing(
         self,
@@ -78,22 +47,39 @@ class PerfMonitor:
         from_cache: bool = False,
     ) -> None:
         """Record a timing sample for a source."""
-        sample = TimingSample(source, duration_ms, node_count, from_cache)
         with self._lock:
-            if source not in self._samples:
-                self._samples[source] = []
-            samples = self._samples[source]
-            samples.append(sample)
-            if len(samples) > self._max_samples:
-                self._samples[source] = samples[-self._max_samples:]
+            if source not in self._sources:
+                self._sources[source] = {
+                    "count": 0, "total_ms": 0.0,
+                    "cache_hits": 0, "total_nodes": 0,
+                    "last_ms": 0.0, "last_time": 0.0,
+                    "min_ms": float("inf"), "max_ms": 0.0,
+                }
+            s = self._sources[source]
+            s["count"] += 1
+            s["total_ms"] += duration_ms
+            s["last_ms"] = duration_ms
+            s["last_time"] = time.time()
+            s["total_nodes"] += node_count
+            if from_cache:
+                s["cache_hits"] += 1
+            if duration_ms < s["min_ms"]:
+                s["min_ms"] = duration_ms
+            if duration_ms > s["max_ms"]:
+                s["max_ms"] = duration_ms
 
     def record_cycle(self, duration_ms: float, total_nodes: int = 0) -> None:
         """Record a full collection cycle timing."""
-        sample = TimingSample("_cycle", duration_ms, total_nodes)
         with self._lock:
-            self._cycle_samples.append(sample)
-            if len(self._cycle_samples) > self._max_samples:
-                self._cycle_samples = self._cycle_samples[-self._max_samples:]
+            if self._cycle is None:
+                self._cycle = {
+                    "count": 0, "total_ms": 0.0,
+                    "last_ms": 0.0, "total_nodes": 0,
+                }
+            self._cycle["count"] += 1
+            self._cycle["total_ms"] += duration_ms
+            self._cycle["last_ms"] = duration_ms
+            self._cycle["total_nodes"] += total_nodes
             self._total_collections += 1
 
     def time_collection(self, source: str) -> "TimingContext":
@@ -107,43 +93,31 @@ class PerfMonitor:
     def get_source_stats(self, source: str) -> Optional[Dict[str, Any]]:
         """Get timing stats for a specific source."""
         with self._lock:
-            samples = self._samples.get(source)
-            if not samples:
+            s = self._sources.get(source)
+            if not s:
                 return None
-            return self._compute_stats(samples, source)
-
-    def get_memory_usage(self) -> Dict[str, Any]:
-        """Get current memory usage estimates.
-
-        Not a deep profiler — gives approximate memory footprint.
-        """
-        with self._lock:
-            return self._memory_usage_locked()
-
-    def _memory_usage_locked(self) -> Dict[str, Any]:
-        """Internal: memory usage stats (caller must hold lock)."""
-        return {
-            "timing_samples": sum(
-                len(s) for s in self._samples.values()
-            ),
-            "cycle_samples": len(self._cycle_samples),
-            "tracked_sources": len(self._samples),
-        }
+            return self._format_source(source, s)
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get comprehensive performance statistics."""
+        """Get performance statistics."""
         with self._lock:
             uptime = time.time() - self._start_time
 
-            # Per-source stats
-            source_stats = {}
-            for source, samples in self._samples.items():
-                source_stats[source] = self._compute_stats(samples, source)
+            source_stats = {
+                name: self._format_source(name, s)
+                for name, s in self._sources.items()
+            }
 
-            # Cycle stats
             cycle_stats = None
-            if self._cycle_samples:
-                cycle_stats = self._compute_stats(self._cycle_samples, "_cycle")
+            if self._cycle and self._cycle["count"]:
+                c = self._cycle
+                cycle_stats = {
+                    "source": "_cycle",
+                    "count": c["count"],
+                    "avg_ms": round(c["total_ms"] / c["count"], 2),
+                    "last_duration_ms": round(c["last_ms"], 2),
+                    "total_nodes_collected": c["total_nodes"],
+                }
 
             return {
                 "uptime_seconds": int(uptime),
@@ -153,40 +127,30 @@ class PerfMonitor:
                 ),
                 "sources": source_stats,
                 "cycle": cycle_stats,
-                "memory": self._memory_usage_locked(),
+                "memory": {
+                    "tracked_sources": len(self._sources),
+                },
             }
 
-    def _compute_stats(
-        self, samples: List[TimingSample], source: str
-    ) -> Dict[str, Any]:
-        """Compute aggregate stats from a list of timing samples."""
-        if not samples:
-            return {"source": source, "count": 0}
-
-        durations = [s.duration_ms for s in samples]
-        cache_count = sum(1 for s in samples if s.from_cache)
-        total_nodes = sum(s.node_count for s in samples)
-        sorted_d = sorted(durations)
-        count = len(sorted_d)
-
-        p50_idx = int(count * 0.5)
-        p90_idx = min(int(count * 0.9), count - 1)
-        p99_idx = min(int(count * 0.99), count - 1)
-
+    @staticmethod
+    def _format_source(name: str, s: Dict[str, Any]) -> Dict[str, Any]:
+        count = s["count"]
         return {
-            "source": source,
+            "source": name,
             "count": count,
-            "avg_ms": round(sum(durations) / count, 2),
-            "min_ms": round(sorted_d[0], 2),
-            "max_ms": round(sorted_d[-1], 2),
-            "p50_ms": round(sorted_d[p50_idx], 2),
-            "p90_ms": round(sorted_d[p90_idx], 2),
-            "p99_ms": round(sorted_d[p99_idx], 2),
-            "cache_hit_ratio": round(cache_count / count, 3) if count else 0,
-            "total_nodes_collected": total_nodes,
-            "last_duration_ms": round(samples[-1].duration_ms, 2),
-            "last_timestamp": samples[-1].timestamp,
+            "avg_ms": round(s["total_ms"] / count, 2) if count else 0,
+            "min_ms": round(s["min_ms"], 2) if s["min_ms"] != float("inf") else 0,
+            "max_ms": round(s["max_ms"], 2),
+            "last_duration_ms": round(s["last_ms"], 2),
+            "last_timestamp": s["last_time"],
+            "cache_hit_ratio": round(s["cache_hits"] / count, 3) if count else 0,
+            "total_nodes_collected": s["total_nodes"],
         }
+
+    def get_memory_usage(self) -> Dict[str, Any]:
+        """Get current memory usage estimates."""
+        with self._lock:
+            return {"tracked_sources": len(self._sources)}
 
 
 class TimingContext:
