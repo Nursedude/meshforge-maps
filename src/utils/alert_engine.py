@@ -13,23 +13,20 @@ Alert types:
     congestion_high  - Channel utilization exceeded threshold
     signal_poor      - SNR dropped below threshold
 
-Delivery channels:
-    - EventBus: ALERT_FIRED events for WebSocket broadcast to browser clients
-    - MQTT publish: Alerts published to configurable topic for external consumers
-    - Webhooks: HTTP POST to registered URLs
-    - Callback: Direct function callback for in-process consumers
+Delivery:
+    EventBus ALERT_FIRED events (published by map_server) for WebSocket
+    broadcast to browser clients.  The engine itself only evaluates rules
+    and records history — delivery is handled externally via the EventBus.
 
 Thread-safe: all state behind a lock.
 """
 
-import json
 import logging
 import threading
 import time
-import urllib.request
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -198,37 +195,27 @@ class AlertEngine:
     """Threshold-based alert engine for mesh node monitoring.
 
     Evaluates rules against node properties and health data, generates
-    alerts with cooldown throttling, maintains bounded alert history,
-    and dispatches to configured delivery targets.
+    alerts with cooldown throttling, and maintains bounded alert history.
+    Alert delivery is handled externally via the EventBus (ALERT_FIRED
+    events published by the map server).
 
     Usage:
         engine = AlertEngine()
         alerts = engine.evaluate_node("!a1b2c3d4", node_props, health_score=45)
-        engine.add_webhook("https://example.com/webhook")
     """
 
     def __init__(
         self,
         rules: Optional[List[AlertRule]] = None,
         max_history: int = MAX_ALERT_HISTORY,
-        on_alert: Optional[Callable[["Alert"], None]] = None,
-        mqtt_client: Optional[Any] = None,
-        mqtt_topic: str = "meshforge/alerts",
     ):
         self._lock = threading.Lock()
         self._rules: Dict[str, AlertRule] = {}
         self._history: List[Alert] = []
         self._max_history = max_history
         self._cooldowns: Dict[str, float] = {}  # "node_id:rule_id" -> last_fired
-        self._on_alert = on_alert
-        self._webhooks: List[str] = []
         self._alert_counter = 0
         self._total_alerts_fired = 0
-
-        # MQTT publish delivery
-        self._mqtt_client = mqtt_client
-        self._mqtt_topic = mqtt_topic
-        self._mqtt_publish_count = 0
 
         # Load rules — copy defaults to avoid shared mutation
         import copy
@@ -362,10 +349,6 @@ class AlertEngine:
 
             triggered.append(alert)
 
-        # Deliver alerts outside lock
-        for alert in triggered:
-            self._deliver(alert)
-
         return triggered
 
     def evaluate_offline(
@@ -422,7 +405,6 @@ class AlertEngine:
             if len(self._history) > self._max_history:
                 self._history = self._history[-self._max_history:]
 
-        self._deliver(alert)
         return alert
 
     def acknowledge(self, alert_id: str) -> bool:
@@ -480,121 +462,9 @@ class AlertEngine:
                 "history_size": len(self._history),
                 "by_severity": by_severity,
                 "by_type": by_type,
-                "mqtt_enabled": self._mqtt_client is not None,
-                "mqtt_publish_count": self._mqtt_publish_count,
             }
-
-    def add_webhook(self, url: str) -> None:
-        """Add a webhook URL for alert delivery."""
-        with self._lock:
-            if url not in self._webhooks:
-                self._webhooks.append(url)
-
-    def remove_webhook(self, url: str) -> bool:
-        """Remove a webhook URL. Returns True if removed."""
-        with self._lock:
-            try:
-                self._webhooks.remove(url)
-                return True
-            except ValueError:
-                return False
-
-    def list_webhooks(self) -> List[str]:
-        """List configured webhook URLs."""
-        with self._lock:
-            return list(self._webhooks)
-
-    def set_mqtt_client(self, client: Any, topic: str = "meshforge/alerts") -> None:
-        """Configure MQTT client for alert publishing.
-
-        Args:
-            client: A paho-mqtt Client instance (must be connected).
-            topic: MQTT topic to publish alerts to. Severity-specific
-                   sub-topics are used: {topic}/{severity} (e.g.
-                   meshforge/alerts/critical).
-        """
-        with self._lock:
-            self._mqtt_client = client
-            self._mqtt_topic = topic
-        logger.info("MQTT alert publishing configured: topic=%s", topic)
-
-    def remove_mqtt_client(self) -> None:
-        """Remove the MQTT client (disables MQTT alert publishing)."""
-        with self._lock:
-            self._mqtt_client = None
-
-    @property
-    def mqtt_publish_count(self) -> int:
-        """Number of alerts successfully published via MQTT."""
-        with self._lock:
-            return self._mqtt_publish_count
 
     def clear_cooldowns(self) -> None:
         """Clear all cooldown timers (useful for testing)."""
         with self._lock:
             self._cooldowns.clear()
-
-    def _deliver(self, alert: Alert) -> None:
-        """Deliver an alert to all configured targets."""
-        # Callback delivery
-        if self._on_alert:
-            try:
-                self._on_alert(alert)
-            except Exception as e:
-                logger.debug("Alert callback error: %s", e)
-
-        # MQTT publish delivery (best-effort)
-        self._publish_mqtt(alert)
-
-        # Webhook delivery (best-effort, non-blocking)
-        with self._lock:
-            webhooks = list(self._webhooks)
-
-        for url in webhooks:
-            self._send_webhook(url, alert)
-
-    def _publish_mqtt(self, alert: Alert) -> None:
-        """Publish an alert to MQTT topic (best-effort).
-
-        Publishes to both the base topic and a severity-specific sub-topic:
-          - meshforge/alerts        (all alerts)
-          - meshforge/alerts/{severity}  (filtered by severity)
-        """
-        with self._lock:
-            client = self._mqtt_client
-            topic = self._mqtt_topic
-        if not client:
-            return
-
-        try:
-            payload = json.dumps(alert.to_dict())
-            # Publish to base topic
-            client.publish(topic, payload, qos=1)
-            # Publish to severity sub-topic for filtered subscriptions
-            severity_topic = f"{topic}/{alert.severity}"
-            client.publish(severity_topic, payload, qos=1)
-            with self._lock:
-                self._mqtt_publish_count += 1
-            logger.debug(
-                "MQTT alert published to %s for %s", topic, alert.alert_id,
-            )
-        except Exception as e:
-            logger.debug("MQTT alert publish failed: %s", e)
-
-    def _send_webhook(self, url: str, alert: Alert) -> None:
-        """Send an alert to a webhook URL (best-effort)."""
-        try:
-            payload = json.dumps(alert.to_dict()).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                logger.debug(
-                    "Webhook %s responded %d for alert %s",
-                    url, resp.status, alert.alert_id,
-                )
-        except Exception as e:
-            logger.debug("Webhook delivery to %s failed: %s", url, e)

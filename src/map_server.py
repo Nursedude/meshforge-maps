@@ -500,9 +500,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         """Serve composite health score (0-100) with per-source breakdown.
 
         Scoring factors:
-        - Data freshness: 40 points (full if <cache_ttl, degrades to 0 at 3x TTL)
-        - Source availability: 30 points (proportional to sources with data)
-        - Circuit breaker health: 30 points (proportional to CLOSED breakers)
+        - Data freshness: 50 points (full if <cache_ttl, degrades to 0 at 3x TTL)
+        - Source availability: 50 points (proportional to sources with data)
         """
         aggregator = self._get_aggregator()
         config = self._get_config()
@@ -517,34 +516,25 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
         cache_ttl = (config.get("cache_ttl_minutes", 15) if config else 15) * 60
 
-        # Freshness score (0-40): how recent is the data?
+        # Freshness score (0-50): how recent is the data?
         freshness_score = 0.0
         data_age = aggregator.last_collect_age_seconds
         if data_age is not None:
             if data_age <= cache_ttl:
-                freshness_score = 40.0
+                freshness_score = 50.0
             elif data_age <= cache_ttl * 3:
-                freshness_score = 40.0 * (1.0 - (data_age - cache_ttl) / (cache_ttl * 2))
+                freshness_score = 50.0 * (1.0 - (data_age - cache_ttl) / (cache_ttl * 2))
             # else: 0
 
-        # Source availability score (0-30): how many sources returned data?
+        # Source availability score (0-50): how many sources returned data?
         source_score = 0.0
         source_counts = aggregator.last_collect_counts
         enabled_count = aggregator.enabled_collector_count
         if enabled_count > 0:
             sources_with_data = sum(1 for c in source_counts.values() if c > 0)
-            source_score = 30.0 * (sources_with_data / enabled_count)
+            source_score = 50.0 * (sources_with_data / enabled_count)
 
-        # Circuit breaker score (0-30): how many breakers are CLOSED (healthy)?
-        cb_score = 0.0
-        cb_states = aggregator.get_circuit_breaker_states()
-        if cb_states:
-            closed_count = sum(
-                1 for s in cb_states.values() if s.get("state") == "closed"
-            )
-            cb_score = 30.0 * (closed_count / len(cb_states))
-
-        total_score = int(freshness_score + source_score + cb_score)
+        total_score = int(freshness_score + source_score)
         total_score = max(0, min(100, total_score))
 
         # Map score to status string
@@ -561,9 +551,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "score": total_score,
             "status": status,
             "components": {
-                "freshness": {"score": round(freshness_score, 1), "max": 40},
-                "sources": {"score": round(source_score, 1), "max": 30},
-                "circuit_breakers": {"score": round(cb_score, 1), "max": 30},
+                "freshness": {"score": round(freshness_score, 1), "max": 50},
+                "sources": {"score": round(source_score, 1), "max": 50},
             },
             "data_age_seconds": int(data_age) if data_age is not None else None,
             "sources_reporting": source_counts,
@@ -986,11 +975,6 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 data_stale = data_age > (cache_ttl * 2)
             source_counts = aggregator.last_collect_counts
 
-        # Circuit breaker states for per-source health visibility
-        circuit_breaker_states = {}
-        if aggregator:
-            circuit_breaker_states = aggregator.get_circuit_breaker_states()
-
         # WebSocket server stats
         ws_server = self._ctx.ws_server
         websocket_stats = ws_server.stats if ws_server else None
@@ -1017,7 +1001,6 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "uptime_seconds": uptime,
             "data_age_seconds": data_age,
             "data_stale": data_stale,
-            "circuit_breakers": circuit_breaker_states,
             "websocket": websocket_stats,
             "event_bus": event_bus_stats,
             "alerts": self._get_alert_engine().get_summary() if self._get_alert_engine() else None,
@@ -1105,13 +1088,6 @@ class MapServer:
             node_history=self._node_history,
             alert_engine=self._alert_engine,
         )
-
-        # Wire MQTT client to alert engine for publish delivery
-        if self._aggregator.mqtt_subscriber and self._aggregator.mqtt_subscriber._client:
-            mqtt_topic = config.get("mqtt_alert_topic", "meshforge/alerts")
-            self._alert_engine.set_mqtt_client(
-                self._aggregator.mqtt_subscriber._client, mqtt_topic,
-            )
 
         # Wire node eviction cleanup to drift detector and state tracker
         if self._aggregator.mqtt_subscriber:

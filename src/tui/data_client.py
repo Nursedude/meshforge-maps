@@ -87,9 +87,6 @@ class MapDataClient:
     def analytics_summary(self) -> Optional[Dict[str, Any]]:
         return self._get("/api/analytics/summary")
 
-    def circuit_breaker_states(self) -> Optional[Dict[str, Any]]:
-        return self._get("/api/core-health")
-
     def config_drift(self) -> Optional[Dict[str, Any]]:
         return self._get("/api/config-drift")
 
