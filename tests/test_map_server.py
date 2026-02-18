@@ -273,8 +273,8 @@ class TestMapServerHTTPEndpoints:
 
     def test_config_drift_endpoint(self):
         data = self._get_json("/api/config-drift")
-        assert "tracked_nodes" in data
-        assert "total_drifts" in data
+        assert "drifts" in data
+        assert "total" in data
 
     def test_config_drift_summary_endpoint(self):
         data = self._get_json("/api/config-drift/summary")

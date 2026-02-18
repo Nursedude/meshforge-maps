@@ -2,19 +2,11 @@
 MeshForge Maps - Config Drift Detection
 
 Detects changes in node configuration over time by comparing successive
-observations of node identity and radio parameters. When a node's role,
-hardware model, name, or other tracked fields change, a drift event is
-recorded and optionally emitted to the event bus.
+observations. When a tracked field changes, a drift event is recorded
+and optionally dispatched to a callback.
 
-Drift detection is valuable for mesh network operators:
-  - A node suddenly changing role (CLIENT -> ROUTER) may indicate
-    unauthorized reconfiguration or firmware update
-  - Hardware model changes suggest the node was replaced or re-flashed
-  - Name changes may indicate a new operator or config reset
-
-Data sources for drift detection:
+Data sources:
   - NODEINFO_APP (portnum 4): role, long_name, short_name, hw_model
-  - TELEMETRY_APP (portnum 67): channel_util, air_util_tx patterns
   - MAP_REPORT (portnum 73): LoRa config (region, modem preset, etc.)
 
 Thread-safe: all state behind a lock.
@@ -23,15 +15,14 @@ Thread-safe: all state behind a lock.
 import logging
 import threading
 import time
+from collections import deque
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Maximum drift history entries per node
+# Default limits
 MAX_DRIFT_HISTORY = 50
-
-# Maximum nodes to track (prevents unbounded memory growth)
 MAX_TRACKED_NODES = 10000
 
 
@@ -62,11 +53,7 @@ TRACKED_FIELDS = {
 
 
 def _normalize_value(value: Any) -> str:
-    """Normalize a config value for comparison.
-
-    Converts numeric types consistently so int(1) == float(1.0)
-    and avoids spurious drift from type differences.
-    """
+    """Normalize a config value so int(1) == float(1.0) in comparisons."""
     if isinstance(value, float) and value == int(value):
         return str(int(value))
     return str(value)
@@ -75,13 +62,10 @@ def _normalize_value(value: Any) -> str:
 class ConfigDriftDetector:
     """Detects and records configuration changes for mesh nodes.
 
-    Maintains a snapshot of each node's last-known configuration and
-    compares incoming updates to detect drift.
-
     Usage:
         detector = ConfigDriftDetector()
         drifts = detector.check_node("!a1b2c3d4", role="ROUTER", hardware="TBEAM")
-        # drifts is empty on first observation, populated on subsequent changes
+        # Empty on first observation, populated on subsequent changes.
     """
 
     def __init__(
@@ -91,7 +75,7 @@ class ConfigDriftDetector:
         max_nodes: int = MAX_TRACKED_NODES,
     ):
         self._snapshots: Dict[str, Dict[str, Any]] = {}
-        self._drift_history: Dict[str, List[Dict[str, Any]]] = {}
+        self._drift_history: Dict[str, deque] = {}
         self._lock = threading.Lock()
         self._on_drift = on_drift
         self._max_history = max_history
@@ -99,20 +83,11 @@ class ConfigDriftDetector:
         self._total_drifts = 0
 
     def check_node(self, node_id: str, **fields: Any) -> List[Dict[str, Any]]:
-        """Check a node's current fields against its last-known snapshot.
+        """Compare a node's current fields against its last-known snapshot.
 
-        Only tracked fields (those in TRACKED_FIELDS) are compared.
-        Returns a list of drift records for any changes detected.
-        On first observation for a node, records the snapshot and returns [].
-
-        Args:
-            node_id: The node identifier (e.g., "!a1b2c3d4")
-            **fields: Current field values (role="ROUTER", hardware="TBEAM", etc.)
-
-        Returns:
-            List of drift dicts: [{field, old_value, new_value, severity, timestamp}]
+        Returns a list of drift records for detected changes.
+        On first observation, records the snapshot and returns [].
         """
-        # Filter to tracked fields only, ignoring None values
         current = {
             k: v for k, v in fields.items()
             if k in TRACKED_FIELDS and v is not None
@@ -127,43 +102,43 @@ class ConfigDriftDetector:
             previous = self._snapshots.get(node_id)
 
             if previous is None:
-                # First observation — record snapshot, no drift
                 if len(self._snapshots) >= self._max_nodes:
                     self._evict_oldest_locked()
-                self._snapshots[node_id] = dict(current)
-                self._snapshots[node_id]["_first_seen"] = now
-                self._snapshots[node_id]["_last_seen"] = now
+                self._snapshots[node_id] = {
+                    **current, "_first_seen": now, "_last_seen": now,
+                }
                 return []
 
-            # Compare current values against snapshot
             for field, new_value in current.items():
                 old_value = previous.get(field)
-                if old_value is not None and _normalize_value(old_value) != _normalize_value(new_value):
-                    severity = TRACKED_FIELDS.get(field, DriftSeverity.INFO)
-                    drift = {
-                        "node_id": node_id,
-                        "field": field,
-                        "old_value": old_value,
-                        "new_value": new_value,
-                        "severity": severity.value,
-                        "timestamp": now,
-                    }
-                    drifts.append(drift)
-                    self._total_drifts += 1
+                if old_value is None:
+                    continue
+                if _normalize_value(old_value) == _normalize_value(new_value):
+                    continue
 
-                    # Record in history
-                    history = self._drift_history.setdefault(node_id, [])
-                    history.append(drift)
-                    if len(history) > self._max_history:
-                        history.pop(0)
+                severity = TRACKED_FIELDS[field]
+                drift = {
+                    "node_id": node_id,
+                    "field": field,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "severity": severity.value,
+                    "timestamp": now,
+                }
+                drifts.append(drift)
+                self._total_drifts += 1
 
-                    logger.info(
-                        "Config drift [%s] %s: %s -> %s (%s) on %s",
-                        severity.value, field, old_value, new_value,
-                        node_id, time.strftime("%H:%M:%S", time.gmtime(now)),
-                    )
+                history = self._drift_history.get(node_id)
+                if history is None:
+                    history = deque(maxlen=self._max_history)
+                    self._drift_history[node_id] = history
+                history.append(drift)
 
-            # Update snapshot with current values
+                logger.info(
+                    "Config drift [%s] %s: %s -> %s (%s)",
+                    severity.value, field, old_value, new_value, node_id,
+                )
+
             previous.update(current)
             previous["_last_seen"] = now
 
@@ -189,12 +164,7 @@ class ConfigDriftDetector:
 
     def get_all_drifts(self, since: Optional[float] = None,
                        severity: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Return all drift events, optionally filtered by time and severity.
-
-        Args:
-            since: Unix timestamp — only return drifts after this time
-            severity: Filter by severity level ("info", "warning", "critical")
-        """
+        """Return all drift events, optionally filtered by time and severity."""
         with self._lock:
             result = []
             for history in self._drift_history.values():
@@ -215,7 +185,7 @@ class ConfigDriftDetector:
             )
             recent_drifts = []
             for history in self._drift_history.values():
-                recent_drifts.extend(history[-3:])
+                recent_drifts.extend(list(history)[-3:])
             recent_drifts.sort(key=lambda d: d["timestamp"], reverse=True)
 
             return {
@@ -236,7 +206,7 @@ class ConfigDriftDetector:
             return self._total_drifts
 
     def remove_node(self, node_id: str) -> None:
-        """Remove all tracking data for a node (e.g., after eviction)."""
+        """Remove all tracking data for a node."""
         with self._lock:
             self._snapshots.pop(node_id, None)
             self._drift_history.pop(node_id, None)
