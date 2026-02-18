@@ -216,7 +216,6 @@ class TestMapServerHTTPEndpoints:
         assert "components" in data
         assert "freshness" in data["components"]
         assert "sources" in data["components"]
-        assert "circuit_breakers" in data["components"]
         # Each component has score and max
         for component in data["components"].values():
             assert "score" in component

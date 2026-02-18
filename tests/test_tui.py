@@ -62,7 +62,6 @@ class TestMapDataClient:
         assert client.hamclock() is None
         assert client.perf_stats() is None
         assert client.analytics_summary() is None
-        assert client.circuit_breaker_states() is None
         assert client.mqtt_stats() is None
 
 
@@ -387,7 +386,6 @@ class TestRefreshData:
         app._client.node_states_summary.return_value = {}
         app._client.alert_summary.return_value = {}
         app._client.analytics_summary.return_value = {}
-        app._client.circuit_breaker_states.return_value = {}
 
         app._active_tab = 0
         app._refresh_data()

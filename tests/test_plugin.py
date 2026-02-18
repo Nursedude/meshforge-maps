@@ -297,9 +297,6 @@ class TestPluginEventHandlers:
             "dxspots": [{"dx_call": "JA1ABC"}],
         }
         mock_server.aggregator._collectors = {"hamclock": mock_hc}
-        mock_server.aggregator.get_circuit_breaker_states.return_value = {
-            "hamclock": {"state": "CLOSED", "failure_count": 0},
-        }
 
         context = MagicMock()
         context.settings = {}
@@ -312,7 +309,6 @@ class TestPluginEventHandlers:
         assert "WH6GXZ" in result
         assert "F5ABC" in result
         assert "1 active" in result
-        assert "CLOSED" in result
 
     @patch("src.main.MapServer")
     @patch("src.main.MapsConfig")
