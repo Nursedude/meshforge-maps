@@ -59,6 +59,11 @@ def validate_coordinates(
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None
 
+    # Reject Null Island (0,0) -- common artifact from protobuf schema
+    # mismatches or uninitialized GPS data
+    if abs(lat) < 0.01 and abs(lon) < 0.01:
+        return None
+
     return (lat, lon)
 
 

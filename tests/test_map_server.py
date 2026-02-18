@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.map_server import MapRequestHandler, MapServer
+from src.map_server import MapRequestHandler, MapServer, MapServerContext, MeshForgeHTTPServer
 from src.utils.config import MapsConfig
 
 
@@ -68,37 +68,40 @@ class TestMapServerStartup:
         server = MapServer(config)
         try:
             assert server.start() is True
-            # The server object should have instance-level attributes
-            assert hasattr(server._server, "_mf_aggregator")
-            assert hasattr(server._server, "_mf_config")
-            assert hasattr(server._server, "_mf_web_dir")
+            # The server object should have a typed context
+            assert hasattr(server._server, "context")
+            assert isinstance(server._server.context, MapServerContext)
+            assert server._server.context.aggregator is not None
+            assert server._server.context.config is not None
         finally:
             server.stop()
 
 
 class TestMapRequestHandlerAccessors:
-    """Tests for handler instance-level state access."""
+    """Tests for handler typed context access."""
+
+    def _make_handler(self, ctx=None):
+        handler = MapRequestHandler.__new__(MapRequestHandler)
+        mock_server = MagicMock(spec=MeshForgeHTTPServer)
+        mock_server.context = ctx or MapServerContext()
+        handler.server = mock_server
+        return handler
 
     def test_get_aggregator_missing(self):
-        handler = MapRequestHandler.__new__(MapRequestHandler)
-        handler.server = MagicMock(spec=[])  # no _mf_aggregator
+        handler = self._make_handler()
         assert handler._get_aggregator() is None
 
     def test_get_aggregator_present(self):
-        handler = MapRequestHandler.__new__(MapRequestHandler)
         mock_agg = MagicMock()
-        handler.server = MagicMock()
-        handler.server._mf_aggregator = mock_agg
+        handler = self._make_handler(MapServerContext(aggregator=mock_agg))
         assert handler._get_aggregator() is mock_agg
 
     def test_get_config_missing(self):
-        handler = MapRequestHandler.__new__(MapRequestHandler)
-        handler.server = MagicMock(spec=[])
+        handler = self._make_handler()
         assert handler._get_config() is None
 
     def test_get_web_dir_missing(self):
-        handler = MapRequestHandler.__new__(MapRequestHandler)
-        handler.server = MagicMock(spec=[])
+        handler = self._make_handler()
         assert handler._get_web_dir() is None
 
 
