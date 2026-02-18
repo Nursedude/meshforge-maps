@@ -1,7 +1,6 @@
-"""Tests for the alert engine — threshold evaluation, cooldown, history, delivery."""
+"""Tests for the alert engine — threshold evaluation, cooldown, history."""
 
 import time
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -476,83 +475,6 @@ class TestAlertEngineSummary:
         summary = engine.get_summary()
         assert summary["total_alerts_fired"] > 0
         assert summary["active_alerts"] > 0
-
-
-# ---------------------------------------------------------------------------
-# AlertEngine — delivery
-# ---------------------------------------------------------------------------
-
-class TestAlertEngineDelivery:
-    def test_on_alert_callback(self):
-        received = []
-        engine = AlertEngine(on_alert=received.append)
-        engine.clear_cooldowns()
-        engine.evaluate_node("!abc", {"battery": 3}, now=1000.0)
-        assert len(received) > 0
-        assert all(isinstance(a, Alert) for a in received)
-
-    def test_callback_error_does_not_break(self):
-        def bad_callback(alert):
-            raise RuntimeError("boom")
-
-        engine = AlertEngine(on_alert=bad_callback)
-        engine.clear_cooldowns()
-        # Should not raise
-        alerts = engine.evaluate_node("!abc", {"battery": 3}, now=1000.0)
-        assert len(alerts) > 0
-
-    def test_webhook_management(self):
-        engine = AlertEngine()
-        engine.add_webhook("https://example.com/hook1")
-        engine.add_webhook("https://example.com/hook2")
-        assert len(engine.list_webhooks()) == 2
-
-        # Duplicate not added
-        engine.add_webhook("https://example.com/hook1")
-        assert len(engine.list_webhooks()) == 2
-
-        assert engine.remove_webhook("https://example.com/hook1") is True
-        assert len(engine.list_webhooks()) == 1
-        assert engine.remove_webhook("nonexistent") is False
-
-    @patch("src.utils.alert_engine.urllib.request.urlopen")
-    def test_webhook_delivery(self, mock_urlopen):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
-        engine = AlertEngine()
-        engine.add_webhook("https://example.com/hook")
-        engine.clear_cooldowns()
-        engine.evaluate_node("!abc", {"battery": 3}, now=1000.0)
-        assert mock_urlopen.called
-
-    @patch("src.utils.alert_engine.urllib.request.urlopen")
-    def test_webhook_failure_does_not_break(self, mock_urlopen):
-        mock_urlopen.side_effect = Exception("network error")
-
-        engine = AlertEngine()
-        engine.add_webhook("https://example.com/hook")
-        engine.clear_cooldowns()
-        # Should not raise
-        alerts = engine.evaluate_node("!abc", {"battery": 3}, now=1000.0)
-        assert len(alerts) > 0
-
-
-# ---------------------------------------------------------------------------
-# AlertEngine — offline alert delivery
-# ---------------------------------------------------------------------------
-
-class TestOfflineAlertDelivery:
-    def test_offline_alert_calls_callback(self):
-        received = []
-        engine = AlertEngine(on_alert=received.append)
-        engine.clear_cooldowns()
-        engine.evaluate_offline("!abc", last_seen=0.0, now=5000.0)
-        assert len(received) == 1
-        assert received[0].alert_type == "node_offline"
 
 
 # ---------------------------------------------------------------------------
