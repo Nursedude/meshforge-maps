@@ -36,12 +36,12 @@ class MapWebSocketServer:
     """Async WebSocket broadcast server running in a background thread.
 
     Args:
-        host: Bind address (default "0.0.0.0").
+        host: Bind address (default "127.0.0.1").
         port: WebSocket port (default 8809).
         history_size: Number of recent messages to replay to new clients.
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8809,
+    def __init__(self, host: str = "127.0.0.1", port: int = 8809,
                  history_size: int = 50) -> None:
         self.host = host
         self.port = port
