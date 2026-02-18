@@ -21,7 +21,7 @@ class TestMakeFeature:
         assert f["properties"]["network"] == "meshtastic"
 
     def test_strips_none_values(self):
-        f = make_feature("n1", 0.0, 0.0, "reticulum")
+        f = make_feature("n1", 1.0, 1.0, "reticulum")
         props = f["properties"]
         # None-valued optional fields should be stripped
         assert "battery" not in props
@@ -40,6 +40,13 @@ class TestMakeFeature:
     def test_online_status(self):
         f = make_feature("n1", 10.0, 20.0, "meshtastic", is_online=True)
         assert f["properties"]["is_online"] is True
+
+    def test_null_island_rejected(self):
+        """Coordinates near (0,0) are rejected as GPS artifacts."""
+        f = make_feature("n1", 0.0, 0.0, "meshtastic")
+        assert f is None
+        f2 = make_feature("n2", 0.005, 0.005, "meshtastic")
+        assert f2 is None
 
     def test_name_defaults_to_id(self):
         f = make_feature("my-node-id", 10.0, 20.0, "meshtastic")

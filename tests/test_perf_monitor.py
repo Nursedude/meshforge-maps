@@ -4,25 +4,7 @@ import time
 
 import pytest
 
-from src.utils.perf_monitor import PerfMonitor, TimingSample
-
-
-class TestTimingSample:
-    """Tests for TimingSample data class."""
-
-    def test_to_dict(self):
-        s = TimingSample("meshtastic", 42.5, node_count=10, from_cache=False, timestamp=1000.0)
-        d = s.to_dict()
-        assert d["source"] == "meshtastic"
-        assert d["duration_ms"] == 42.5
-        assert d["node_count"] == 10
-        assert d["from_cache"] is False
-        assert d["timestamp"] == 1000.0
-
-    def test_rounding(self):
-        s = TimingSample("test", 42.555555)
-        d = s.to_dict()
-        assert d["duration_ms"] == 42.56
+from src.utils.perf_monitor import PerfMonitor
 
 
 class TestPerfMonitorRecording:
@@ -30,7 +12,7 @@ class TestPerfMonitorRecording:
 
     @pytest.fixture
     def monitor(self):
-        return PerfMonitor(max_samples=5)
+        return PerfMonitor()
 
     def test_record_timing(self, monitor):
         monitor.record_timing("source_a", 100.0, node_count=5)
@@ -50,11 +32,12 @@ class TestPerfMonitorRecording:
         assert stats["min_ms"] == 100.0
         assert stats["max_ms"] == 300.0
 
-    def test_eviction_at_max_samples(self, monitor):
+    def test_record_many_timings(self, monitor):
         for i in range(10):
             monitor.record_timing("source_a", float(i))
         stats = monitor.get_source_stats("source_a")
-        assert stats["count"] == 5  # max_samples=5
+        # Counter-based: all recordings are accumulated
+        assert stats["count"] == 10
 
     def test_record_cycle(self, monitor):
         monitor.record_cycle(500.0, total_nodes=42)
@@ -106,30 +89,6 @@ class TestTimingContext:
         assert stats["cache_hit_ratio"] == 1.0
 
 
-class TestPercentiles:
-    """Tests for percentile calculations."""
-
-    def test_percentiles_single_sample(self):
-        monitor = PerfMonitor()
-        monitor.record_timing("s", 50.0)
-        stats = monitor.get_source_stats("s")
-        assert stats["p50_ms"] == 50.0
-        assert stats["p90_ms"] == 50.0
-        assert stats["p99_ms"] == 50.0
-
-    def test_percentiles_multiple_samples(self):
-        monitor = PerfMonitor()
-        for i in range(100):
-            monitor.record_timing("s", float(i + 1))
-        stats = monitor.get_source_stats("s")
-        # Floor-based indexing: p50 index = int(100*0.5) = 50 -> value 51
-        assert stats["p50_ms"] == 51.0
-        assert stats["p90_ms"] == 91.0
-        assert stats["p99_ms"] == 100.0
-        assert stats["min_ms"] == 1.0
-        assert stats["max_ms"] == 100.0
-
-
 class TestGetStats:
     """Tests for comprehensive stats reporting."""
 
@@ -143,7 +102,6 @@ class TestGetStats:
         assert "meshtastic" in stats["sources"]
         assert "reticulum" in stats["sources"]
         assert stats["cycle"] is not None
-        assert stats["memory"]["timing_samples"] == 2
         assert stats["memory"]["tracked_sources"] == 2
 
     def test_collections_per_minute(self):
@@ -171,8 +129,5 @@ class TestMemoryUsage:
         monitor.record_timing("a", 10.0)
         monitor.record_timing("a", 20.0)
         monitor.record_timing("b", 30.0)
-        monitor.record_cycle(50.0)
         mem = monitor.get_memory_usage()
-        assert mem["timing_samples"] == 3
-        assert mem["cycle_samples"] == 1
         assert mem["tracked_sources"] == 2
