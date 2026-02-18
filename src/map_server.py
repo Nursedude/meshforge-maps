@@ -570,12 +570,17 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         })
 
     def _serve_config_drift(self) -> None:
-        """Serve config drift events for all nodes."""
+        """Serve config drift events, optionally filtered by severity/since."""
         detector = self._get_config_drift()
         if not detector:
             self._send_json({"error": "Config drift detection not available"}, 503)
             return
-        self._send_json(detector.get_summary())
+        query = getattr(self, "_query", {})
+        severity = _safe_query_param(query, "severity")
+        since_str = _safe_query_param(query, "since")
+        since = float(since_str) if since_str else None
+        drifts = detector.get_all_drifts(since=since, severity=severity)
+        self._send_json({"drifts": drifts, "total": len(drifts)})
 
     def _serve_config_drift_summary(self) -> None:
         """Serve config drift summary."""
