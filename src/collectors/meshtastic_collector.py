@@ -48,40 +48,46 @@ class MeshtasticCollector(BaseCollector):
         cache_ttl_seconds: int = 900,
         mqtt_store: Optional[Any] = None,
         connection_timeout: float = 5.0,
+        source_mode: str = "auto",
     ):
         super().__init__(cache_ttl_seconds)
         self._api_base = f"http://{meshtasticd_host}:{meshtasticd_port}"
         self._mqtt_store = mqtt_store  # MQTTNodeStore instance from mqtt_subscriber
         self._conn_mgr = ConnectionManager.get_instance(meshtasticd_host, meshtasticd_port)
         self._connection_timeout = connection_timeout
+        # "auto" = API → MQTT → cache; "mqtt_only" = skip API; "local_only" = API only
+        self._source_mode = source_mode
 
     def _fetch(self) -> Dict[str, Any]:
         features: List[Dict[str, Any]] = []
         seen_ids: set = set()
 
-        # Source 1: Local meshtasticd HTTP API
-        api_nodes = self._fetch_from_api()
-        for f in api_nodes:
-            fid = f["properties"].get("id")
-            if fid and fid not in seen_ids:
-                seen_ids.add(fid)
-                features.append(f)
+        # Source 1: Local meshtasticd HTTP API (skipped in mqtt_only mode)
+        if self._source_mode != "mqtt_only":
+            api_nodes = self._fetch_from_api()
+            for f in api_nodes:
+                fid = f["properties"].get("id")
+                if fid and fid not in seen_ids:
+                    seen_ids.add(fid)
+                    features.append(f)
 
-        # Source 2: Live MQTT subscriber (real-time nodes)
-        live_nodes = self._fetch_from_live_mqtt()
-        for f in live_nodes:
-            fid = f["properties"].get("id")
-            if fid and fid not in seen_ids:
-                seen_ids.add(fid)
-                features.append(f)
+        # Source 2: Live MQTT subscriber (real-time nodes) (skipped in local_only mode)
+        if self._source_mode != "local_only":
+            live_nodes = self._fetch_from_live_mqtt()
+            for f in live_nodes:
+                fid = f["properties"].get("id")
+                if fid and fid not in seen_ids:
+                    seen_ids.add(fid)
+                    features.append(f)
 
-        # Source 3: MQTT subscriber cache file (fallback)
-        mqtt_nodes = self._fetch_from_mqtt_cache()
-        for f in mqtt_nodes:
-            fid = f["properties"].get("id")
-            if fid and fid not in seen_ids:
-                seen_ids.add(fid)
-                features.append(f)
+        # Source 3: MQTT subscriber cache file (skipped in local_only mode)
+        if self._source_mode != "local_only":
+            mqtt_nodes = self._fetch_from_mqtt_cache()
+            for f in mqtt_nodes:
+                fid = f["properties"].get("id")
+                if fid and fid not in seen_ids:
+                    seen_ids.add(fid)
+                    features.append(f)
 
         return make_feature_collection(features, self.source_name)
 

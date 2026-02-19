@@ -2,6 +2,101 @@
 
 ---
 
+## Session 22: Pi 2W Integration — meshforge Parent Diff & Deployment Hardening
+
+**Date:** 2026-02-19
+**Branch:** `claude/review-meshforge-pi-integration-x1BY4`
+**Scope:** Cross-repo diff (meshforge parent → meshforge-maps), Pi Zero 2 W deployment, Debian Trixie support, MQTT-only mode
+**Version:** 0.7.0-beta (no version bump)
+
+### Summary
+
+Comprehensive diff of the parent `Nursedude/meshforge` repo (v0.5.4, 875 PRs) against meshforge-maps identified critical bugs, missing deployment automation, and feature gaps. Fixed 2 critical bugs, added deployment tooling, and implemented MQTT-only mode for no-radio Pi operation.
+
+### Deployment Context
+
+- **Target:** Raspberry Pi Zero 2 W (512MB RAM, Cortex-A53) running Debian Trixie (13)
+- **Mode:** No radio hardware, headless, web map served to remote browsers
+- **Data sources:** MQTT (public Meshtastic broker) + HamClock/NOAA (space weather)
+
+### Critical Bugs Fixed (from parent diff)
+
+| # | Bug | Files | Impact |
+|---|-----|-------|--------|
+| 1 | `Path.home()` returns `/root` under sudo/systemd | 5 files, 7 instances | Config, data, DBs write to wrong directory when run as service |
+| 2 | Server bind hardcoded to `127.0.0.1` | `map_server.py` | Remote browsers can't reach web map; `--host` CLI arg only affected TUI |
+
+### Features Added
+
+1. **`src/utils/paths.py`** — `get_real_home()` resolves via SUDO_USER → LOGNAME → pwd → Path.home() fallback chain. Convenience functions: `get_data_dir()`, `get_config_dir()`, `get_cache_dir()`
+
+2. **Configurable bind address** — `http_host` + `ws_host` config keys, wired through `MapServer.start()` and `_start_websocket()`. `--host` CLI arg now affects server binding.
+
+3. **`meshtastic_source` config** — Values: `"auto"` (default), `"mqtt_only"`, `"local_only"`. When `mqtt_only`, skips `_fetch_from_api()` entirely — eliminates connection-refused log spam on no-radio Pi.
+
+4. **Systemd service file** — `scripts/meshforge-maps.service` with security hardening (NoNewPrivileges, ProtectSystem=strict, ProtectHome=read-only, PrivateTmp), crash-loop protection (StartLimitIntervalSec=300), network ordering.
+
+5. **Install script** — `scripts/install.sh` with OS detection (Bookworm/Trixie), PEP 668-compliant venv, optional deps, `--no-radio` flag, systemd setup.
+
+6. **Verify script** — `scripts/verify.sh` checks Python, imports, service status, ports, HTTP endpoint, filesystem. Pass/warn/fail exit codes.
+
+7. **Tile cache reduction** — Service worker `MAX_TILE_CACHE_ITEMS` 2000 → 500 for 512MB Pi.
+
+8. **Trixie support** — Added to README OS table with PEP 668 note. Pi headless deployment section.
+
+9. **HamClock headless docs** — README section documenting 3 options for headless Pi: remote host, Xvfb, NOAA direct fallback.
+
+### Files Changed (17)
+
+| File | Change |
+|------|--------|
+| `src/utils/paths.py` | **NEW** — sudo/systemd-safe home resolution |
+| `src/main.py` | Safe paths, `--host` wired to server config |
+| `src/map_server.py` | Configurable HTTP + WebSocket bind address |
+| `src/utils/config.py` | `http_host`, `ws_host`, `meshtastic_source` config keys |
+| `src/collectors/base.py` | Safe path for data directory |
+| `src/collectors/meshtastic_collector.py` | `source_mode` param, skip API when `mqtt_only` |
+| `src/collectors/aggregator.py` | Pass `meshtastic_source` to collector |
+| `src/utils/node_history.py` | Safe path for history DB |
+| `src/utils/shared_health_state.py` | Safe path for health DB |
+| `web/sw-tiles.js` | Tile cache 2000 → 500 |
+| `scripts/meshforge-maps.service` | **NEW** — systemd unit with security hardening |
+| `scripts/install.sh` | **NEW** — Pi/Trixie installer |
+| `scripts/verify.sh` | **NEW** — post-install verification |
+| `tests/test_paths.py` | **NEW** — 11 tests for path safety |
+| `tests/test_config.py` | +8 tests (host config, no-radio profile, mqtt-only) |
+| `tests/test_collectors.py` | +2 tests (mqtt-only mode) |
+| `README.md` | Trixie, host config, Pi deployment, HamClock headless |
+
+### Test Results
+
+- **Before:** 822 passed, 22 skipped
+- **After:** 832+ passed, 22 skipped, 0 failures
+
+### Architecture Notes
+
+- **Path resolution pattern** ported from meshforge parent's `utils/paths.py` — the `get_real_home()` function is the single source of truth for home directory, replacing all 7 `Path.home()` calls
+- **Bind address** follows meshforge parent's systemd service pattern — `0.0.0.0` for production Pi, `127.0.0.1` default for development
+- **MQTT-only mode** prevents wasted TCP connections and log noise when no local meshtasticd is running — the MQTT subscriber provides all Meshtastic data via the public broker
+- **Install script** handles PEP 668 (externally-managed Python) enforced by Trixie via mandatory venv creation
+
+### Feature Gap Analysis (from parent diff)
+
+Documented for future sessions:
+- **NOAA Weather Alerts** — EAS polygon overlays on map (from parent's `eas_alerts.py`)
+- **MeshCore Collector** — 5th data source (from parent's v0.6.0 roadmap)
+- **Coverage Heatmap** — Node density overlay leveraging existing history DB
+- **RF Link Analysis** — Link budget/Fresnel zone on topology links (from parent's RF tools)
+
+### Session Entropy Watch
+
+- Session stayed focused throughout — systematic task list with 12 tracked items
+- All tasks completed in dependency order (paths → config → server → deployment → tests)
+- Zero regressions at every checkpoint
+- Clean boundary: all tests green, ready for next session
+
+---
+
 ## Session 21: Fix meshtasticd HTTP API Connection Issues
 
 **Date:** 2026-02-12

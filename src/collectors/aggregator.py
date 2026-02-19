@@ -68,6 +68,7 @@ class DataAggregator:
             self._collectors["meshtastic"] = MeshtasticCollector(
                 cache_ttl_seconds=cache_ttl,
                 mqtt_store=mqtt_store,
+                source_mode=config.get("meshtastic_source", "auto"),
             )
             self._collectors["meshtastic"]._max_retries = retries
 
