@@ -42,31 +42,25 @@ class TestHelpers:
     def test_score_label(self, score, expected):
         assert _score_label(score) == expected
 
-    def test_clamp(self):
-        assert _clamp(5.0, 0.0, 10.0) == 5.0
-        assert _clamp(-1.0, 0.0, 10.0) == 0.0
-        assert _clamp(15.0, 0.0, 10.0) == 10.0
+    @pytest.mark.parametrize("val,lo,hi,expected", [
+        (5.0, 0.0, 10.0, 5.0),
+        (-1.0, 0.0, 10.0, 0.0),
+        (15.0, 0.0, 10.0, 10.0),
+    ])
+    def test_clamp(self, val, lo, hi, expected):
+        assert _clamp(val, lo, hi) == expected
 
-    def test_linear_score_midpoint(self):
-        # Midpoint between 0 and 100 with max 10 points should give 5
-        assert _linear_score(50, 0, 100, 10.0) == pytest.approx(5.0)
-
-    def test_linear_score_at_good(self):
-        assert _linear_score(100, 0, 100, 10.0) == pytest.approx(10.0)
-
-    def test_linear_score_at_bad(self):
-        assert _linear_score(0, 0, 100, 10.0) == pytest.approx(0.0)
-
-    def test_linear_score_below_bad(self):
-        assert _linear_score(-10, 0, 100, 10.0) == pytest.approx(0.0)
-
-    def test_linear_score_above_good(self):
-        assert _linear_score(150, 0, 100, 10.0) == pytest.approx(10.0)
-
-    def test_linear_score_equal_bounds(self):
-        # When good == bad, at value >= good returns max, below returns 0
-        assert _linear_score(50, 50, 50, 10.0) == pytest.approx(10.0)
-        assert _linear_score(49, 50, 50, 10.0) == pytest.approx(0.0)
+    @pytest.mark.parametrize("value,bad,good,max_pts,expected", [
+        (50, 0, 100, 10.0, 5.0),    # midpoint
+        (100, 0, 100, 10.0, 10.0),   # at good
+        (0, 0, 100, 10.0, 0.0),      # at bad
+        (-10, 0, 100, 10.0, 0.0),    # below bad
+        (150, 0, 100, 10.0, 10.0),   # above good
+        (50, 50, 50, 10.0, 10.0),    # equal bounds, at value
+        (49, 50, 50, 10.0, 0.0),     # equal bounds, below
+    ])
+    def test_linear_score(self, value, bad, good, max_pts, expected):
+        assert _linear_score(value, bad, good, max_pts) == pytest.approx(expected)
 
 
 class TestNodeHealthScore:
