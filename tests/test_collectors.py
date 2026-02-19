@@ -817,6 +817,7 @@ class TestDataAggregator:
         agg = DataAggregator({
             "enable_meshtastic": False, "enable_reticulum": False,
             "enable_hamclock": False, "enable_aredn": False,
+            "enable_noaa_alerts": False,
         })
         assert agg.get_source_health() == {}
 

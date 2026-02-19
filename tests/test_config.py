@@ -118,6 +118,7 @@ class TestMapsConfigSources:
         config.set("enable_reticulum", False)
         config.set("enable_hamclock", False)
         config.set("enable_aredn", False)
+        config.set("enable_noaa_alerts", False)
         assert config.get_enabled_sources() == []
 
 
