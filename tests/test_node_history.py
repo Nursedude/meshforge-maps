@@ -255,6 +255,91 @@ class TestPruning:
         assert self.db.observation_count == 1
 
 
+class TestDensityPoints:
+    """Tests for get_density_points() coverage heatmap data."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
+        self.db = NodeHistoryDB(
+            db_path=tmp_path / "density.db",
+            throttle_seconds=0,
+        )
+        yield
+        self.db.close()
+
+    def test_empty_returns_empty(self):
+        assert self.db.get_density_points() == []
+
+    def test_single_observation(self):
+        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
+        points = self.db.get_density_points()
+        assert len(points) == 1
+        lat, lon, count = points[0]
+        assert lat == 35.0
+        assert lon == 139.0
+        assert count == 1
+
+    def test_multiple_observations_same_cell(self):
+        self.db.record_observation("!a", 35.00001, 139.00001, timestamp=1000)
+        self.db.record_observation("!b", 35.00002, 139.00002, timestamp=2000)
+        self.db.record_observation("!c", 35.00003, 139.00003, timestamp=3000)
+        # With precision=4, these round to the same cell (35.0, 139.0)
+        points = self.db.get_density_points(precision=4)
+        assert len(points) == 1
+        assert points[0][2] == 3
+
+    def test_different_cells(self):
+        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
+        self.db.record_observation("!b", 40.0, -74.0, timestamp=2000)
+        points = self.db.get_density_points()
+        assert len(points) == 2
+
+    def test_sorted_descending_by_count(self):
+        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
+        self.db.record_observation("!b", 35.0, 139.0, timestamp=2000)
+        self.db.record_observation("!c", 40.0, -74.0, timestamp=3000)
+        points = self.db.get_density_points()
+        assert points[0][2] >= points[1][2]
+
+    def test_since_filter(self):
+        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
+        self.db.record_observation("!b", 35.0, 139.0, timestamp=2000)
+        self.db.record_observation("!c", 35.0, 139.0, timestamp=3000)
+        points = self.db.get_density_points(since=2000)
+        assert len(points) == 1
+        assert points[0][2] == 2  # Only observations at 2000 and 3000
+
+    def test_until_filter(self):
+        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
+        self.db.record_observation("!b", 35.0, 139.0, timestamp=2000)
+        self.db.record_observation("!c", 35.0, 139.0, timestamp=3000)
+        points = self.db.get_density_points(until=2000)
+        assert len(points) == 1
+        assert points[0][2] == 2  # Only observations at 1000 and 2000
+
+    def test_network_filter(self):
+        self.db.record_observation("!a", 35.0, 139.0, network="meshtastic", timestamp=1000)
+        self.db.record_observation("!b", 35.0, 139.0, network="reticulum", timestamp=2000)
+        self.db.record_observation("!c", 40.0, -74.0, network="meshtastic", timestamp=3000)
+        points = self.db.get_density_points(network="meshtastic")
+        assert len(points) == 2
+        total = sum(p[2] for p in points)
+        assert total == 2  # Only meshtastic observations
+
+    def test_precision_coarser(self):
+        # With precision=2, 35.001 and 35.004 both round to 35.0
+        self.db.record_observation("!a", 35.001, 139.001, timestamp=1000)
+        self.db.record_observation("!b", 35.004, 139.004, timestamp=2000)
+        points = self.db.get_density_points(precision=2)
+        assert len(points) == 1
+        assert points[0][2] == 2
+
+    def test_returns_empty_when_closed(self, tmp_path):
+        db = NodeHistoryDB(db_path=tmp_path / "closed_density.db", throttle_seconds=0)
+        db.close()
+        assert db.get_density_points() == []
+
+
 class TestDBClosed:
     """Tests that operations return safely when DB is closed or unavailable."""
 
