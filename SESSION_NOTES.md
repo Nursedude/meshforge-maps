@@ -2,6 +2,127 @@
 
 ---
 
+## Session 23: NOAA Weather Alerts — EAS Polygon Overlays
+
+**Date:** 2026-02-19
+**Branch:** `claude/session-entropy-tracking-5Hy1l`
+**Scope:** NOAA Weather Alert collector, polygon map overlays, API endpoint, config integration
+**Version:** 0.7.0-beta (no version bump)
+
+### Summary
+
+Implemented NOAA National Weather Service weather alert integration — the first
+feature from the Session 22 Feature Gap Analysis. The system fetches active
+weather alerts from the NWS API (api.weather.gov/alerts/active), processes them
+into severity-colored GeoJSON polygons, and renders them as interactive map
+overlays with popup details (headline, area, onset/expiry, severity, certainty).
+
+### What Was Built
+
+#### 1. NOAA Alert Collector (`src/collectors/noaa_alert_collector.py`)
+- `NOAAAlertCollector` extends `BaseCollector` (inherits caching, retry, health tracking)
+- Fetches from NOAA NWS API with proper `User-Agent` and `Accept: application/geo+json` headers
+- Processes native NOAA GeoJSON features: filters expired alerts, deduplicates by ID,
+  enriches with severity colors, sorts by severity (Extreme → Minor)
+- Handles both Polygon and MultiPolygon geometries
+- Configurable area filter (state code) and severity filter
+- Excluded from `collect_all()` since features are polygons (not mesh node points)
+- Dedicated endpoint: `/api/weather/alerts`
+
+#### 2. Severity Color Mapping
+| Severity | Color | Fill Opacity |
+|----------|-------|--------------|
+| Extreme  | #d32f2f (dark red) | 35% |
+| Severe   | #f44336 (red) | 25% |
+| Moderate | #ff9800 (orange) | 20% |
+| Minor    | #ffeb3b (yellow) | 15% |
+| Unknown  | #9e9e9e (gray) | 10% |
+
+#### 3. Configuration Keys
+- `enable_noaa_alerts` (default: `true`) — master toggle
+- `noaa_alerts_area` (default: `null`) — state code filter (e.g. `"TX"`, `"CA"`)
+- `noaa_alerts_severity` (default: `null`) — severity filter list (e.g. `["Extreme","Severe"]`)
+- `noaa_alerts` added to `NETWORK_COLORS` (#f44336) and `get_enabled_sources()`
+
+#### 4. API Endpoint
+- `GET /api/weather/alerts` — returns GeoJSON FeatureCollection with polygon features
+- Each feature has: event, headline, description, severity, certainty, urgency,
+  area_desc, onset, expires, sender_name, color, severity_order
+
+#### 5. Frontend Overlay
+- New "Weather Alerts" toggle in Overlays control panel
+- `L.geoJSON` polygon layer with severity-based styling (color, fill opacity, weight)
+- Interactive popups showing: event type, severity/urgency, headline, area description,
+  onset/expires timestamps, source NWS office, certainty level
+- Auto-refreshes with the 60s polling cycle and manual refresh button
+
+#### 6. Aggregator Integration
+- NOAA collector registered in `DataAggregator` with `_OVERLAY_ONLY_COLLECTORS` exclusion set
+- `collect_all()` skips overlay-only collectors (polygon features don't mix with node points)
+- `collect_source("noaa_alerts")` still works for the dedicated endpoint
+- Cache TTL capped at 5 minutes for weather alerts (more time-sensitive than node data)
+
+### Test Results
+
+- **Before:** 827 passed, 22 skipped
+- **After:** 862 passed (+35 new), 22 skipped, 0 failures, 0 regressions
+
+### Test Coverage Added (35 new tests)
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `tests/test_noaa_alert_collector.py` | 35 | Collector init, URL building, fetch success/failure, feature processing (geometry filter, dedup, expiry, severity colors, sort order, property mapping, MultiPolygon, unparseable dates), severity constants, cache integration, config integration (enable/disable, area/severity settings, NETWORK_COLORS), aggregator integration (register, disable, collect_all exclusion, collect_source) |
+
+### Files Changed (7)
+
+| File | Change |
+|------|--------|
+| `src/collectors/noaa_alert_collector.py` | **NEW** — NOAA NWS weather alert collector |
+| `src/utils/config.py` | +`enable_noaa_alerts`, +`noaa_alerts_area`, +`noaa_alerts_severity`, +NETWORK_COLORS entry, +`get_enabled_sources()` entry |
+| `src/collectors/aggregator.py` | +import, +registration, +`_OVERLAY_ONLY_COLLECTORS` exclusion set |
+| `src/map_server.py` | +`/api/weather/alerts` route and handler |
+| `web/js/meshforge-maps.js` | +weather alert overlay layer, +toggle/load/render functions, +severity colors, +auto-refresh integration |
+| `web/meshforge_maps.html` | +Weather Alerts toggle in Overlays section |
+| `tests/test_noaa_alert_collector.py` | **NEW** — 35 tests |
+
+### Existing Test Fixes (2)
+
+| File | Fix |
+|------|-----|
+| `tests/test_collectors.py` | Added `enable_noaa_alerts: False` to "no sources" aggregator test |
+| `tests/test_config.py` | Added `enable_noaa_alerts` disable in "disable all" config test |
+
+### Architecture Notes
+
+- **Polygon vs Point separation:** NOAA alerts return Polygon/MultiPolygon geometries,
+  not Points. They are excluded from `collect_all()` via `_OVERLAY_ONLY_COLLECTORS` to
+  prevent polygon features from mixing with mesh node markers in `renderMarkers()`.
+  This pattern supports future polygon-based collectors (coverage heatmap, RF analysis).
+- **Native GeoJSON pass-through:** NOAA API already returns GeoJSON — the collector
+  enriches properties (severity color, sort order, network tag) but preserves geometry
+  as-is. No coordinate transformation needed.
+- **Cache TTL:** Weather alerts use a 5-minute cap (vs 15-min default for node data)
+  since alert timing is safety-critical.
+- **Frontend rendering:** Uses `L.geoJSON` for polygon rendering (same approach as
+  topology links) with severity-based `style` function and `onEachFeature` popups.
+
+### Session Entropy Watch
+
+- Session stayed focused on a single feature: NOAA Weather Alerts
+- All changes directly support the feature (collector, config, aggregator, endpoint, frontend, tests)
+- No scope creep into unrelated areas
+- Clean boundary: all tests green, ready for next session
+
+### Next Session Candidates
+
+- [ ] Coverage Heatmap — Node density overlay leveraging existing history DB
+- [ ] RF Link Analysis — Link budget/Fresnel zone on topology links (from parent's RF tools)
+- [ ] MeshCore Collector — 5th mesh data source (from parent's v0.6.0 roadmap)
+- [ ] Analytics improvements: interactive chart tooltips, time range picker
+- [ ] TUI: Analytics tab (7th tab), mouse support
+
+---
+
 ## Session 22: Pi 2W Integration — meshforge Parent Diff & Deployment Hardening
 
 **Date:** 2026-02-19

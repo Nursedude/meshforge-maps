@@ -21,8 +21,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_reticulum": True,
     "enable_hamclock": True,
     "enable_aredn": True,
+    "enable_noaa_alerts": True,
     # Meshtastic data source mode: "auto" (API → MQTT → cache), "mqtt_only", "local_only"
     "meshtastic_source": "auto",
+    # NOAA weather alerts (api.weather.gov)
+    "noaa_alerts_area": None,  # State code filter (e.g. "TX", "CA"); None = all US
+    "noaa_alerts_severity": None,  # Severity filter list (e.g. ["Extreme","Severe"]); None = all
     "hamclock_host": "localhost",
     "hamclock_port": 8080,
     "openhamclock_port": 3000,
@@ -89,6 +93,7 @@ NETWORK_COLORS: Dict[str, str] = {
     "reticulum": "#ab47bc",
     "aredn": "#ff7043",
     "hamclock": "#42a5f5",
+    "noaa_alerts": "#f44336",
 }
 
 
@@ -173,4 +178,6 @@ class MapsConfig:
             sources.append("hamclock")
         if settings.get("enable_aredn"):
             sources.append("aredn")
+        if settings.get("enable_noaa_alerts"):
+            sources.append("noaa_alerts")
         return sources

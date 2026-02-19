@@ -15,6 +15,7 @@ from .base import deduplicate_features, make_feature_collection
 from .hamclock_collector import HamClockCollector
 from .meshtastic_collector import MeshtasticCollector
 from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
+from .noaa_alert_collector import NOAAAlertCollector
 from .reticulum_collector import ReticulumCollector
 from ..utils.event_bus import EventBus
 from ..utils.perf_monitor import PerfMonitor
@@ -93,6 +94,19 @@ class DataAggregator:
             )
             self._collectors["aredn"]._max_retries = retries
 
+        # NOAA weather alerts (polygon overlay — not included in collect_all)
+        if config.get("enable_noaa_alerts", True):
+            self._collectors["noaa_alerts"] = NOAAAlertCollector(
+                area=config.get("noaa_alerts_area"),
+                severity_filter=config.get("noaa_alerts_severity"),
+                cache_ttl_seconds=min(cache_ttl, 300),  # Cap at 5 min for alerts
+            )
+            self._collectors["noaa_alerts"]._max_retries = retries
+
+    # Collectors that return polygon/overlay data — excluded from collect_all()
+    # because their features are not mesh node points.
+    _OVERLAY_ONLY_COLLECTORS = {"noaa_alerts"}
+
     def collect_all(self) -> Dict[str, Any]:
         """Collect from all enabled sources and merge into one FeatureCollection."""
         per_source_features: List[List[Dict[str, Any]]] = []
@@ -101,6 +115,8 @@ class DataAggregator:
 
         with self._perf_monitor.time_cycle() as cycle_ctx:
             for name, collector in self._collectors.items():
+                if name in self._OVERLAY_ONLY_COLLECTORS:
+                    continue
                 try:
                     with self._perf_monitor.time_collection(name) as src_ctx:
                         fc = collector.collect()

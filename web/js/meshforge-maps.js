@@ -99,6 +99,9 @@ const markerRegistry = new Map(); // nodeId -> marker for O(1) WebSocket lookup
 let alertPanelOpen = false;       // Whether alert panel is visible
 const alertItems = [];            // In-memory alert buffer (newest first)
 const MAX_ALERT_ITEMS = 100;      // Cap alert panel entries
+let weatherAlertLayer = null;     // Leaflet GeoJSON layer for NOAA weather alerts
+let showWeatherAlerts = false;    // Whether weather alert overlay is visible
+let weatherAlertCount = 0;        // Number of active weather alerts
 
 // Per-network layer groups (for toggle visibility)
 const networkLayers = {
@@ -573,6 +576,7 @@ async function refreshData() {
     showToast('Refreshing all sources...');
     await loadNodeData();
     if (showTopology) await loadTopologyData();
+    if (showWeatherAlerts) await loadWeatherAlerts();
     if (consecutiveErrors === 0) {
         showToast('Data refreshed');
     }
@@ -1596,6 +1600,122 @@ function analyticsDataToCsv(tab, data) {
 }
 
 // =========================================================================
+// NOAA Weather Alerts Overlay
+// =========================================================================
+
+const SEVERITY_COLORS = {
+    Extreme:  '#d32f2f',
+    Severe:   '#f44336',
+    Moderate: '#ff9800',
+    Minor:    '#ffeb3b',
+    Unknown:  '#9e9e9e',
+};
+
+const SEVERITY_FILL_OPACITY = {
+    Extreme:  0.35,
+    Severe:   0.25,
+    Moderate: 0.20,
+    Minor:    0.15,
+    Unknown:  0.10,
+};
+
+function toggleWeatherAlerts() {
+    showWeatherAlerts = document.getElementById('overlayWeatherAlerts').checked;
+    if (showWeatherAlerts) {
+        loadWeatherAlerts();
+    } else if (weatherAlertLayer) {
+        map.removeLayer(weatherAlertLayer);
+        weatherAlertLayer = null;
+        weatherAlertCount = 0;
+        updateWeatherAlertCount();
+    }
+}
+
+async function loadWeatherAlerts() {
+    try {
+        var resp = await fetchWithRetry(API_BASE + '/api/weather/alerts', 1, 2000);
+        if (!resp.ok) {
+            console.debug('Weather alerts unavailable:', resp.status);
+            return;
+        }
+        var data = await resp.json();
+        renderWeatherAlerts(data);
+    } catch (e) {
+        console.debug('Weather alerts fetch failed:', e);
+    }
+}
+
+function renderWeatherAlerts(data) {
+    if (weatherAlertLayer) {
+        map.removeLayer(weatherAlertLayer);
+        weatherAlertLayer = null;
+    }
+
+    var features = data.features || [];
+    weatherAlertCount = features.length;
+    updateWeatherAlertCount();
+
+    if (features.length === 0) return;
+
+    weatherAlertLayer = L.geoJSON(data, {
+        style: function(feature) {
+            var props = feature.properties || {};
+            var severity = props.severity || 'Unknown';
+            var color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.Unknown;
+            var fillOpacity = SEVERITY_FILL_OPACITY[severity] || 0.15;
+            return {
+                color: color,
+                weight: 2,
+                opacity: 0.7,
+                fillColor: color,
+                fillOpacity: fillOpacity,
+                interactive: true,
+            };
+        },
+        onEachFeature: function(feature, layer) {
+            var props = feature.properties || {};
+            var severity = props.severity || 'Unknown';
+            var color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.Unknown;
+
+            var popup = '<div class="popup-title" style="color:' + color + '">' + esc(props.event || 'Weather Alert') + '</div>';
+            popup += '<div class="popup-network" style="color:' + color + '">' + esc(severity) + ' &mdash; ' + esc(props.urgency || '') + '</div>';
+
+            if (props.headline) {
+                popup += '<div class="popup-row" style="font-size:11px;color:#b0bec5;margin:4px 0">' + esc(props.headline) + '</div>';
+            }
+            if (props.area_desc) {
+                popup += '<div class="popup-row"><span class="popup-key">Area</span><span class="popup-val" style="font-size:10px">' + esc(props.area_desc) + '</span></div>';
+            }
+            if (props.onset) {
+                try {
+                    var onsetStr = new Date(props.onset).toLocaleString();
+                    popup += '<div class="popup-row"><span class="popup-key">Onset</span><span class="popup-val">' + esc(onsetStr) + '</span></div>';
+                } catch (e) { /* ignore */ }
+            }
+            if (props.expires) {
+                try {
+                    var expiresStr = new Date(props.expires).toLocaleString();
+                    popup += '<div class="popup-row"><span class="popup-key">Expires</span><span class="popup-val">' + esc(expiresStr) + '</span></div>';
+                } catch (e) { /* ignore */ }
+            }
+            if (props.sender_name) {
+                popup += '<div class="popup-row"><span class="popup-key">Source</span><span class="popup-val" style="font-size:10px">' + esc(props.sender_name) + '</span></div>';
+            }
+            if (props.certainty) {
+                popup += '<div class="popup-row"><span class="popup-key">Certainty</span><span class="popup-val">' + esc(props.certainty) + '</span></div>';
+            }
+
+            layer.bindPopup(popup, { maxWidth: 350 });
+        },
+    }).addTo(map);
+}
+
+function updateWeatherAlertCount() {
+    var el = document.getElementById('countWeatherAlerts');
+    if (el) el.textContent = weatherAlertCount;
+}
+
+// =========================================================================
 // Health Check (data staleness indicator)
 // =========================================================================
 
@@ -1624,6 +1744,7 @@ async function checkDataHealth() {
 setInterval(function() {
     loadNodeData();
     if (showTopology) loadTopologyData();
+    if (showWeatherAlerts) loadWeatherAlerts();
 }, 60 * 1000); // Refresh every 60 seconds (WebSocket fallback)
 
 // Periodic health check (every 2 minutes)
