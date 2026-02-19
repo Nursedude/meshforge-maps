@@ -1,0 +1,51 @@
+# MeshForge Maps - Systemd Service File
+#
+# Install:
+#   sudo cp scripts/meshforge-maps.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now meshforge-maps
+#
+# Usage:
+#   sudo systemctl start meshforge-maps
+#   sudo systemctl stop meshforge-maps
+#   sudo systemctl status meshforge-maps
+#   journalctl -u meshforge-maps -f
+#
+# Customize WorkingDirectory and User to match your installation.
+# The --host 0.0.0.0 flag serves the web map to all network interfaces.
+
+[Unit]
+Description=MeshForge Maps - Mesh Network Visualization
+Documentation=https://github.com/Nursedude/meshforge-maps
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/meshforge-maps
+ExecStart=/opt/meshforge-maps/venv/bin/python -m src.main --host 0.0.0.0
+Restart=on-failure
+RestartSec=10
+
+# Crash-loop protection: max 5 restarts within 5 minutes
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+# Security hardening (ported from meshforge parent)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+
+# Allow writes to user data/config/cache directories
+ReadWritePaths=/home/pi/.config/meshforge
+ReadWritePaths=/home/pi/.local/share/meshforge
+ReadWritePaths=/home/pi/.cache/meshforge
+
+[Install]
+WantedBy=multi-user.target

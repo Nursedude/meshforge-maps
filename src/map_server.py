@@ -1113,6 +1113,7 @@ class MapServer:
         Tries the configured port first, then falls back up to 4 adjacent ports.
         """
         base_port = self._config.get("http_port", 8808)
+        http_host = self._config.get("http_host", "127.0.0.1")
         last_error: Optional[Exception] = None
 
         for offset in range(5):
@@ -1134,7 +1135,7 @@ class MapServer:
                     api_key=self._config.get("api_key"),
                 )
                 self._server = MeshForgeHTTPServer(
-                    ("127.0.0.1", port), MapRequestHandler, context=ctx,
+                    (http_host, port), MapRequestHandler, context=ctx,
                 )
 
                 self._thread = threading.Thread(
@@ -1146,11 +1147,11 @@ class MapServer:
                 self._port = port
                 if offset > 0:
                     logger.warning(
-                        "Port %d in use, MeshForge Maps started on http://127.0.0.1:%d",
-                        base_port, port,
+                        "Port %d in use, MeshForge Maps started on http://%s:%d",
+                        base_port, http_host, port,
                     )
                 else:
-                    logger.info("MeshForge Maps server started on http://127.0.0.1:%d", port)
+                    logger.info("MeshForge Maps server started on http://%s:%d", http_host, port)
 
                 # Subscribe node history recording to position events
                 if self._node_history:
@@ -1258,10 +1259,11 @@ class MapServer:
         Tries the given port first, then falls back up to 4 adjacent ports
         (matching the HTTP server fallback pattern).
         """
+        ws_host = self._config.get("ws_host", "127.0.0.1")
         for offset in range(5):
             port = ws_port + offset
             self._ws_server = MapWebSocketServer(
-                host="127.0.0.1",
+                host=ws_host,
                 port=port,
                 history_size=50,
             )
@@ -1269,8 +1271,8 @@ class MapServer:
                 self._ws_port = port
                 if offset > 0:
                     logger.warning(
-                        "WebSocket port %d in use, started on ws://127.0.0.1:%d",
-                        ws_port, port,
+                        "WebSocket port %d in use, started on ws://%s:%d",
+                        ws_port, ws_host, port,
                     )
                 # Subscribe to all node events and forward to WebSocket clients
                 self._aggregator.event_bus.subscribe(

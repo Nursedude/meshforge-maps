@@ -24,12 +24,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .paths import get_config_dir
+
 logger = logging.getLogger(__name__)
 
 # Default location of MeshForge core's health state DB
-DEFAULT_HEALTH_DB_PATH = (
-    Path.home() / ".config" / "meshforge" / "health_state.db"
-)
+DEFAULT_HEALTH_DB_PATH = get_config_dir() / "health_state.db"
 
 
 class SharedHealthStateReader:

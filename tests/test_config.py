@@ -121,6 +121,69 @@ class TestMapsConfigSources:
         assert config.get_enabled_sources() == []
 
 
+class TestHostConfig:
+    """Tests for http_host and ws_host configuration."""
+
+    def test_default_hosts(self, tmp_config):
+        config = MapsConfig(config_path=tmp_config)
+        assert config.get("http_host") == "127.0.0.1"
+        assert config.get("ws_host") == "127.0.0.1"
+
+    def test_set_host_to_all_interfaces(self, tmp_config):
+        config = MapsConfig(config_path=tmp_config)
+        config.update({"http_host": "0.0.0.0", "ws_host": "0.0.0.0"})
+        assert config.get("http_host") == "0.0.0.0"
+        assert config.get("ws_host") == "0.0.0.0"
+
+    def test_host_persists(self, tmp_config):
+        config = MapsConfig(config_path=tmp_config)
+        config.update({"http_host": "0.0.0.0"})
+        config.save()
+        config2 = MapsConfig(config_path=tmp_config)
+        assert config2.get("http_host") == "0.0.0.0"
+
+
+class TestNoRadioProfile:
+    """Tests for no-radio (headless monitor) configuration."""
+
+    def test_no_radio_profile(self, tmp_config):
+        """Simulate no-radio config: only MQTT + HamClock enabled."""
+        tmp_config.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp_config, "w") as f:
+            json.dump({
+                "enable_meshtastic": True,
+                "enable_reticulum": False,
+                "enable_hamclock": True,
+                "enable_aredn": False,
+            }, f)
+
+        config = MapsConfig(config_path=tmp_config)
+        sources = config.get_enabled_sources()
+        assert "meshtastic" in sources
+        assert "hamclock" in sources
+        assert "reticulum" not in sources
+        assert "aredn" not in sources
+
+    def test_no_radio_with_host_binding(self, tmp_config):
+        """No-radio config typically binds to 0.0.0.0 for network access."""
+        tmp_config.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp_config, "w") as f:
+            json.dump({
+                "enable_reticulum": False,
+                "enable_aredn": False,
+                "http_host": "0.0.0.0",
+                "ws_host": "0.0.0.0",
+            }, f)
+
+        config = MapsConfig(config_path=tmp_config)
+        assert config.get("http_host") == "0.0.0.0"
+        assert config.get("enable_reticulum") is False
+        assert config.get("enable_aredn") is False
+        # Defaults preserved for unset keys
+        assert config.get("enable_meshtastic") is True
+        assert config.get("enable_hamclock") is True
+
+
 class TestTileProviders:
     """Tests for tile provider definitions."""
 
