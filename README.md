@@ -8,7 +8,7 @@ Visualization plugin for the [MeshForge ecosystem](https://github.com/Nursedude/
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-835%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-898%20passing-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
 A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
@@ -16,6 +16,58 @@ A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RM
 **Runs standalone** or as a [MeshForge](https://github.com/Nursedude/meshforge) extension via plugin auto-discovery.
 
 > This repo can be installed as an extension of [Nursedude/meshforge](https://github.com/Nursedude/meshforge). MeshForge discovers it automatically via `manifest.json` on launch. No MeshForge core dependency is required -- meshforge-maps runs independently with its own HTTP server.
+
+## How It Works
+
+MeshForge Maps runs a lightweight HTTP server (default `:8808`) alongside a WebSocket server (`:8809`) that together power two interfaces: a **Leaflet.js web map** in your browser and an optional **curses-based terminal dashboard** (`--tui`).
+
+Behind the scenes, four **collectors** poll their respective data sources on a 5-second cycle -- Meshtastic nodes, Reticulum/RMAP nodes, AREDN mesh nodes, and HF propagation/space weather. A **data aggregator** merges and deduplicates the results into a unified GeoJSON dataset. That dataset feeds the REST API, which the web map and TUI consume.
+
+Real-time updates flow through an **event bus**: as new positions, telemetry, or topology changes arrive, they're broadcast over WebSocket to connected browsers and pushed to the TUI's live event stream. An **alert engine** evaluates node health against configurable threshold rules and delivers alerts via MQTT, webhooks, and the browser alert panel simultaneously.
+
+```
+Collectors → Aggregator → REST API → Web Map / TUI
+                ↓
+           Event Bus → WebSocket → Live Updates
+                ↓
+          Alert Engine → MQTT / Webhooks / Browser
+```
+
+**Quick start:**
+
+```bash
+python -m src.main              # web map only → http://127.0.0.1:8808
+python -m src.main --tui        # web map + terminal dashboard
+python -m src.main --tui-only   # TUI client (connect to existing server)
+```
+
+## With or Without a Radio
+
+MeshForge Maps works in two modes depending on whether you have radio hardware connected.
+
+### With Radio Hardware
+
+When running on a machine with local radios or mesh network access, collectors use **direct local APIs** for the lowest latency and full feature set:
+
+| Source | Connection | What You Get |
+|--------|-----------|--------------|
+| **Meshtastic** | meshtasticd HTTP API (`:4403`) | Positions, telemetry, battery, SNR, neighbor topology |
+| **Reticulum** | `rnstatus --json` or RCH REST API | RNS interfaces, node types, transport paths |
+| **AREDN** | Per-node sysinfo API on the mesh | Locations, firmware, LQM link quality metrics |
+| **HamClock** | OpenHamClock REST (`:3000`) | VOACAP predictions, DX spots, band conditions |
+
+### Without Radio (Headless / MQTT-Only)
+
+No radio? No problem. Install with `--no-radio` or just configure MQTT-only sources:
+
+| Source | Fallback | What You Get |
+|--------|---------|--------------|
+| **Meshtastic** | Public MQTT broker (`mqtt.meshtastic.org`) | Same node data via live `msh/#` subscription |
+| **HamClock/NOAA** | NOAA SWPC public APIs (automatic fallback) | Solar flux, Kp index, band conditions |
+| **Reticulum** | Disabled (requires local RNS stack) | -- |
+| **AREDN** | Disabled (requires on-mesh access) | -- |
+
+Each collector falls back automatically through a priority chain (local API → MQTT → cache file), so you always get the best available data. Set `meshtastic_source` to `"mqtt_only"` in settings to skip the local API check entirely.
 
 ## Features
 
@@ -35,6 +87,21 @@ A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RM
 - **Solar terminator** -- real-time day/night boundary overlay
 - **Marker clustering** -- toggleable clustering for dense node areas
 - **Node history** -- trajectory tracking and historical position playback
+
+### Terminal Dashboard (TUI)
+
+A full curses-based terminal interface launched with `--tui` (alongside the server) or `--tui-only` (connect to an existing server). Six tabbed screens, switchable with `1`-`6` or arrow keys:
+
+| Tab | Key | What It Shows |
+|-----|-----|--------------|
+| **Dashboard** | `1` | Server status, source health, node counts, alert summary, analytics overview |
+| **Nodes** | `2` | Sortable/searchable node table with drill-down to health breakdown and history |
+| **Alerts** | `3` | Live alert feed with severity coloring, active/history sections, filtering |
+| **Propagation** | `4` | HF band predictions (VOACAP), space weather (SFI, Kp), DX spots |
+| **Topology** | `5` | ASCII mesh topology with SNR-colored links per network |
+| **Events** | `6` | Live WebSocket event stream with pause (`p`), filter (`f`), search (`/`) |
+
+**Keyboard:** `q` quit, `r` refresh, `j`/`k` scroll, `/` search, `s` sort, `Enter` drill-down, `Esc` back.
 
 ### Alerting & Notifications
 - **Threshold-based alert engine** -- configurable rules for battery low/critical, signal poor, congestion high, health degraded, and node offline conditions with per-node cooldown throttling
@@ -475,6 +542,51 @@ OpenHamClock is an X11 application and won't run directly on a headless Pi (no d
    When OpenHamClock is unreachable, the HamClockCollector automatically falls back to NOAA SWPC public APIs for space weather data (solar flux, Kp index, solar wind, band conditions). VOACAP predictions and DX spots require HamClock but space weather overlays work without it.
 
 > The no-radio install (`--no-radio`) enables HamClock/NOAA by default. If no HamClock instance is reachable, NOAA fallback activates automatically — no configuration needed.
+
+## MQTT & Network Sources
+
+### Network Sources (Channels)
+
+Each data source is toggled independently in `settings.json`. Disable sources you don't need or don't have access to:
+
+```json
+{
+  "enable_meshtastic": true,
+  "enable_reticulum": true,
+  "enable_aredn": true,
+  "enable_hamclock": true,
+  "enable_noaa_alerts": true
+}
+```
+
+For Meshtastic, the `meshtastic_source` setting controls where data comes from:
+
+| Mode | Behavior |
+|------|----------|
+| `"auto"` (default) | Try local meshtasticd API first, fall back to live MQTT, then cache file |
+| `"mqtt_only"` | Skip local API, subscribe directly to MQTT broker |
+| `"local_only"` | Only use local meshtasticd API (no MQTT) |
+
+### MQTT Configuration
+
+MeshForge Maps uses MQTT in two directions:
+
+**Inbound (data collection):** Subscribes to the Meshtastic public broker for real-time node tracking. Decodes `ServiceEnvelope` protobuf packets from the `msh/#` topic tree.
+
+**Outbound (alert publishing):** When alerts fire, they publish to your configured broker on `meshforge/alerts` (all alerts) and `meshforge/alerts/{severity}` (filtered).
+
+```json
+{
+  "mqtt_broker": "mqtt.meshtastic.org",
+  "mqtt_port": 1883,
+  "mqtt_topic": "msh/#",
+  "mqtt_username": null,
+  "mqtt_password": null,
+  "mqtt_alert_topic": "meshforge/alerts"
+}
+```
+
+To use a **private MQTT broker**, set `mqtt_broker` to your broker's hostname and provide `mqtt_username`/`mqtt_password` for authentication. The subscription topic (`mqtt_topic`) can be narrowed to a specific region or channel (e.g., `msh/US/#`).
 
 ## Configuration
 
