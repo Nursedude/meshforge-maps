@@ -21,6 +21,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_reticulum": True,
     "enable_hamclock": True,
     "enable_aredn": True,
+    # Meshtastic data source mode: "auto" (API → MQTT → cache), "mqtt_only", "local_only"
+    "meshtastic_source": "auto",
     "hamclock_host": "localhost",
     "hamclock_port": 8080,
     "openhamclock_port": 3000,
