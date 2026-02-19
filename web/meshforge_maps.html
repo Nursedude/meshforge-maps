@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
     <link rel="stylesheet" href="/css/meshforge-maps.css" />
     <!-- <style> block extracted to css/meshforge-maps.css -->
 </head>
@@ -125,6 +126,12 @@
             <input type="checkbox" id="overlayAnalytics" onchange="toggleAnalyticsPanel()">
             <span class="layer-color" style="background:#4fc3f7"></span>
             <span class="layer-label">Analytics</span>
+        </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="overlayHeatmap" onchange="toggleCoverageHeatmap()">
+            <span class="layer-color" style="background:#ff6f00"></span>
+            <span class="layer-label">Coverage Heatmap</span>
+            <span class="layer-count" id="countHeatmapCells">0</span>
         </label>
     </div>
 

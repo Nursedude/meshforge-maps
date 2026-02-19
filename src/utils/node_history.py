@@ -418,6 +418,67 @@ class NodeHistoryDB:
                 logger.debug("node_count query failed: %s", e)
                 return 0
 
+    def get_density_points(
+        self,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        precision: int = 4,
+        network: Optional[str] = None,
+    ) -> List[Tuple[float, float, int]]:
+        """Get observation density as (lat, lon, count) tuples for heatmap rendering.
+
+        Observations are grouped by rounded (latitude, longitude) at the given
+        decimal ``precision`` (default 4 ≈ ~11 m).  Each tuple represents a
+        grid cell with its total observation count, suitable for feeding
+        directly into a Leaflet.heat layer.
+
+        Parameters
+        ----------
+        since : int, optional
+            Unix timestamp — only include observations at or after this time.
+        until : int, optional
+            Unix timestamp — only include observations at or before this time.
+        precision : int
+            Decimal places to round lat/lon (controls grid resolution).
+            4 → ~11 m cells, 3 → ~110 m, 2 → ~1.1 km.
+        network : str, optional
+            Filter to a specific network (e.g. "meshtastic").
+
+        Returns
+        -------
+        list of (lat, lon, count)
+            Sorted descending by count so the densest cells come first.
+        """
+        if not self._conn:
+            return []
+
+        query = (
+            "SELECT ROUND(latitude, ?) AS lat, ROUND(longitude, ?) AS lon, "
+            "COUNT(*) AS cnt FROM observations WHERE 1=1"
+        )
+        params: List[Any] = [precision, precision]
+
+        if since is not None:
+            query += " AND timestamp >= ?"
+            params.append(since)
+        if until is not None:
+            query += " AND timestamp <= ?"
+            params.append(until)
+        if network is not None:
+            query += " AND network = ?"
+            params.append(network)
+
+        query += " GROUP BY lat, lon ORDER BY cnt DESC"
+
+        with self._lock:
+            try:
+                rows = self._conn.execute(query, params).fetchall()
+            except Exception as e:
+                logger.error("Density query failed: %s", e)
+                return []
+
+        return [(r[0], r[1], r[2]) for r in rows]
+
     def close(self) -> None:
         """Close the database connection."""
         if self._conn:
