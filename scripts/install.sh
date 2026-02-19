@@ -149,6 +149,7 @@ if [[ "$NO_RADIO" == true ]]; then
   "enable_reticulum": false,
   "enable_hamclock": true,
   "enable_aredn": false,
+  "meshtastic_source": "mqtt_only",
   "http_host": "0.0.0.0",
   "ws_host": "0.0.0.0"
 }
