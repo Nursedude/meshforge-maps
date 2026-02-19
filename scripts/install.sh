@@ -134,7 +134,8 @@ fi
 info "Installing optional dependencies..."
 "$VENV_DIR/bin/pip" install --quiet --upgrade pip 2>/dev/null || true
 "$VENV_DIR/bin/pip" install --quiet paho-mqtt websockets 2>/dev/null || true
-ok "Dependencies installed (paho-mqtt, websockets)"
+"$VENV_DIR/bin/pip" install --quiet 'pyopenssl>=25.3.0' 'cryptography>=45.0.7,<47' 2>/dev/null || true
+ok "Dependencies installed (paho-mqtt, websockets, pyopenssl, cryptography)"
 
 # --- Step 6: Write no-radio config if requested ---
 if [[ "$NO_RADIO" == true ]]; then
