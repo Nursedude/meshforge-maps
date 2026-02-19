@@ -30,60 +30,29 @@ class TestNetworkFailures:
     def collector(self):
         return AREDNCollector(node_targets=["test-node.local.mesh"], cache_ttl_seconds=0)
 
+    @pytest.mark.parametrize("side_effect,hostname", [
+        (URLError("Connection refused"), "test-node.local.mesh"),
+        (OSError("timed out"), "test-node.local.mesh"),
+        (URLError("Name or service not known"), "nonexistent.local.mesh"),
+    ])
     @patch("src.collectors.aredn_collector.urlopen")
-    def test_connection_refused(self, mock_urlopen, collector):
-        mock_urlopen.side_effect = URLError("Connection refused")
-        features, links = collector._fetch_from_node("test-node.local.mesh")
+    def test_network_error_returns_empty(self, mock_urlopen, collector,
+                                         side_effect, hostname):
+        mock_urlopen.side_effect = side_effect
+        features, links = collector._fetch_from_node(hostname)
         assert features == []
 
+    @pytest.mark.parametrize("body,desc", [
+        (b"not json at all <html>", "html_garbage"),
+        (b"", "empty_body"),
+        (json.dumps([1, 2, 3]).encode(), "json_array_not_object"),
+        (json.dumps({"random": "data"}).encode(), "missing_aredn_fields"),
+    ])
     @patch("src.collectors.aredn_collector.urlopen")
-    def test_timeout(self, mock_urlopen, collector):
-        mock_urlopen.side_effect = OSError("timed out")
-        features, links = collector._fetch_from_node("test-node.local.mesh")
-        assert features == []
-
-    @patch("src.collectors.aredn_collector.urlopen")
-    def test_dns_resolution_failure(self, mock_urlopen, collector):
-        mock_urlopen.side_effect = URLError("Name or service not known")
-        features, links = collector._fetch_from_node("nonexistent.local.mesh")
-        assert features == []
-
-    @patch("src.collectors.aredn_collector.urlopen")
-    def test_json_decode_error(self, mock_urlopen, collector):
+    def test_bad_response_body_returns_empty(self, mock_urlopen, collector,
+                                              body, desc):
         mock_resp = MagicMock()
-        mock_resp.read.return_value = b"not json at all <html>"
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        features, links = collector._fetch_from_node("test-node")
-        assert features == []
-
-    @patch("src.collectors.aredn_collector.urlopen")
-    def test_empty_response_body(self, mock_urlopen, collector):
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = b""
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        features, links = collector._fetch_from_node("test-node")
-        assert features == []
-
-    @patch("src.collectors.aredn_collector.urlopen")
-    def test_response_is_json_array_not_object(self, mock_urlopen, collector):
-        """Non-dict JSON should be rejected."""
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps([1, 2, 3]).encode()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        features, links = collector._fetch_from_node("test-node")
-        assert features == []
-
-    @patch("src.collectors.aredn_collector.urlopen")
-    def test_response_missing_aredn_fields(self, mock_urlopen, collector):
-        """Dict without node/sysinfo/meshrf should be rejected."""
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps({"random": "data"}).encode()
+        mock_resp.read.return_value = body
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp

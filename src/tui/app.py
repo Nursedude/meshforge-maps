@@ -21,6 +21,7 @@ import socket
 import struct
 import threading
 import time
+from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from .data_client import MapDataClient
@@ -38,16 +39,6 @@ from .tabs.alerts import draw_alerts
 from .tabs.propagation import draw_propagation
 from .tabs.topology import draw_topology
 from .tabs.events import draw_events
-
-# Re-export helpers for backward compatibility (used by tests and external code)
-from .helpers import (  # noqa: F401
-    CP_NORMAL, CP_HEALTH_EXCELLENT, CP_HEALTH_GOOD, CP_HEALTH_FAIR,
-    CP_HEALTH_POOR, CP_HEALTH_CRITICAL,
-    CP_ALERT_INFO, CP_ALERT_CRITICAL,
-    CP_SOURCE_ONLINE, CP_SOURCE_OFFLINE,
-    CP_HIGHLIGHT, CP_DIM, CP_TAB_INACTIVE,
-    health_color, severity_color, _format_ts, _quality_color, _event_type_color,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +76,7 @@ class TuiApp:
         self._node_cursor: int = 0  # cursor position in node list
 
         # Event log ring buffer (for Events tab)
-        self._event_log: List[Dict[str, Any]] = []
-        self._event_log_max = 500
+        self._event_log: deque = deque(maxlen=500)
 
         # WebSocket state
         self._ws_connected = False
@@ -769,8 +759,6 @@ class TuiApp:
         """Handle an incoming WebSocket message — add to event log and update cache."""
         with self._data_lock:
             self._event_log.append(msg)
-            if len(self._event_log) > self._event_log_max:
-                self._event_log = self._event_log[-self._event_log_max:]
 
 
 def run_tui(host: str = "127.0.0.1", port: int = 8808) -> None:
