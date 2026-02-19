@@ -437,6 +437,9 @@ pip install paho-mqtt meshtastic
 
 # WebSocket: real-time map updates + live alert delivery to browser
 pip install websockets
+
+# TLS: modern SSL stack for encrypted MQTT broker connections
+pip install 'pyopenssl>=25.3.0' 'cryptography>=45.0.7,<47'
 ```
 
 All optional dependencies degrade gracefully -- features that require them are silently disabled when the libraries are not installed.

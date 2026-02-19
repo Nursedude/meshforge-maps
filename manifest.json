@@ -30,7 +30,9 @@
     "dependencies": [],
     "optional_dependencies": [
         "paho-mqtt",
-        "meshtastic"
+        "meshtastic",
+        "pyopenssl",
+        "cryptography"
     ],
     "permissions": [
         "network_access"
