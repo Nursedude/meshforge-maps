@@ -105,6 +105,20 @@ if [[ -n "$PYTHON_BIN" ]]; then
     else
         warn "websockets not installed (real-time updates disabled)"
     fi
+
+    if "$PYTHON_BIN" -c "import OpenSSL" 2>/dev/null; then
+        PYOPENSSL_VER=$("$PYTHON_BIN" -c "import OpenSSL; print(OpenSSL.__version__)")
+        pass "pyopenssl $PYOPENSSL_VER available"
+    else
+        warn "pyopenssl not installed (TLS may use outdated system SSL)"
+    fi
+
+    if "$PYTHON_BIN" -c "import cryptography" 2>/dev/null; then
+        CRYPTO_VER=$("$PYTHON_BIN" -c "import cryptography; print(cryptography.__version__)")
+        pass "cryptography $CRYPTO_VER available"
+    else
+        warn "cryptography not installed (TLS may use outdated system SSL)"
+    fi
 fi
 
 # --- Section 3: Service Status ---
