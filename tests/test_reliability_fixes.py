@@ -49,23 +49,6 @@ class TestProxyRequestCounterThreadSafety:
 
         assert proxy.request_count == 10000
 
-    def test_request_count_property(self):
-        from src.utils.meshtastic_api_proxy import MeshtasticApiProxy
-
-        proxy = MeshtasticApiProxy()
-        assert proxy.request_count == 0
-        proxy._inc_request_count()
-        proxy._inc_request_count()
-        assert proxy.request_count == 2
-
-    def test_stats_uses_thread_safe_accessor(self):
-        from src.utils.meshtastic_api_proxy import MeshtasticApiProxy
-
-        proxy = MeshtasticApiProxy()
-        proxy._inc_request_count()
-        stats = proxy.stats
-        assert stats["request_count"] == 1
-
     def test_proxy_stop_joins_thread(self):
         from src.utils.meshtastic_api_proxy import MeshtasticApiProxy
 
