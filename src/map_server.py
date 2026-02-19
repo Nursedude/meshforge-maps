@@ -176,6 +176,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/export/analytics/growth": "_serve_export_analytics_growth",
         "/api/export/analytics/activity": "_serve_export_analytics_activity",
         "/api/export/analytics/ranking": "_serve_export_analytics_ranking",
+        "/api/weather/alerts": "_serve_weather_alerts",
     }
 
     # Valid source names for /api/nodes/<source> endpoint
@@ -948,6 +949,29 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 str(n.get("observation_count", 0)), str(n.get("active_seconds", 0)),
             ])
         self._send_csv(rows, "meshforge_ranking.csv")
+
+    # ------------------------------------------------------------------
+    # Weather alert endpoints
+    # ------------------------------------------------------------------
+
+    def _serve_weather_alerts(self) -> None:
+        """Serve NOAA weather alerts as GeoJSON FeatureCollection.
+
+        Returns polygon features for rendering as map overlays, with
+        severity color-coding and alert metadata.
+        """
+        aggregator = self._get_aggregator()
+        if not aggregator:
+            self._send_json({"error": "Aggregator not initialized"}, 503)
+            return
+        collector = aggregator.get_collector("noaa_alerts")
+        if not collector:
+            self._send_json(
+                {"error": "NOAA alerts not enabled", "available": False}, 404
+            )
+            return
+        data = collector.collect()
+        self._send_json(data)
 
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
