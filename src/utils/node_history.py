@@ -21,12 +21,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .paths import get_data_dir
+
 logger = logging.getLogger(__name__)
 
 # Default DB location
-DEFAULT_DB_PATH = (
-    Path.home() / ".local" / "share" / "meshforge" / "maps_node_history.db"
-)
+DEFAULT_DB_PATH = get_data_dir() / "maps_node_history.db"
 
 # Minimum interval between observations for the same node (seconds)
 DEFAULT_THROTTLE_SECONDS = 60

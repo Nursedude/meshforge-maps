@@ -13,12 +13,13 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..utils.paths import get_data_dir
 from ..utils.reconnect import ReconnectStrategy
 
 logger = logging.getLogger(__name__)
 
 # Common data directory and unified cache path (shared across all collectors)
-MESHFORGE_DATA_DIR = Path.home() / ".local" / "share" / "meshforge"
+MESHFORGE_DATA_DIR = get_data_dir()
 UNIFIED_CACHE_PATH = MESHFORGE_DATA_DIR / "node_cache.json"
 
 
