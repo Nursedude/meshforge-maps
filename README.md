@@ -449,6 +449,33 @@ The `--no-radio` flag configures:
 
 Access the web map from any browser on the same network: `http://<pi-ip>:8808`
 
+### HamClock on Headless Systems
+
+OpenHamClock is an X11 application and won't run directly on a headless Pi (no display). Three options:
+
+1. **Point to a remote HamClock instance** (recommended for no-radio setups):
+   ```json
+   {
+     "hamclock_host": "192.168.1.50",
+     "hamclock_port": 8080,
+     "openhamclock_port": 3000
+   }
+   ```
+   Set `hamclock_host` to the IP of any machine running OpenHamClock/HamClock on your network.
+
+2. **Run OpenHamClock under Xvfb** (virtual framebuffer):
+   ```bash
+   sudo apt install xvfb
+   Xvfb :99 -screen 0 800x480x24 &
+   DISPLAY=:99 openhamclock &
+   ```
+   This runs OpenHamClock headlessly; meshforge-maps connects to `localhost:3000` as normal.
+
+3. **Rely on NOAA direct fallback** (automatic, no setup needed):
+   When OpenHamClock is unreachable, the HamClockCollector automatically falls back to NOAA SWPC public APIs for space weather data (solar flux, Kp index, solar wind, band conditions). VOACAP predictions and DX spots require HamClock but space weather overlays work without it.
+
+> The no-radio install (`--no-radio`) enables HamClock/NOAA by default. If no HamClock instance is reachable, NOAA fallback activates automatically — no configuration needed.
+
 ## Configuration
 
 Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/settings.json` (when running as MeshForge extension) or passed via config dict (standalone):
@@ -457,6 +484,7 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 |---------|------|---------|-------------|
 | `default_tile_provider` | choice | `carto_dark` | Map tile style |
 | `enable_meshtastic` | bool | `true` | Enable Meshtastic data source |
+| `meshtastic_source` | choice | `auto` | Data fetch mode: `auto` (API→MQTT→cache), `mqtt_only`, `local_only` |
 | `enable_reticulum` | bool | `true` | Enable Reticulum/RMAP source |
 | `enable_hamclock` | bool | `true` | Enable propagation data (OpenHamClock/NOAA) |
 | `enable_aredn` | bool | `true` | Enable AREDN source |
@@ -552,14 +580,14 @@ flowchart LR
     SW -->|cache hit| CACHE["CacheStorage<br/>meshforge-maps-tiles-v1"]
     SW -->|cache miss| NET["Network Fetch"]
     NET -->|store| CACHE
-    CACHE -->|LRU eviction<br/>at 2000 tiles| EVICT["Remove oldest"]
+    CACHE -->|LRU eviction<br/>at 500 tiles| EVICT["Remove oldest"]
     CACHE --> RESP["Response to Map"]
 ```
 
 - **Tiles:** Cache-first strategy (instant offline response)
 - **API:** Network-first with cache fallback
 - **CDN assets:** Cache-first (Leaflet, D3, MarkerCluster)
-- **Max cache:** 2000 tiles with LRU eviction
+- **Max cache:** 500 tiles with LRU eviction (optimized for constrained devices)
 
 ## Tile Providers
 
