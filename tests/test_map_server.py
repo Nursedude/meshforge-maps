@@ -343,3 +343,24 @@ class TestMapServerHTTPEndpoints:
         body, headers = self._get_raw("/api/export/analytics/ranking")
         assert b"rank" in body
         assert "text/csv" in headers.get("Content-Type", "")
+
+    # --- Coverage Heatmap endpoint ---
+
+    def test_heatmap_endpoint_returns_points(self):
+        data = self._get_json("/api/heatmap")
+        assert "points" in data
+        assert isinstance(data["points"], list)
+        assert "cell_count" in data
+        assert "max_observations" in data
+        assert "precision" in data
+        assert data["precision"] == 4  # default precision
+
+    def test_heatmap_endpoint_with_precision(self):
+        data = self._get_json("/api/heatmap?precision=3")
+        assert data["precision"] == 3
+
+    def test_heatmap_endpoint_clamps_precision(self):
+        data = self._get_json("/api/heatmap?precision=1")
+        assert data["precision"] == 2  # minimum clamped to 2
+        data = self._get_json("/api/heatmap?precision=10")
+        assert data["precision"] == 6  # maximum clamped to 6

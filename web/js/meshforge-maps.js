@@ -102,6 +102,8 @@ const MAX_ALERT_ITEMS = 100;      // Cap alert panel entries
 let weatherAlertLayer = null;     // Leaflet GeoJSON layer for NOAA weather alerts
 let showWeatherAlerts = false;    // Whether weather alert overlay is visible
 let weatherAlertCount = 0;        // Number of active weather alerts
+let heatmapLayer = null;          // Leaflet.heat layer for coverage heatmap
+let showHeatmap = false;          // Whether coverage heatmap overlay is visible
 
 // Per-network layer groups (for toggle visibility)
 const networkLayers = {
@@ -577,6 +579,7 @@ async function refreshData() {
     await loadNodeData();
     if (showTopology) await loadTopologyData();
     if (showWeatherAlerts) await loadWeatherAlerts();
+    if (showHeatmap) await loadCoverageHeatmap();
     if (consecutiveErrors === 0) {
         showToast('Data refreshed');
     }
@@ -1716,6 +1719,63 @@ function updateWeatherAlertCount() {
 }
 
 // =========================================================================
+// Coverage Heatmap (node density from history DB)
+// =========================================================================
+
+function toggleCoverageHeatmap() {
+    showHeatmap = document.getElementById('overlayHeatmap').checked;
+    if (showHeatmap) {
+        loadCoverageHeatmap();
+    } else if (heatmapLayer) {
+        map.removeLayer(heatmapLayer);
+        heatmapLayer = null;
+        document.getElementById('countHeatmapCells').textContent = '0';
+    }
+}
+
+async function loadCoverageHeatmap() {
+    try {
+        var resp = await fetchWithRetry(API_BASE + '/api/heatmap', 1, 2000);
+        if (!resp.ok) {
+            console.debug('Heatmap data unavailable:', resp.status);
+            return;
+        }
+        var data = await resp.json();
+        renderCoverageHeatmap(data);
+    } catch (e) {
+        console.debug('Heatmap fetch failed:', e);
+    }
+}
+
+function renderCoverageHeatmap(data) {
+    if (heatmapLayer) {
+        map.removeLayer(heatmapLayer);
+        heatmapLayer = null;
+    }
+
+    var points = data.points || [];
+    document.getElementById('countHeatmapCells').textContent = points.length;
+
+    if (points.length === 0) return;
+
+    // Leaflet.heat expects [[lat, lon, intensity], ...]
+    heatmapLayer = L.heatLayer(points, {
+        radius: 25,
+        blur: 15,
+        maxZoom: 17,
+        max: 1.0,
+        minOpacity: 0.15,
+        gradient: {
+            0.0: '#1a237e',
+            0.25: '#0d47a1',
+            0.5: '#ff6f00',
+            0.75: '#ff3d00',
+            1.0: '#d50000',
+        },
+    }).addTo(map);
+}
+
+// =========================================================================
 // Health Check (data staleness indicator)
 // =========================================================================
 
@@ -1745,6 +1805,7 @@ setInterval(function() {
     loadNodeData();
     if (showTopology) loadTopologyData();
     if (showWeatherAlerts) loadWeatherAlerts();
+    if (showHeatmap) loadCoverageHeatmap();
 }, 60 * 1000); // Refresh every 60 seconds (WebSocket fallback)
 
 // Periodic health check (every 2 minutes)

@@ -177,6 +177,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/export/analytics/activity": "_serve_export_analytics_activity",
         "/api/export/analytics/ranking": "_serve_export_analytics_ranking",
         "/api/weather/alerts": "_serve_weather_alerts",
+        "/api/heatmap": "_serve_heatmap",
     }
 
     # Valid source names for /api/nodes/<source> endpoint
@@ -972,6 +973,55 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
         data = collector.collect()
         self._send_json(data)
+
+    def _serve_heatmap(self) -> None:
+        """Serve node density data for coverage heatmap overlay.
+
+        Returns a JSON object with a ``points`` array of ``[lat, lon, intensity]``
+        triples derived from historical observation density.  Intensity values
+        are normalized to 0-1 so the frontend can feed them directly into
+        Leaflet.heat.
+
+        Query parameters:
+          since  - Unix timestamp lower bound
+          until  - Unix timestamp upper bound
+          precision - Decimal rounding (2-6, default 4)
+          network - Filter to a single network name
+        """
+        history = self._get_node_history()
+        if not history:
+            self._send_json({"error": "Node history not available"}, 503)
+            return
+
+        query = self._query
+        since_str = _safe_query_param(query, "since")
+        until_str = _safe_query_param(query, "until")
+        precision_str = _safe_query_param(query, "precision", "4")
+        network = _safe_query_param(query, "network")
+
+        try:
+            since = int(since_str) if since_str else None
+            until = int(until_str) if until_str else None
+            precision = int(precision_str) if precision_str else 4
+            precision = max(2, min(precision, 6))
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid query parameters"}, 400)
+            return
+
+        raw = history.get_density_points(
+            since=since, until=until, precision=precision, network=network,
+        )
+
+        # Normalize intensity to 0-1 range for Leaflet.heat
+        max_count = raw[0][2] if raw else 1
+        points = [[lat, lon, count / max_count] for lat, lon, count in raw]
+
+        self._send_json({
+            "points": points,
+            "cell_count": len(points),
+            "max_observations": max_count,
+            "precision": precision,
+        })
 
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
