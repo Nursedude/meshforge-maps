@@ -19,7 +19,7 @@
 const CACHE_NAME = 'meshforge-maps-tiles-v1';
 const STATIC_CACHE = 'meshforge-maps-static-v1';
 const API_CACHE = 'meshforge-maps-api-v1';
-const MAX_TILE_CACHE_ITEMS = 2000;  // LRU eviction threshold
+const MAX_TILE_CACHE_ITEMS = 500;  // LRU eviction threshold (reduced for Pi/constrained devices)
 const API_CACHE_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes for API responses
 
 // Tile domains to cache
