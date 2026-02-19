@@ -32,10 +32,12 @@ except ImportError:
         from core.plugin_base import Plugin, PluginContext
     except ImportError:
         # Standalone mode - define minimal stubs
+        from .utils.paths import get_config_dir, get_data_dir
+
         class PluginContext:  # type: ignore[no-redef]
             app_version: str = "standalone"
-            data_dir: Path = Path.home() / ".local" / "share" / "meshforge"
-            config_dir: Path = Path.home() / ".config" / "meshforge"
+            data_dir: Path = get_data_dir()
+            config_dir: Path = get_config_dir()
 
             def register_panel(self, *args: Any, **kwargs: Any) -> None:
                 pass
@@ -344,7 +346,8 @@ def create_plugin() -> MeshForgeMapsPlugin:
 def _get_error_log_path() -> Path:
     """Get the path to the error log file."""
     try:
-        log_dir = Path.home() / ".cache" / "meshforge" / "logs"
+        from .utils.paths import get_cache_dir
+        log_dir = get_cache_dir() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir / "maps_errors.log"
     except Exception:
@@ -411,6 +414,8 @@ def main() -> None:
         config = MapsConfig()
         if args.port:
             config.update({"http_port": args.port})
+        if args.host != "127.0.0.1":
+            config.update({"http_host": args.host, "ws_host": args.host})
         server = MapServer(config)
 
         if not server.start():
@@ -430,7 +435,8 @@ def main() -> None:
             finally:
                 shutdown_event.set()
         else:
-            print(f"MeshForge Maps running at http://127.0.0.1:{server.port}")
+            host_display = config.get("http_host", "127.0.0.1")
+            print(f"MeshForge Maps running at http://{host_display}:{server.port}")
             print("Press Ctrl+C to stop")
             print("Tip: restart with --tui for a terminal dashboard")
 

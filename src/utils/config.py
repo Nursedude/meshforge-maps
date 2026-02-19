@@ -11,6 +11,8 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .paths import get_real_home
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -27,6 +29,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "map_default_zoom": 4,
     "cache_ttl_minutes": 15,
     "http_port": 8808,
+    "http_host": "127.0.0.1",
+    "ws_host": "127.0.0.1",
     # MQTT broker configuration (upstream: private broker support)
     "mqtt_broker": "mqtt.meshtastic.org",
     "mqtt_port": 1883,
@@ -94,7 +98,7 @@ class MapsConfig:
             self._config_path = config_path
         else:
             self._config_path = (
-                Path.home()
+                get_real_home()
                 / ".config"
                 / "meshforge"
                 / "plugins"

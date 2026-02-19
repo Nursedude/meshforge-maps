@@ -406,6 +406,7 @@ MeshForge Maps runs on any platform with Python 3.9+. It is lightweight (stdlib 
 | OS | Version | Python | Status |
 |----|---------|--------|--------|
 | **Raspberry Pi OS (Bookworm)** | Debian 12 based | 3.11 | Recommended |
+| **Debian Trixie** | Debian 13 (testing) | 3.12 | Supported (venv required -- PEP 668) |
 | **Raspberry Pi OS (Bullseye)** | Debian 11 based | 3.9 | Supported |
 | **Ubuntu Server** | 22.04 / 24.04 LTS (ARM64) | 3.10 / 3.12 | Supported |
 | **DietPi** | Latest (Bookworm based) | 3.11 | Supported |
@@ -415,10 +416,38 @@ MeshForge Maps runs on any platform with Python 3.9+. It is lightweight (stdlib 
 | **Windows** | 10/11 | 3.9+ (python.org) | Supported |
 
 > **Not supported:** Raspberry Pi OS Legacy (Buster / Debian 10) ships Python 3.7 which is below the 3.9 minimum. Upgrade to Bookworm or install Python 3.9+ manually.
+>
+> **Trixie note:** Debian 13 enforces [PEP 668](https://peps.python.org/pep-0668/) (externally-managed Python). Use the install script (`scripts/install.sh`) which creates a venv automatically, or create one manually with `python3 -m venv venv`.
 
 ### Desktop / Server
 
 MeshForge Maps also runs on any x86_64 or ARM64 machine with Python 3.9+. No OS-specific dependencies -- Linux, macOS, and Windows are all supported for development and deployment.
+
+### Pi Deployment (Headless / No-Radio)
+
+For deploying on a Raspberry Pi without local radio hardware (e.g., Pi Zero 2 W as a monitoring station):
+
+```bash
+# Clone and install with no-radio profile
+git clone https://github.com/Nursedude/meshforge-maps.git
+cd meshforge-maps
+sudo bash scripts/install.sh --no-radio
+
+# Start the service
+sudo systemctl start meshforge-maps
+
+# Verify installation
+bash scripts/verify.sh
+```
+
+The `--no-radio` flag configures:
+- **Meshtastic**: enabled (pulls data from public MQTT broker -- no local hardware needed)
+- **HamClock/NOAA**: enabled (pure software -- space weather and propagation data)
+- **Reticulum**: disabled (requires local RNS stack)
+- **AREDN**: disabled (requires on-mesh network access)
+- **Bind address**: `0.0.0.0` (web map accessible from other devices on the network)
+
+Access the web map from any browser on the same network: `http://<pi-ip>:8808`
 
 ## Configuration
 
@@ -436,6 +465,8 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `map_default_zoom` | number | `4` | Default zoom level |
 | `cache_ttl_minutes` | number | `15` | Data cache lifetime |
 | `http_port` | number | `8808` | Map server HTTP port |
+| `http_host` | string | `127.0.0.1` | HTTP bind address (`0.0.0.0` for network access) |
+| `ws_host` | string | `127.0.0.1` | WebSocket bind address |
 | `hamclock_host` | string | `localhost` | OpenHamClock/HamClock host |
 | `openhamclock_port` | number | `3000` | OpenHamClock port (tried first) |
 | `hamclock_port` | number | `8080` | HamClock legacy port (fallback) |
