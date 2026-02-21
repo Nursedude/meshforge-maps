@@ -55,8 +55,9 @@ class NOAAAlertCollector(BaseCollector):
         area: Optional[str] = None,
         severity_filter: Optional[List[str]] = None,
         cache_ttl_seconds: int = 300,
+        max_retries: int = 0,
     ):
-        super().__init__(cache_ttl_seconds=cache_ttl_seconds)
+        super().__init__(cache_ttl_seconds=cache_ttl_seconds, max_retries=max_retries)
         self._base_url = api_url
         self._area = area
         self._severity_filter = severity_filter

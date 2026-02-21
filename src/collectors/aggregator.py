@@ -68,16 +68,16 @@ class DataAggregator:
         if config.get("enable_meshtastic", True):
             self._collectors["meshtastic"] = MeshtasticCollector(
                 cache_ttl_seconds=cache_ttl,
+                max_retries=retries,
                 mqtt_store=mqtt_store,
                 source_mode=config.get("meshtastic_source", "auto"),
             )
-            self._collectors["meshtastic"]._max_retries = retries
 
         if config.get("enable_reticulum", True):
             self._collectors["reticulum"] = ReticulumCollector(
-                cache_ttl_seconds=cache_ttl
+                cache_ttl_seconds=cache_ttl,
+                max_retries=retries,
             )
-            self._collectors["reticulum"]._max_retries = retries
 
         if config.get("enable_hamclock", True):
             self._collectors["hamclock"] = HamClockCollector(
@@ -85,14 +85,14 @@ class DataAggregator:
                 hamclock_port=config.get("hamclock_port", 8080),
                 openhamclock_port=config.get("openhamclock_port", 3000),
                 cache_ttl_seconds=cache_ttl,
+                max_retries=retries,
             )
-            self._collectors["hamclock"]._max_retries = retries
 
         if config.get("enable_aredn", True):
             self._collectors["aredn"] = AREDNCollector(
-                cache_ttl_seconds=cache_ttl
+                cache_ttl_seconds=cache_ttl,
+                max_retries=retries,
             )
-            self._collectors["aredn"]._max_retries = retries
 
         # NOAA weather alerts (polygon overlay — not included in collect_all)
         if config.get("enable_noaa_alerts", True):
@@ -100,8 +100,8 @@ class DataAggregator:
                 area=config.get("noaa_alerts_area"),
                 severity_filter=config.get("noaa_alerts_severity"),
                 cache_ttl_seconds=min(cache_ttl, 300),  # Cap at 5 min for alerts
+                max_retries=retries,
             )
-            self._collectors["noaa_alerts"]._max_retries = retries
 
     # Collectors that return polygon/overlay data — excluded from collect_all()
     # because their features are not mesh node points.
@@ -123,12 +123,7 @@ class DataAggregator:
                         features = fc.get("features", [])
                         source_counts[name] = len(features)
                         src_ctx.node_count = len(features)
-                        # Detect cache hit from collector's cache state
-                        with collector._cache_lock:
-                            src_ctx.from_cache = (
-                                collector._cache is not None
-                                and fc is collector._cache
-                            )
+                        src_ctx.from_cache = collector.is_cache_hit(fc)
 
                     per_source_features.append(features)
 

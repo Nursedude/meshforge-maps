@@ -141,7 +141,6 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "": "_serve_map",
         "/index.html": "_serve_map",
         "/api/nodes/geojson": "_serve_geojson",
-        "/api/nodes/all": "_serve_geojson",
         "/api/config": "_serve_config",
         "/api/tile-providers": "_serve_tile_providers",
         "/api/sources": "_serve_sources",
@@ -1030,8 +1029,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         mqtt_status = "unavailable"
         mqtt_nodes = 0
         if aggregator and aggregator.mqtt_subscriber:
-            mqtt_status = "connected" if aggregator.mqtt_subscriber._running.is_set() else "stopped"
-            mqtt_nodes = aggregator.mqtt_subscriber.store.node_count
+            mqtt_stats = aggregator.mqtt_subscriber.get_stats()
+            mqtt_status = "connected" if mqtt_stats["running"] else "stopped"
+            mqtt_nodes = mqtt_stats["node_count"]
 
         start_time = self._ctx.start_time
         uptime = int(time.time() - start_time) if start_time else None

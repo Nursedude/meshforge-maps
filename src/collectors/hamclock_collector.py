@@ -84,8 +84,9 @@ class HamClockCollector(BaseCollector):
         hamclock_port: int = 8080,
         openhamclock_port: int = OPENHAMCLOCK_DEFAULT_PORT,
         cache_ttl_seconds: int = 900,
+        max_retries: int = 0,
     ):
-        super().__init__(cache_ttl_seconds)
+        super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._hamclock_host = hamclock_host
         self._hamclock_port = hamclock_port
         self._openhamclock_port = openhamclock_port

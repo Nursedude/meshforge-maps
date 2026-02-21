@@ -216,9 +216,11 @@ class MeshForgeMapsPlugin(Plugin):
             return f"Map server is not running (state: {state})"
         agg = self._server.aggregator
         mqtt_status = "unavailable"
-        if agg._mqtt_subscriber:
-            mqtt_status = "connected" if agg._mqtt_subscriber._running else "stopped"
-        sources = list(agg._collectors.keys())
+        mqtt_sub = agg.mqtt_subscriber
+        if mqtt_sub:
+            stats = mqtt_sub.get_stats()
+            mqtt_status = "connected" if stats["running"] else "stopped"
+        sources = agg.enabled_collector_names
         uptime = self._lifecycle.uptime_seconds
         uptime_str = f"{int(uptime)}s" if uptime else "N/A"
         return (
@@ -233,7 +235,7 @@ class MeshForgeMapsPlugin(Plugin):
         """Return current HF propagation conditions for TUI display."""
         if not self._server:
             return "Server not running"
-        hc = self._server.aggregator._collectors.get("hamclock")
+        hc = self._server.aggregator.get_collector("hamclock")
         if not hc:
             return "HamClock source not enabled"
         data = hc.get_hamclock_data()
@@ -268,7 +270,7 @@ class MeshForgeMapsPlugin(Plugin):
         """Return recent DX spots for TUI display."""
         if not self._server:
             return "Server not running"
-        hc = self._server.aggregator._collectors.get("hamclock")
+        hc = self._server.aggregator.get_collector("hamclock")
         if not hc:
             return "HamClock source not enabled"
         data = hc.get_hamclock_data()
@@ -292,7 +294,7 @@ class MeshForgeMapsPlugin(Plugin):
         """Return full HamClock status for TUI display."""
         if not self._server:
             return "Server not running"
-        hc = self._server.aggregator._collectors.get("hamclock")
+        hc = self._server.aggregator.get_collector("hamclock")
         if not hc:
             return "HamClock source not enabled"
         data = hc.get_hamclock_data()

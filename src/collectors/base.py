@@ -268,6 +268,11 @@ class BaseCollector(ABC):
             info["last_error_age_seconds"] = int(now - self._last_error_time)
         return info
 
+    def is_cache_hit(self, data: Dict[str, Any]) -> bool:
+        """Check if the given data is the same object as the current cache."""
+        with self._cache_lock:
+            return self._cache is not None and data is self._cache
+
     def clear_cache(self) -> None:
         with self._cache_lock:
             self._cache = None
