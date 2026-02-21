@@ -273,6 +273,18 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' https://*.basemaps.cartocdn.com "
+                "https://tile.openstreetmap.org https://tile.opentopomap.org "
+                "https://server.arcgisonline.com https://tiles.stadiamaps.com data:; "
+                "connect-src 'self' ws:",
+            )
             self.end_headers()
             with open(map_path, "rb") as f:
                 self.wfile.write(f.read())
@@ -1062,6 +1074,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
         cors_origin = self._get_cors_origin()
         if cors_origin:
             self.send_header("Access-Control-Allow-Origin", cors_origin)

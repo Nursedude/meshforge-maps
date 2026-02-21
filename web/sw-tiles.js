@@ -227,6 +227,7 @@ async function staleWhileRevalidate(request, cacheName) {
 // ---------------------------------------------------------------------------
 
 self.addEventListener('message', (event) => {
+    if (event.origin && event.origin !== self.location.origin) return;
     if (!event.data || !event.data.type) return;
 
     if (event.data.type === 'CLEAR_TILE_CACHE') {
