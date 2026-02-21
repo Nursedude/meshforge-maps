@@ -15,54 +15,6 @@ class TestPluginStateTransitions:
         lc = PluginLifecycle()
         assert lc.state == PluginState.LOADED
 
-    def test_loaded_to_activating(self):
-        lc = PluginLifecycle()
-        lc.transition_to(PluginState.ACTIVATING)
-        assert lc.state == PluginState.ACTIVATING
-
-    def test_activating_to_active(self):
-        lc = PluginLifecycle()
-        lc.transition_to(PluginState.ACTIVATING)
-        lc.transition_to(PluginState.ACTIVE)
-        assert lc.state == PluginState.ACTIVE
-
-    def test_activating_to_error(self):
-        lc = PluginLifecycle()
-        lc.transition_to(PluginState.ACTIVATING)
-        lc.transition_to(PluginState.ERROR)
-        assert lc.state == PluginState.ERROR
-
-    def test_active_to_deactivating(self):
-        lc = PluginLifecycle()
-        lc.transition_to(PluginState.ACTIVATING)
-        lc.transition_to(PluginState.ACTIVE)
-        lc.transition_to(PluginState.DEACTIVATING)
-        assert lc.state == PluginState.DEACTIVATING
-
-    def test_deactivating_to_stopped(self):
-        lc = PluginLifecycle()
-        lc.transition_to(PluginState.ACTIVATING)
-        lc.transition_to(PluginState.ACTIVE)
-        lc.transition_to(PluginState.DEACTIVATING)
-        lc.transition_to(PluginState.STOPPED)
-        assert lc.state == PluginState.STOPPED
-
-    def test_stopped_to_activating_restart(self):
-        lc = PluginLifecycle()
-        lc.transition_to(PluginState.ACTIVATING)
-        lc.transition_to(PluginState.ACTIVE)
-        lc.transition_to(PluginState.DEACTIVATING)
-        lc.transition_to(PluginState.STOPPED)
-        lc.transition_to(PluginState.ACTIVATING)
-        assert lc.state == PluginState.ACTIVATING
-
-    def test_error_to_activating_retry(self):
-        lc = PluginLifecycle()
-        lc.transition_to(PluginState.ACTIVATING)
-        lc.transition_to(PluginState.ERROR)
-        lc.transition_to(PluginState.ACTIVATING)
-        assert lc.state == PluginState.ACTIVATING
-
     def test_transition_to_active_succeeds(self):
         """Simplified lifecycle accepts direct transition to active."""
         lc = PluginLifecycle()

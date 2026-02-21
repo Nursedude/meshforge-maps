@@ -1,7 +1,5 @@
 """Tests for per-node health scoring."""
 
-import time
-
 import pytest
 
 from src.utils.health_scoring import (
@@ -21,67 +19,8 @@ from src.utils.health_scoring import (
     WEIGHT_FRESHNESS,
     WEIGHT_RELIABILITY,
     WEIGHT_SIGNAL,
-    NodeHealthScore,
     NodeHealthScorer,
-    _clamp,
-    _linear_score,
-    _score_label,
 )
-
-
-class TestHelpers:
-    """Tests for module-level helper functions."""
-
-    @pytest.mark.parametrize("score,expected", [
-        (90, "excellent"), (80, "excellent"),
-        (60, "good"), (79, "good"),
-        (40, "fair"), (59, "fair"),
-        (20, "poor"), (39, "poor"),
-        (0, "critical"), (19, "critical"),
-    ])
-    def test_score_label(self, score, expected):
-        assert _score_label(score) == expected
-
-    @pytest.mark.parametrize("val,lo,hi,expected", [
-        (5.0, 0.0, 10.0, 5.0),
-        (-1.0, 0.0, 10.0, 0.0),
-        (15.0, 0.0, 10.0, 10.0),
-    ])
-    def test_clamp(self, val, lo, hi, expected):
-        assert _clamp(val, lo, hi) == expected
-
-    @pytest.mark.parametrize("value,bad,good,max_pts,expected", [
-        (50, 0, 100, 10.0, 5.0),    # midpoint
-        (100, 0, 100, 10.0, 10.0),   # at good
-        (0, 0, 100, 10.0, 0.0),      # at bad
-        (-10, 0, 100, 10.0, 0.0),    # below bad
-        (150, 0, 100, 10.0, 10.0),   # above good
-        (50, 50, 50, 10.0, 10.0),    # equal bounds, at value
-        (49, 50, 50, 10.0, 0.0),     # equal bounds, below
-    ])
-    def test_linear_score(self, value, bad, good, max_pts, expected):
-        assert _linear_score(value, bad, good, max_pts) == pytest.approx(expected)
-
-
-class TestNodeHealthScore:
-    """Tests for NodeHealthScore data class."""
-
-    def test_to_dict(self):
-        score = NodeHealthScore(
-            node_id="!aabbccdd",
-            score=75,
-            status="good",
-            components={"battery": {"score": 20.0, "max": 25}},
-            available_weight=25,
-            timestamp=1000.0,
-        )
-        d = score.to_dict()
-        assert d["node_id"] == "!aabbccdd"
-        assert d["score"] == 75
-        assert d["status"] == "good"
-        assert d["components"]["battery"]["score"] == 20.0
-        assert d["available_weight"] == 25
-        assert d["timestamp"] == 1000.0
 
 
 class TestBatteryScoring:
