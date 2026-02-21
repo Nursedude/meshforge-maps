@@ -31,8 +31,7 @@ class PerfMonitor:
         stats = monitor.get_stats()
     """
 
-    def __init__(self, max_samples: int = 100):
-        # max_samples accepted for backward compat but not used
+    def __init__(self):
         self._lock = threading.Lock()
         self._start_time = time.time()
         self._total_collections = 0
@@ -146,12 +145,6 @@ class PerfMonitor:
             "cache_hit_ratio": round(s["cache_hits"] / count, 3) if count else 0,
             "total_nodes_collected": s["total_nodes"],
         }
-
-    def get_memory_usage(self) -> Dict[str, Any]:
-        """Get current memory usage estimates."""
-        with self._lock:
-            return {"tracked_sources": len(self._sources)}
-
 
 class TimingContext:
     """Context manager for timing operations."""

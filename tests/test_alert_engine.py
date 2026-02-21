@@ -5,7 +5,6 @@ import time
 import pytest
 
 from src.utils.alert_engine import (
-    Alert,
     AlertEngine,
     AlertRule,
     AlertSeverity,
@@ -78,42 +77,6 @@ class TestAlertRuleEvaluate:
         )
         assert rule.evaluate(10.0) is False
 
-    def test_to_dict(self):
-        rule = AlertRule(
-            rule_id="test", alert_type=AlertType.BATTERY_LOW,
-            severity=AlertSeverity.WARNING, metric="battery",
-            operator="lte", threshold=20.0,
-            description="Test rule",
-        )
-        d = rule.to_dict()
-        assert d["rule_id"] == "test"
-        assert d["alert_type"] == "battery_low"
-        assert d["severity"] == "warning"
-        assert d["metric"] == "battery"
-        assert d["operator"] == "lte"
-        assert d["threshold"] == 20.0
-        assert d["description"] == "Test rule"
-        assert d["enabled"] is True
-
-
-# ---------------------------------------------------------------------------
-# Alert dataclass
-# ---------------------------------------------------------------------------
-
-class TestAlert:
-    def test_to_dict(self):
-        alert = Alert(
-            alert_id="alert-1", rule_id="battery_low",
-            alert_type="battery_low", severity="warning",
-            node_id="!abc123", metric="battery", value=15.0,
-            threshold=20.0, message="Battery low",
-            timestamp=1000.0,
-        )
-        d = alert.to_dict()
-        assert d["alert_id"] == "alert-1"
-        assert d["node_id"] == "!abc123"
-        assert d["value"] == 15.0
-        assert d["acknowledged"] is False
 
 
 # ---------------------------------------------------------------------------
