@@ -25,10 +25,6 @@ class PluginState(enum.Enum):
     ERROR = "error"
 
 
-class InvalidTransitionError(Exception):
-    """Raised when an invalid state transition is attempted."""
-
-
 class PluginLifecycle:
     """Simplified plugin lifecycle tracker.
 

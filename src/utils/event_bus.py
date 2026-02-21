@@ -152,7 +152,9 @@ class EventBus:
         self._lock = threading.Lock()
         # EventType -> set of callbacks; None key = wildcard subscribers
         self._subscribers: Dict[Optional[EventType], Set[Subscriber]] = {}
-        self._stats = _BusStats()
+        self._total_published = 0
+        self._total_delivered = 0
+        self._total_errors = 0
 
     def subscribe(self, event_type: Optional[EventType],
                   callback: Subscriber) -> None:
@@ -189,7 +191,7 @@ class EventBus:
             if wildcard:
                 targets.extend(wildcard)
 
-        self._stats.inc_published()
+        self._total_published += 1
 
         for callback in targets:
             self._safe_call(callback, event)
@@ -198,9 +200,9 @@ class EventBus:
         """Call a subscriber, catching and logging any exception."""
         try:
             callback(event)
-            self._stats.inc_delivered()
+            self._total_delivered += 1
         except Exception:
-            self._stats.inc_errors()
+            self._total_errors += 1
             logger.exception(
                 "Event bus subscriber %s failed on %s",
                 getattr(callback, "__name__", repr(callback)),
@@ -217,56 +219,15 @@ class EventBus:
     @property
     def stats(self) -> Dict[str, int]:
         return {
-            "total_published": self._stats.total_published,
-            "total_delivered": self._stats.total_delivered,
-            "total_errors": self._stats.total_errors,
+            "total_published": self._total_published,
+            "total_delivered": self._total_delivered,
+            "total_errors": self._total_errors,
         }
 
     def reset(self) -> None:
         """Remove all subscribers and reset stats."""
         with self._lock:
             self._subscribers.clear()
-        self._stats.reset()
-
-
-class _BusStats:
-    """Thread-safe counters for event bus diagnostics."""
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
         self._total_published = 0
         self._total_delivered = 0
         self._total_errors = 0
-
-    def reset(self) -> None:
-        """Reset all counters to zero (thread-safe)."""
-        with self._lock:
-            self._total_published = 0
-            self._total_delivered = 0
-            self._total_errors = 0
-
-    def inc_published(self) -> None:
-        with self._lock:
-            self._total_published += 1
-
-    def inc_delivered(self) -> None:
-        with self._lock:
-            self._total_delivered += 1
-
-    def inc_errors(self) -> None:
-        with self._lock:
-            self._total_errors += 1
-
-    @property
-    def total_published(self) -> int:
-        with self._lock:
-            return self._total_published
-
-    @property
-    def total_delivered(self) -> int:
-        with self._lock:
-            return self._total_delivered
-
-    @property
-    def total_errors(self) -> int:
-        with self._lock:
-            return self._total_errors

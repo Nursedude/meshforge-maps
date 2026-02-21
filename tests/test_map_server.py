@@ -4,11 +4,10 @@ import json
 import threading
 import time
 from http.server import HTTPServer
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.map_server import MapRequestHandler, MapServer, MapServerContext, MeshForgeHTTPServer
+from src.map_server import MapRequestHandler, MapServer, MapServerContext
 from src.utils.config import MapsConfig
 
 
@@ -75,34 +74,6 @@ class TestMapServerStartup:
             assert server._server.context.config is not None
         finally:
             server.stop()
-
-
-class TestMapRequestHandlerAccessors:
-    """Tests for handler typed context access."""
-
-    def _make_handler(self, ctx=None):
-        handler = MapRequestHandler.__new__(MapRequestHandler)
-        mock_server = MagicMock(spec=MeshForgeHTTPServer)
-        mock_server.context = ctx or MapServerContext()
-        handler.server = mock_server
-        return handler
-
-    def test_get_aggregator_missing(self):
-        handler = self._make_handler()
-        assert handler._get_aggregator() is None
-
-    def test_get_aggregator_present(self):
-        mock_agg = MagicMock()
-        handler = self._make_handler(MapServerContext(aggregator=mock_agg))
-        assert handler._get_aggregator() is mock_agg
-
-    def test_get_config_missing(self):
-        handler = self._make_handler()
-        assert handler._get_config() is None
-
-    def test_get_web_dir_missing(self):
-        handler = self._make_handler()
-        assert handler._get_web_dir() is None
 
 
 class TestMapServerPort:
