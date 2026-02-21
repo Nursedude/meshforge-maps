@@ -78,7 +78,7 @@ A full curses-based terminal interface launched with `--tui` (alongside the serv
 - **Alert trend aggregation** -- alerts bucketed over time with per-severity counts (critical/warning/info)
 
 ### Operations
-- **Per-node health scoring** -- composite 0-100 score from battery, signal (SNR + hops), data freshness, connectivity reliability, and channel congestion
+- **Per-node health scoring** -- composite 0-100 score (see [Node Health Scoring](#node-health-scoring))
 - **Performance profiling** -- collection cycle timing with per-source latency percentiles (p50/p90/p99), cache hit ratios
 - **Node connectivity state machine** -- classifies nodes as new/stable/intermittent/offline based on heartbeat patterns
 - **Config drift detection** -- tracks firmware and hardware changes across nodes
@@ -336,7 +336,7 @@ Local RNS path table via `rnstatus -d --json` and [Reticulum Community Hub (RCH)
 
 ### OpenHamClock / Propagation
 
-Space weather from [NOAA SWPC](https://services.swpc.noaa.gov/) public JSON APIs. [OpenHamClock](https://github.com/accius/openhamclock) is the recommended propagation data source -- auto-detected on port 3000. Legacy HamClock (port 8080) is supported as a fallback but is no longer in active development.
+Space weather from [NOAA SWPC](https://services.swpc.noaa.gov/) public JSON APIs. [OpenHamClock](https://github.com/accius/openhamclock) is the recommended propagation data source (auto-detected on port 3000, legacy HamClock port 8080 as fallback). See [HamClock on Headless Systems](#hamclock-on-headless-systems) for deployment options.
 
 ### AREDN
 
