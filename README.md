@@ -8,7 +8,7 @@ Visualization plugin for the [MeshForge ecosystem](https://github.com/Nursedude/
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-898%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-863%20passing-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
 A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
@@ -21,17 +21,11 @@ A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RM
 
 MeshForge Maps runs a lightweight HTTP server (default `:8808`) alongside a WebSocket server (`:8809`) that together power two interfaces: a **Leaflet.js web map** in your browser and an optional **curses-based terminal dashboard** (`--tui`).
 
+Works with or without local radio hardware -- each collector falls back through a priority chain (local API → MQTT → cache), so headless/MQTT-only deployments get the same map experience. See [Pi Deployment](#pi-deployment-headless--no-radio) for details.
+
 Behind the scenes, four **collectors** poll their respective data sources on a 5-second cycle -- Meshtastic nodes, Reticulum/RMAP nodes, AREDN mesh nodes, and HF propagation/space weather. A **data aggregator** merges and deduplicates the results into a unified GeoJSON dataset. That dataset feeds the REST API, which the web map and TUI consume.
 
 Real-time updates flow through an **event bus**: as new positions, telemetry, or topology changes arrive, they're broadcast over WebSocket to connected browsers and pushed to the TUI's live event stream. An **alert engine** evaluates node health against configurable threshold rules and delivers alerts via MQTT, webhooks, and the browser alert panel simultaneously.
-
-```
-Collectors → Aggregator → REST API → Web Map / TUI
-                ↓
-           Event Bus → WebSocket → Live Updates
-                ↓
-          Alert Engine → MQTT / Webhooks / Browser
-```
 
 **Quick start:**
 
@@ -41,41 +35,11 @@ python -m src.main --tui        # web map + terminal dashboard
 python -m src.main --tui-only   # TUI client (connect to existing server)
 ```
 
-## With or Without a Radio
-
-MeshForge Maps works in two modes depending on whether you have radio hardware connected.
-
-### With Radio Hardware
-
-When running on a machine with local radios or mesh network access, collectors use **direct local APIs** for the lowest latency and full feature set:
-
-| Source | Connection | What You Get |
-|--------|-----------|--------------|
-| **Meshtastic** | meshtasticd HTTP API (`:4403`) | Positions, telemetry, battery, SNR, neighbor topology |
-| **Reticulum** | `rnstatus --json` or RCH REST API | RNS interfaces, node types, transport paths |
-| **AREDN** | Per-node sysinfo API on the mesh | Locations, firmware, LQM link quality metrics |
-| **HamClock** | OpenHamClock REST (`:3000`) | VOACAP predictions, DX spots, band conditions |
-
-### Without Radio (Headless / MQTT-Only)
-
-No radio? No problem. Install with `--no-radio` or just configure MQTT-only sources:
-
-| Source | Fallback | What You Get |
-|--------|---------|--------------|
-| **Meshtastic** | Public MQTT broker (`mqtt.meshtastic.org`) | Same node data via live `msh/#` subscription |
-| **HamClock/NOAA** | NOAA SWPC public APIs (automatic fallback) | Solar flux, Kp index, band conditions |
-| **Reticulum** | Disabled (requires local RNS stack) | -- |
-| **AREDN** | Disabled (requires on-mesh access) | -- |
-
-Each collector falls back automatically through a priority chain (local API → MQTT → cache file), so you always get the best available data. Set `meshtastic_source` to `"mqtt_only"` in settings to skip the local API check entirely.
-
 ## Features
 
 ### Data Collection
-- **Multi-source data aggregation** -- collects node data from Meshtastic (MQTT/meshtasticd), Reticulum (rnstatus/RMAP/RCH), AREDN (sysinfo API), and OpenHamClock/NOAA propagation feeds
-- **Live MQTT subscription** -- real-time Meshtastic node tracking via `mqtt.meshtastic.org` with protobuf decoding (POSITION_APP, NODEINFO_APP, TELEMETRY_APP, NEIGHBORINFO_APP)
-- **Reticulum Community Hub (RCH) integration** -- telemetry proxy via FreeTAKTeam's FastAPI northbound REST API
-- **AREDN mesh node discovery** -- per-node sysinfo API with LQM (Link Quality Manager) topology link extraction
+- **Multi-source aggregation** -- Meshtastic, Reticulum/RMAP, AREDN, and OpenHamClock/NOAA (see [Data Sources](#data-sources) for protocol details)
+- **Live MQTT subscription** -- real-time Meshtastic node tracking with protobuf decoding
 - **Circuit breakers** -- per-source failure isolation with automatic recovery
 
 ### Visualization
@@ -104,10 +68,7 @@ A full curses-based terminal interface launched with `--tui` (alongside the serv
 **Keyboard:** `q` quit, `r` refresh, `j`/`k` scroll, `/` search, `s` sort, `Enter` drill-down, `Esc` back.
 
 ### Alerting & Notifications
-- **Threshold-based alert engine** -- configurable rules for battery low/critical, signal poor, congestion high, health degraded, and node offline conditions with per-node cooldown throttling
-- **Multi-channel delivery** -- alerts delivered via MQTT publish (base topic + severity sub-topics), webhooks (HTTP POST), EventBus events, and direct callbacks
-- **Real-time alert panel** -- collapsible browser panel showing live alerts with severity-colored indicators, node IDs, timestamps, and toast notifications for critical alerts
-- **Alert management** -- acknowledge alerts, filter by severity/node, configurable rules with enable/disable/cooldown
+- **Threshold-based alert engine** -- configurable rules with per-node cooldown, multi-channel delivery (MQTT, webhooks, EventBus, browser), and real-time alert panel with toast notifications. See [Alert Delivery](#alert-delivery) for details.
 
 ### Historical Analytics
 - **Network growth time-series** -- unique nodes per time bucket showing mesh expansion over time
@@ -352,24 +313,6 @@ Alert payloads are JSON:
 }
 ```
 
-## Collector Priority
-
-```mermaid
-flowchart LR
-    subgraph Meshtastic
-        M1["1. meshtasticd API"] --> M2["2. Live MQTT"] --> M3["3. MQTT Cache File"]
-    end
-    subgraph Reticulum
-        R1["1. rnstatus --json"] --> R2["2. RCH API"] --> R3["3. RNS Cache"] --> R4["4. Unified Cache"]
-    end
-    subgraph AREDN
-        A1["1. Node sysinfo API"] --> A2["2. AREDN Cache"] --> A3["3. Unified Cache"]
-    end
-    subgraph Propagation
-        H1["1. OpenHamClock :3000"] --> H2["2. HamClock :8080 (legacy)"] --> H3["3. NOAA SWPC APIs"]
-    end
-```
-
 ## Data Sources
 
 | Source | Protocol | Data | Status |
@@ -546,31 +489,7 @@ OpenHamClock is an X11 application and won't run directly on a headless Pi (no d
 
 > The no-radio install (`--no-radio`) enables HamClock/NOAA by default. If no HamClock instance is reachable, NOAA fallback activates automatically — no configuration needed.
 
-## MQTT & Network Sources
-
-### Network Sources (Channels)
-
-Each data source is toggled independently in `settings.json`. Disable sources you don't need or don't have access to:
-
-```json
-{
-  "enable_meshtastic": true,
-  "enable_reticulum": true,
-  "enable_aredn": true,
-  "enable_hamclock": true,
-  "enable_noaa_alerts": true
-}
-```
-
-For Meshtastic, the `meshtastic_source` setting controls where data comes from:
-
-| Mode | Behavior |
-|------|----------|
-| `"auto"` (default) | Try local meshtasticd API first, fall back to live MQTT, then cache file |
-| `"mqtt_only"` | Skip local API, subscribe directly to MQTT broker |
-| `"local_only"` | Only use local meshtasticd API (no MQTT) |
-
-### MQTT Configuration
+## MQTT Configuration
 
 MeshForge Maps uses MQTT in two directions:
 
@@ -720,7 +639,7 @@ flowchart LR
 ```bash
 pip install pytest
 pytest tests/ -v
-# 835 tests covering:
+# 863 tests covering:
 #   - Base helpers, config, coordinate validation
 #   - All 4 collectors (Meshtastic, Reticulum, HamClock, AREDN)
 #   - Aggregator deduplication, MQTT node store, topology links
@@ -741,11 +660,7 @@ pytest tests/ -v
 
 ### Near-term
 
-- ~~**Analytics frontend**~~ (done) -- browser-based analytics dashboard with SVG sparkline charts, activity heatmap, node ranking table, and alert trend visualization. Toggle via Overlays > Analytics.
-
 - **Email alert delivery** -- SMTP integration for the alert engine. The delivery pipeline already supports multiple channels (callback, MQTT, webhook); email is a natural extension.
-
-- ~~**CSV/JSON export**~~ (done) -- export endpoints at `/api/export/nodes`, `/api/export/alerts`, and `/api/export/analytics/*` serving CSV downloads with JSON option. Also available via analytics panel export buttons.
 
 ### Medium-term
 
