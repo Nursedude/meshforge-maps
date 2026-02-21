@@ -538,6 +538,23 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `mqtt_username` | string | `null` | MQTT auth username (private brokers) |
 | `mqtt_password` | string | `null` | MQTT auth password (private brokers) |
 | `mqtt_alert_topic` | string | `meshforge/alerts` | MQTT topic for alert publishing |
+| `enable_noaa_alerts` | bool | `true` | Enable NOAA weather alerts |
+| `noaa_alerts_area` | string | `null` | State code filter (e.g. `"TX"`, `"CA"`); null = all US |
+| `noaa_alerts_severity` | list | `null` | Severity filter (e.g. `["Extreme","Severe"]`); null = all |
+| `api_key` | string | `null` | API key for `/api/*` endpoints (sent via `X-MeshForge-Key` header) |
+| `cors_allowed_origin` | string | `null` | CORS origin; null = same-origin (disabled), `"*"` = allow all |
+
+## Security
+
+The HTTP and WebSocket servers bind to **127.0.0.1** (localhost) by default. Changing `http_host` or `ws_host` to `0.0.0.0` exposes the server to the network -- use a reverse proxy with TLS in front when doing so.
+
+**API authentication:** Set `api_key` in settings.json to require authentication on all `/api/*` endpoints. Clients send the key via the `X-MeshForge-Key` HTTP header. When no key is configured, all API requests are allowed.
+
+**MQTT credentials:** `mqtt_username` and `mqtt_password` are stored in plaintext in `settings.json`. Ensure the file has restrictive permissions (`chmod 600`). TLS is auto-enabled when credentials are provided.
+
+**CORS:** Disabled by default (no CORS headers sent). Set `cors_allowed_origin` to a specific origin or `"*"` to enable cross-origin access.
+
+See [SECURITY.md](SECURITY.md) for the full security audit report, findings, and a deployment hardening checklist.
 
 ## API Endpoints
 

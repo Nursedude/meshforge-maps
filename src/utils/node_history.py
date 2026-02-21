@@ -105,6 +105,16 @@ class NodeHistoryDB:
                     pass
             self._conn = None
 
+    def execute_read(self, query: str, params: tuple = ()) -> list:
+        """Execute a read-only query under the DB lock. Returns list of rows."""
+        with self._lock:
+            if not self._conn:
+                return []
+            try:
+                return self._conn.execute(query, params).fetchall()
+            except sqlite3.OperationalError:
+                return []
+
     def record_observation(
         self,
         node_id: str,
