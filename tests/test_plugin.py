@@ -127,11 +127,8 @@ class TestPluginEventHandlers:
 
         plugin = MeshForgeMapsPlugin()
         plugin.activate(context)
-        # Should not crash on non-dict data
+        # Smoke test: verify no exception raised on non-dict input
         plugin._on_config_changed("invalid")
-        # update should not have been called (only called during activate with empty settings)
-        # The activate call triggers context.settings check, but not config.update
-        # since settings is empty MagicMock dict
 
     @patch("src.main.MapServer")
     @patch("src.main.MapsConfig")
@@ -163,8 +160,8 @@ class TestPluginEventHandlers:
         mock_server = MockServer.return_value
         mock_server.start.return_value = True
         mock_server.port = 8808
-        mock_server.aggregator._mqtt_subscriber = None
-        mock_server.aggregator._collectors = {"meshtastic": MagicMock(), "reticulum": MagicMock()}
+        mock_server.aggregator.mqtt_subscriber = None
+        mock_server.aggregator.enabled_collector_names = ["meshtastic", "reticulum"]
 
         context = MagicMock()
         context.settings = {}
@@ -192,7 +189,7 @@ class TestPluginEventHandlers:
         mock_server = MockServer.return_value
         mock_server.start.return_value = True
         mock_server.port = 8808
-        mock_server.aggregator._collectors = {}
+        mock_server.aggregator.get_collector.return_value = None
 
         context = MagicMock()
         context.settings = {}
@@ -215,7 +212,7 @@ class TestPluginEventHandlers:
             "space_weather": {"solar_flux": "150", "kp_index": "2", "band_conditions": "good"},
             "voacap": {"bands": {"20m": {"reliability": 90, "status": "excellent"}}, "best_band": "20m"},
         }
-        mock_server.aggregator._collectors = {"hamclock": mock_hc}
+        mock_server.aggregator.get_collector.return_value = mock_hc
 
         context = MagicMock()
         context.settings = {}
@@ -246,7 +243,7 @@ class TestPluginEventHandlers:
                 {"dx_call": "JA1ABC", "freq_khz": "14250", "de_call": "W6XYZ", "utc": "1430"},
             ],
         }
-        mock_server.aggregator._collectors = {"hamclock": mock_hc}
+        mock_server.aggregator.get_collector.return_value = mock_hc
 
         context = MagicMock()
         context.settings = {}
@@ -266,7 +263,7 @@ class TestPluginEventHandlers:
 
         mock_hc = MagicMock()
         mock_hc.get_hamclock_data.return_value = {"available": False}
-        mock_server.aggregator._collectors = {"hamclock": mock_hc}
+        mock_server.aggregator.get_collector.return_value = mock_hc
 
         context = MagicMock()
         context.settings = {}
@@ -296,7 +293,7 @@ class TestPluginEventHandlers:
             "dx_station": {"call": "F5ABC", "grid": "JN18"},
             "dxspots": [{"dx_call": "JA1ABC"}],
         }
-        mock_server.aggregator._collectors = {"hamclock": mock_hc}
+        mock_server.aggregator.get_collector.return_value = mock_hc
 
         context = MagicMock()
         context.settings = {}

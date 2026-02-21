@@ -63,8 +63,8 @@ class TestPluginStateTransitions:
         lc.transition_to(PluginState.ACTIVATING)
         assert lc.state == PluginState.ACTIVATING
 
-    def test_any_transition_accepted(self):
-        """Simplified lifecycle accepts any transition."""
+    def test_transition_to_active_succeeds(self):
+        """Simplified lifecycle accepts direct transition to active."""
         lc = PluginLifecycle()
         lc.transition_to(PluginState.ACTIVE)
         assert lc.state == PluginState.ACTIVE
