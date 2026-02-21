@@ -429,6 +429,7 @@ class MQTTSubscriber:
         self._connected = threading.Event()
         self._stats_lock = threading.Lock()
         self._messages_received: int = 0
+        self._parse_errors: int = 0
         self._proto = _try_import_meshtastic()
 
         mqtt_mod, api_version = _try_import_paho()
@@ -521,6 +522,8 @@ class MQTTSubscriber:
             self._thread.join(timeout=5)
             if self._thread.is_alive():
                 logger.warning("MQTT subscriber thread did not exit within 5s")
+        # Safe to null these: the loop_stop daemon thread (if still alive)
+        # will die with the process since it's marked daemon=True.
         self._client = None
         self._thread = None
         self._connected.clear()
@@ -538,6 +541,7 @@ class MQTTSubscriber:
             "running": self._running.is_set(),
             "has_credentials": self._username is not None,
             "messages_received": messages,
+            "parse_errors": self._parse_errors,
             "node_count": self._store.node_count,
             "protobuf_available": self._proto is not None,
         }
@@ -608,11 +612,15 @@ class MQTTSubscriber:
                 # Fallback: try JSON (if device has JSON mode enabled)
                 self._decode_json(msg.payload, msg.topic)
         except (ValueError, TypeError, KeyError, AttributeError):
-            # Unparseable messages are common on the public broker -- expected
-            pass
+            # Unparseable messages are common on the public broker
+            self._parse_errors += 1
+            if self._parse_errors % 1000 == 0:
+                logger.warning(
+                    "MQTT: %d total unparseable messages dropped",
+                    self._parse_errors,
+                )
         except Exception as e:
-            # Log unexpected errors at debug level to aid diagnosis
-            # without flooding logs (the broker sends many messages)
+            self._parse_errors += 1
             logger.debug("MQTT message processing error on %s: %s", msg.topic, e)
 
     def _notify_update(self, node_id: str, update_type: str, **kwargs) -> None:

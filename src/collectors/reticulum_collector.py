@@ -77,8 +77,9 @@ class ReticulumCollector(BaseCollector):
         rch_port: int = RCH_DEFAULT_PORT,
         rch_api_key: Optional[str] = None,
         cache_ttl_seconds: int = 900,
+        max_retries: int = 0,
     ):
-        super().__init__(cache_ttl_seconds)
+        super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._rch_base = f"http://{rch_host}:{rch_port}"
         self._rch_api_key = rch_api_key
 

@@ -51,8 +51,9 @@ class AREDNCollector(BaseCollector):
         self,
         node_targets: Optional[List[str]] = None,
         cache_ttl_seconds: int = 900,
+        max_retries: int = 0,
     ):
-        super().__init__(cache_ttl_seconds)
+        super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._node_targets = node_targets or list(DEFAULT_AREDN_NODES)
         self._topo_lock = threading.Lock()
         # Topology links from LQM data (source_name -> [{neighbor, snr, quality, ...}])

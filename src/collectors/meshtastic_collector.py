@@ -46,11 +46,12 @@ class MeshtasticCollector(BaseCollector):
         meshtasticd_host: str = "localhost",
         meshtasticd_port: int = 4403,
         cache_ttl_seconds: int = 900,
+        max_retries: int = 0,
         mqtt_store: Optional[Any] = None,
         connection_timeout: float = 5.0,
         source_mode: str = "auto",
     ):
-        super().__init__(cache_ttl_seconds)
+        super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._api_base = f"http://{meshtasticd_host}:{meshtasticd_port}"
         self._mqtt_store = mqtt_store  # MQTTNodeStore instance from mqtt_subscriber
         self._conn_mgr = ConnectionManager.get_instance(meshtasticd_host, meshtasticd_port)

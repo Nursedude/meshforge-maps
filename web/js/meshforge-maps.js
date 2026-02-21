@@ -492,6 +492,11 @@ function esc(str) {
     return div.innerHTML;
 }
 
+function safeColor(color) {
+    if (typeof color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(color)) return color;
+    return '#b0bec5';
+}
+
 // =========================================================================
 // UI Controls
 // =========================================================================
@@ -1664,7 +1669,7 @@ function renderWeatherAlerts(data) {
         style: function(feature) {
             var props = feature.properties || {};
             var severity = props.severity || 'Unknown';
-            var color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.Unknown;
+            var color = safeColor(SEVERITY_COLORS[severity] || SEVERITY_COLORS.Unknown);
             var fillOpacity = SEVERITY_FILL_OPACITY[severity] || 0.15;
             return {
                 color: color,
@@ -1678,7 +1683,7 @@ function renderWeatherAlerts(data) {
         onEachFeature: function(feature, layer) {
             var props = feature.properties || {};
             var severity = props.severity || 'Unknown';
-            var color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.Unknown;
+            var color = safeColor(SEVERITY_COLORS[severity] || SEVERITY_COLORS.Unknown);
 
             var popup = '<div class="popup-title" style="color:' + color + '">' + esc(props.event || 'Weather Alert') + '</div>';
             popup += '<div class="popup-network" style="color:' + color + '">' + esc(severity) + ' &mdash; ' + esc(props.urgency || '') + '</div>';
@@ -1801,7 +1806,7 @@ async function checkDataHealth() {
 // =========================================================================
 
 // Auto-refresh interval (silent -- no toast on auto-refresh, upstream improvement)
-setInterval(function() {
+var _refreshInterval = setInterval(function() {
     loadNodeData();
     if (showTopology) loadTopologyData();
     if (showWeatherAlerts) loadWeatherAlerts();
@@ -1809,7 +1814,14 @@ setInterval(function() {
 }, 60 * 1000); // Refresh every 60 seconds (WebSocket fallback)
 
 // Periodic health check (every 2 minutes)
-setInterval(checkDataHealth, 2 * 60 * 1000);
+var _healthInterval = setInterval(checkDataHealth, 2 * 60 * 1000);
+
+// Cleanup on page unload to prevent leaked timers and connections
+window.addEventListener('beforeunload', function() {
+    clearInterval(_refreshInterval);
+    clearInterval(_healthInterval);
+    if (ws) { try { ws.close(); } catch (e) { /* ignore */ } }
+});
 
 // =========================================================================
 // Init
