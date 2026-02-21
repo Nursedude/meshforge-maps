@@ -65,6 +65,9 @@ scripts/                     install.sh, verify.sh
 - No secrets in code — MQTT credentials come from settings.json only
 - CORS disabled by default (`cors_allowed_origin: None` in config)
 - Query parameters extracted via `_safe_query_param()` helper — never access raw query dicts
+- HTTP responses include `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`
+- HTML responses include `Content-Security-Policy` header restricting script/style/image/connect sources
+- Config file written with restrictive umask (`0o077`) to protect MQTT credentials in `settings.json`
 
 ## Anti-Patterns (from Code Reviews)
 
@@ -76,6 +79,7 @@ scripts/                     install.sh, verify.sh
 - Don't add docstrings/comments/type hints to code you didn't change
 - Don't create helpers or utilities for one-time operations
 - Don't use feature flags or backwards-compatibility shims — just change the code
+- Don't access `_lock` or `_conn` on `NodeHistoryDB` directly — use `execute_read()` for analytics queries
 
 ## Testing
 
@@ -98,6 +102,8 @@ pytest tests/ -v    # 863 tests, no external deps needed
 - **pyopenssl pinning**: Must be `>=25.3.0` with `cryptography>=45.0.7,<47` to avoid SSL conflicts
 - **Graceful degradation**: All optional imports must be try/except guarded — feature disabled, never crash
 - **Circuit breakers**: Per-source failure isolation via `ConnectionManager` — don't bypass for "reliability"
+- **Config keys in README**: `cors_allowed_origin`, `api_key`, `enable_noaa_alerts`, `noaa_alerts_area`, `noaa_alerts_severity` are all in `DEFAULT_CONFIG` — keep README config table in sync when adding/removing keys
+- **NodeHistoryDB.execute_read()**: Public API for read-only analytics queries — use this instead of accessing `_lock`/`_conn` directly
 
 ## Commit Convention
 

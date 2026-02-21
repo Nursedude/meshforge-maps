@@ -62,7 +62,7 @@ class HistoricalAnalytics:
         Returns:
             Dict with "buckets" list and metadata
         """
-        if not self._history or not self._history._conn:
+        if not self._history:
             return {"buckets": [], "error": "Node history not available"}
 
         now = int(time.time())
@@ -85,14 +85,9 @@ class HistoricalAnalytics:
             ORDER BY bucket_start ASC
         """
 
-        with self._history._lock:
-            try:
-                rows = self._history._conn.execute(
-                    query, (bucket_seconds, bucket_seconds, since, until)
-                ).fetchall()
-            except Exception as e:
-                logger.error("Network growth query failed: %s", e)
-                return {"buckets": [], "error": str(e)}
+        rows = self._history.execute_read(
+            query, (bucket_seconds, bucket_seconds, since, until)
+        )
 
         buckets = []
         for row in rows[:num_buckets]:
@@ -122,7 +117,7 @@ class HistoricalAnalytics:
         Returns:
             Dict with "hours" list (24 entries, index=hour)
         """
-        if not self._history or not self._history._conn:
+        if not self._history:
             return {"hours": [0] * 24, "error": "Node history not available"}
 
         now = int(time.time())
@@ -142,14 +137,7 @@ class HistoricalAnalytics:
             ORDER BY hour ASC
         """
 
-        with self._history._lock:
-            try:
-                rows = self._history._conn.execute(
-                    query, (since, until)
-                ).fetchall()
-            except Exception as e:
-                logger.error("Activity heatmap query failed: %s", e)
-                return {"hours": [0] * 24, "error": str(e)}
+        rows = self._history.execute_read(query, (since, until))
 
         hours = [0] * 24
         for hour, count in rows:
@@ -174,7 +162,7 @@ class HistoricalAnalytics:
         Returns:
             Dict with ranked "nodes" list
         """
-        if not self._history or not self._history._conn:
+        if not self._history:
             return {"nodes": [], "error": "Node history not available"}
 
         now = int(time.time())
@@ -195,14 +183,7 @@ class HistoricalAnalytics:
             LIMIT ?
         """
 
-        with self._history._lock:
-            try:
-                rows = self._history._conn.execute(
-                    query, (since, limit)
-                ).fetchall()
-            except Exception as e:
-                logger.error("Node activity ranking query failed: %s", e)
-                return {"nodes": [], "error": str(e)}
+        rows = self._history.execute_read(query, (since, limit))
 
         nodes = []
         for row in rows:
@@ -230,7 +211,7 @@ class HistoricalAnalytics:
         Returns total nodes, observations, per-network breakdowns, and
         average observations per node.
         """
-        if not self._history or not self._history._conn:
+        if not self._history:
             return {"error": "Node history not available"}
 
         now = int(time.time())
@@ -256,18 +237,10 @@ class HistoricalAnalytics:
             ORDER BY node_count DESC
         """
 
-        with self._history._lock:
-            try:
-                totals_row = self._history._conn.execute(
-                    query_totals, (since,)
-                ).fetchone()
-                network_rows = self._history._conn.execute(
-                    query_networks, (since,)
-                ).fetchall()
-            except Exception as e:
-                logger.error("Network summary query failed: %s", e)
-                return {"error": str(e)}
+        totals_rows = self._history.execute_read(query_totals, (since,))
+        network_rows = self._history.execute_read(query_networks, (since,))
 
+        totals_row = totals_rows[0] if totals_rows else None
         unique_nodes = totals_row[0] if totals_row else 0
         total_obs = totals_row[1] if totals_row else 0
 

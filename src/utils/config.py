@@ -7,6 +7,7 @@ Settings persist to ~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -138,8 +139,12 @@ class MapsConfig:
         try:
             with self._lock:
                 snapshot = dict(self._settings)
-            with open(self._config_path, "w") as f:
-                json.dump(snapshot, f, indent=2)
+            old_umask = os.umask(0o077)
+            try:
+                with open(self._config_path, "w") as f:
+                    json.dump(snapshot, f, indent=2)
+            finally:
+                os.umask(old_umask)
             logger.info("Saved settings to %s", self._config_path)
         except OSError as e:
             logger.error("Failed to save settings: %s", e)

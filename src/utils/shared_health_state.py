@@ -74,7 +74,8 @@ class SharedHealthStateReader:
     @property
     def available(self) -> bool:
         """Whether the shared health DB is accessible."""
-        return self._available and self._conn is not None
+        with self._lock:
+            return self._available and self._conn is not None
 
     def get_service_states(self) -> List[Dict[str, Any]]:
         """Read all service health states from the core DB.
