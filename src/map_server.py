@@ -10,6 +10,7 @@ Follows meshforge patterns: SimpleHTTPRequestHandler, no-cache headers,
 CORS support for local development.
 """
 
+import hmac
 import json
 import logging
 import os
@@ -106,36 +107,6 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     def _ctx(self) -> MapServerContext:
         return self.server.context
 
-    def _get_aggregator(self) -> Optional[DataAggregator]:
-        return self._ctx.aggregator
-
-    def _get_config(self) -> Optional[MapsConfig]:
-        return self._ctx.config
-
-    def _get_web_dir(self) -> Optional[str]:
-        return self._ctx.web_dir
-
-    def _get_node_history(self) -> Optional[NodeHistoryDB]:
-        return self._ctx.node_history
-
-    def _get_shared_health(self) -> Optional[SharedHealthStateReader]:
-        return self._ctx.shared_health
-
-    def _get_config_drift(self) -> Optional[ConfigDriftDetector]:
-        return self._ctx.config_drift
-
-    def _get_node_state(self) -> Optional[NodeStateTracker]:
-        return self._ctx.node_state
-
-    def _get_health_scorer(self) -> Optional[NodeHealthScorer]:
-        return self._ctx.health_scorer
-
-    def _get_alert_engine(self) -> Optional[AlertEngine]:
-        return self._ctx.alert_engine
-
-    def _get_analytics(self) -> Optional[HistoricalAnalytics]:
-        return self._ctx.analytics
-
     # Route name -> method name mapping (built once, not per request)
     _ROUTE_TABLE = {
         "": "_serve_map",
@@ -188,7 +159,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not api_key:
             return True  # No API key configured -- all requests allowed
         provided = self.headers.get("X-MeshForge-Key", "")
-        if provided == api_key:
+        if hmac.compare_digest(provided, api_key):
             return True
         self._send_json({"error": "Unauthorized"}, 401)
         return False
@@ -263,7 +234,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                     self._serve_source_geojson(source)
             else:
                 # Serve static files from web directory
-                web_dir = self._get_web_dir()
+                web_dir = self._ctx.web_dir
                 if web_dir:
                     self.directory = web_dir
                 super().do_GET()
@@ -279,7 +250,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _get_cors_origin(self) -> Optional[str]:
         """Get configured CORS origin, or None for same-origin (no CORS headers)."""
-        config = self._get_config()
+        config = self._ctx.config
         if config:
             return config.get("cors_allowed_origin")
         return None
@@ -310,7 +281,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_geojson(self) -> None:
         """Serve aggregated GeoJSON from all enabled sources."""
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "Aggregator not initialized"}, 503)
             return
@@ -319,7 +290,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_source_geojson(self, source: str) -> None:
         """Serve GeoJSON from a single source."""
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "Aggregator not initialized"}, 503)
             return
@@ -328,7 +299,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_config(self) -> None:
         """Serve current configuration (non-sensitive)."""
-        config = self._get_config()
+        config = self._ctx.config
         if not config:
             self._send_json({})
             return
@@ -346,7 +317,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_sources(self) -> None:
         """Serve list of enabled data sources."""
-        config = self._get_config()
+        config = self._ctx.config
         if not config:
             self._send_json({"sources": []})
             return
@@ -361,7 +332,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         Uses cached overlay from the last collect_all() to avoid a
         redundant heavy aggregation call on every overlay request.
         """
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({})
             return
@@ -370,7 +341,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_topology(self) -> None:
         """Serve topology link data for D3.js force graph."""
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"links": []})
             return
@@ -383,7 +354,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         Returns all available HamClock data from the collector directly,
         using cached data if fresh.
         """
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "Aggregator not initialized"}, 503)
             return
@@ -400,7 +371,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         Each link is a GeoJSON LineString Feature with properties including
         SNR value, quality tier label, and hex color for direct rendering.
         """
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"type": "FeatureCollection", "features": []})
             return
@@ -408,7 +379,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_trajectory(self, node_id: str, query: Dict) -> None:
         """Serve node trajectory as GeoJSON LineString."""
-        history = self._get_node_history()
+        history = self._ctx.node_history
         if not history:
             self._send_json({"error": "Node history not available"}, 503)
             return
@@ -427,7 +398,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_node_history(self, node_id: str, query: Dict) -> None:
         """Serve node observation history as JSON list."""
-        history = self._get_node_history()
+        history = self._ctx.node_history
         if not history:
             self._send_json({"error": "Node history not available"}, 503)
             return
@@ -451,7 +422,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_snapshot(self, timestamp: int) -> None:
         """Serve historical network snapshot at a point in time."""
-        history = self._get_node_history()
+        history = self._ctx.node_history
         if not history:
             self._send_json({"error": "Node history not available"}, 503)
             return
@@ -459,7 +430,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_tracked_nodes(self) -> None:
         """Serve list of all tracked nodes with observation counts."""
-        history = self._get_node_history()
+        history = self._ctx.node_history
         if not history:
             self._send_json({"error": "Node history not available"}, 503)
             return
@@ -477,7 +448,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         (gateway bridge status, service states, latency percentiles).
         Returns empty/unavailable when core is not running.
         """
-        reader = self._get_shared_health()
+        reader = self._ctx.shared_health
         if not reader:
             self._send_json({"available": False, "services": []})
             return
@@ -491,7 +462,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
         Returns broker connection state, message counts, and node store stats.
         """
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator or not aggregator.mqtt_subscriber:
             self._send_json({"available": False, "status": "not_configured"})
             return
@@ -504,8 +475,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         - Data freshness: 50 points (full if <cache_ttl, degrades to 0 at 3x TTL)
         - Source availability: 50 points (proportional to sources with data)
         """
-        aggregator = self._get_aggregator()
-        config = self._get_config()
+        aggregator = self._ctx.aggregator
+        config = self._ctx.config
 
         if not aggregator:
             self._send_json({
@@ -561,7 +532,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_config_drift(self) -> None:
         """Serve config drift events, optionally filtered by severity/since."""
-        detector = self._get_config_drift()
+        detector = self._ctx.config_drift
         if not detector:
             self._send_json({"error": "Config drift detection not available"}, 503)
             return
@@ -574,7 +545,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_config_drift_summary(self) -> None:
         """Serve config drift summary."""
-        detector = self._get_config_drift()
+        detector = self._ctx.config_drift
         if not detector:
             self._send_json({"error": "Config drift detection not available"}, 503)
             return
@@ -582,7 +553,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_node_states(self) -> None:
         """Serve all node connectivity states."""
-        tracker = self._get_node_state()
+        tracker = self._ctx.node_state
         if not tracker:
             self._send_json({"error": "Node state tracking not available"}, 503)
             return
@@ -593,7 +564,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_node_states_summary(self) -> None:
         """Serve node state summary (counts by state)."""
-        tracker = self._get_node_state()
+        tracker = self._ctx.node_state
         if not tracker:
             self._send_json({"error": "Node state tracking not available"}, 503)
             return
@@ -609,7 +580,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_node_health(self, node_id: str) -> None:
         """Serve health score for a single node."""
-        scorer = self._get_health_scorer()
+        scorer = self._ctx.health_scorer
         if not scorer:
             self._send_json({"error": "Health scoring not available"}, 503)
             return
@@ -621,7 +592,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
 
         # Score on demand from current GeoJSON data
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "No data available"}, 503)
             return
@@ -631,7 +602,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         for f in features:
             props = f.get("properties", {})
             if props.get("id") == node_id:
-                tracker = self._get_node_state()
+                tracker = self._ctx.node_state
                 conn_state = None
                 if tracker:
                     state = tracker.get_node_state(node_id)
@@ -644,20 +615,20 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_all_node_health(self) -> None:
         """Serve health scores for all nodes."""
-        scorer = self._get_health_scorer()
+        scorer = self._ctx.health_scorer
         if not scorer:
             self._send_json({"error": "Health scoring not available"}, 503)
             return
 
         # Score all current nodes
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "No data available"}, 503)
             return
 
         data = aggregator.collect_all()
         features = data.get("features", [])
-        tracker = self._get_node_state()
+        tracker = self._ctx.node_state
 
         results = []
         for f in features:
@@ -679,7 +650,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_node_health_summary(self) -> None:
         """Serve health score summary statistics."""
-        scorer = self._get_health_scorer()
+        scorer = self._ctx.health_scorer
         if not scorer:
             self._send_json({"error": "Health scoring not available"}, 503)
             return
@@ -687,7 +658,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_perf_stats(self) -> None:
         """Serve performance profiling statistics."""
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "Aggregator not available"}, 503)
             return
@@ -695,7 +666,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_alerts(self) -> None:
         """Serve alert history with optional filters."""
-        engine = self._get_alert_engine()
+        engine = self._ctx.alert_engine
         if not engine:
             self._send_json({"error": "Alert engine not available"}, 503)
             return
@@ -711,7 +682,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_active_alerts(self) -> None:
         """Serve currently active (unacknowledged) alerts."""
-        engine = self._get_alert_engine()
+        engine = self._ctx.alert_engine
         if not engine:
             self._send_json({"error": "Alert engine not available"}, 503)
             return
@@ -719,7 +690,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_alert_rules(self) -> None:
         """Serve configured alert rules."""
-        engine = self._get_alert_engine()
+        engine = self._ctx.alert_engine
         if not engine:
             self._send_json({"error": "Alert engine not available"}, 503)
             return
@@ -727,7 +698,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_alert_summary(self) -> None:
         """Serve alert summary statistics."""
-        engine = self._get_alert_engine()
+        engine = self._ctx.alert_engine
         if not engine:
             self._send_json({"error": "Alert engine not available"}, 503)
             return
@@ -739,7 +710,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_analytics_growth(self) -> None:
         """Serve network growth time-series (unique nodes per bucket)."""
-        analytics = self._get_analytics()
+        analytics = self._ctx.analytics
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
@@ -760,7 +731,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_analytics_activity(self) -> None:
         """Serve activity heatmap (observations by hour of day)."""
-        analytics = self._get_analytics()
+        analytics = self._ctx.analytics
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
@@ -779,7 +750,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_analytics_ranking(self) -> None:
         """Serve node activity ranking (most active nodes)."""
-        analytics = self._get_analytics()
+        analytics = self._ctx.analytics
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
@@ -798,7 +769,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_analytics_summary(self) -> None:
         """Serve high-level network analytics summary."""
-        analytics = self._get_analytics()
+        analytics = self._ctx.analytics
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
@@ -813,7 +784,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_analytics_alert_trends(self) -> None:
         """Serve alert trend aggregation (alerts per time bucket)."""
-        analytics = self._get_analytics()
+        analytics = self._ctx.analytics
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
@@ -854,7 +825,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_export_nodes(self) -> None:
         """Export node history as CSV."""
-        history = self._get_node_history()
+        history = self._ctx.node_history
         if not history:
             self._send_json({"error": "Node history not available"}, 503)
             return
@@ -884,7 +855,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_export_alerts(self) -> None:
         """Export alert history as CSV."""
-        engine = self._get_alert_engine()
+        engine = self._ctx.alert_engine
         if not engine:
             self._send_json({"error": "Alert engine not available"}, 503)
             return
@@ -910,7 +881,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_export_analytics_growth(self) -> None:
         """Export network growth data as CSV."""
-        analytics = self._get_analytics()
+        analytics = self._ctx.analytics
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
@@ -923,7 +894,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_export_analytics_activity(self) -> None:
         """Export activity heatmap data as CSV."""
-        analytics = self._get_analytics()
+        analytics = self._ctx.analytics
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
@@ -936,7 +907,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_export_analytics_ranking(self) -> None:
         """Export node ranking data as CSV."""
-        analytics = self._get_analytics()
+        analytics = self._ctx.analytics
         if not analytics:
             self._send_json({"error": "Analytics not available"}, 503)
             return
@@ -960,7 +931,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         Returns polygon features for rendering as map overlays, with
         severity color-coding and alert metadata.
         """
-        aggregator = self._get_aggregator()
+        aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "Aggregator not initialized"}, 503)
             return
@@ -987,7 +958,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
           precision - Decimal rounding (2-6, default 4)
           network - Filter to a single network name
         """
-        history = self._get_node_history()
+        history = self._ctx.node_history
         if not history:
             self._send_json({"error": "Node history not available"}, 503)
             return
@@ -1024,8 +995,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _serve_status(self) -> None:
         """Serve server health status with uptime, data age, and node store stats."""
-        aggregator = self._get_aggregator()
-        config = self._get_config()
+        aggregator = self._ctx.aggregator
+        config = self._ctx.config
         mqtt_status = "unavailable"
         mqtt_nodes = 0
         if aggregator and aggregator.mqtt_subscriber:
@@ -1077,7 +1048,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "data_stale": data_stale,
             "websocket": websocket_stats,
             "event_bus": event_bus_stats,
-            "alerts": self._get_alert_engine().get_summary() if self._get_alert_engine() else None,
+            "alerts": self._ctx.alert_engine.get_summary() if self._ctx.alert_engine else None,
         })
 
     def _send_json(self, data: Any, status: int = 200) -> None:
@@ -1104,7 +1075,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def _find_map_file(self) -> Optional[Path]:
         """Locate the map HTML file."""
-        web_dir = self._get_web_dir()
+        web_dir = self._ctx.web_dir
         if web_dir:
             p = Path(web_dir) / "meshforge_maps.html"
             if p.exists():

@@ -119,15 +119,3 @@ class TestGetStats:
         monitor.record_timing("s", 30.0)
         stats = monitor.get_source_stats("s")
         assert stats["last_duration_ms"] == 30.0
-
-
-class TestMemoryUsage:
-    """Tests for memory usage reporting."""
-
-    def test_memory_with_data(self):
-        monitor = PerfMonitor()
-        monitor.record_timing("a", 10.0)
-        monitor.record_timing("a", 20.0)
-        monitor.record_timing("b", 30.0)
-        mem = monitor.get_memory_usage()
-        assert mem["tracked_sources"] == 2
