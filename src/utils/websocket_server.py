@@ -41,6 +41,12 @@ class MapWebSocketServer:
         history_size: Number of recent messages to replay to new clients.
     """
 
+    # Allowed WebSocket origin prefixes (localhost only by default)
+    _ALLOWED_ORIGINS = ["http://localhost", "https://localhost"]
+
+    # Allowed client message types
+    _ALLOWED_MSG_TYPES = frozenset({"ping", "get_history", "get_stats"})
+
     def __init__(self, host: str = "127.0.0.1", port: int = 8809,
                  history_size: int = 50) -> None:
         self.host = host
@@ -183,10 +189,19 @@ class MapWebSocketServer:
     async def _serve(self) -> None:
         """Start serving and signal readiness."""
         try:
+            serve_kwargs: Dict[str, Any] = {}
+            # Restrict allowed origins to localhost (prevents cross-site
+            # WebSocket hijacking). Older websockets versions may not
+            # support the origins parameter.
+            try:
+                serve_kwargs["origins"] = self._ALLOWED_ORIGINS
+            except Exception:
+                pass
             self._server = await websockets.asyncio.server.serve(
                 self._handler,
                 self.host,
                 self.port,
+                **serve_kwargs,
             )
             logger.info("WebSocket server listening on ws://%s:%d",
                         self.host, self.port)
@@ -214,10 +229,15 @@ class MapWebSocketServer:
                 await websocket.send(msg)
                 self._stats.total_messages_sent += 1
 
-            # Keep connection alive; client doesn't need to send data,
-            # but we iterate to detect disconnection.
-            async for _ in websocket:
-                pass  # ignore incoming messages from clients
+            # Keep connection alive and handle client messages.
+            # Only accept messages with a recognized type.
+            async for raw in websocket:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        await self._handle_client_message(websocket, data)
+                except (json.JSONDecodeError, TypeError):
+                    pass  # silently drop malformed messages
         except Exception:
             pass  # connection closed or error
         finally:
@@ -225,6 +245,31 @@ class MapWebSocketServer:
                 self._clients.discard(websocket)
             logger.info("WebSocket client disconnected: %s (total: %d)",
                          client_addr, self.client_count)
+
+    async def _handle_client_message(self, websocket, data: Dict[str, Any]) -> None:
+        """Handle a validated client message."""
+        msg_type = data.get("type")
+        if msg_type not in self._ALLOWED_MSG_TYPES:
+            return
+
+        if msg_type == "ping":
+            await websocket.send(json.dumps({
+                "type": "pong",
+                "timestamp": time.time(),
+            }))
+        elif msg_type == "get_history":
+            limit = min(int(data.get("limit", 50)), self.history_size)
+            with self._lock:
+                history = list(self._history)
+            await websocket.send(json.dumps({
+                "type": "history",
+                "messages": history[-limit:],
+            }))
+        elif msg_type == "get_stats":
+            await websocket.send(json.dumps({
+                "type": "stats",
+                "data": self.stats,
+            }))
 
     async def _broadcast_async(self, text: str) -> None:
         """Send a text message to all connected clients."""
