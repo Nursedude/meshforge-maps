@@ -26,6 +26,7 @@ Endpoints:
 
 import json
 import logging
+import re
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -36,6 +37,9 @@ logger = logging.getLogger(__name__)
 
 # Default port matches meshtasticd convention
 DEFAULT_PROXY_PORT = 4404  # Adjacent to meshtasticd's 4403
+
+# Node IDs must be hex strings, optionally prefixed with '!'
+_NODE_ID_RE = re.compile(r"^!?[0-9a-fA-F]{1,16}$")
 
 
 class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
@@ -50,7 +54,10 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
                 self._serve_nodes()
             elif path.startswith("/api/v1/nodes/"):
                 node_id = path.split("/")[-1]
-                self._serve_node(node_id)
+                if not _NODE_ID_RE.match(node_id):
+                    self._send_json({"error": "Invalid node ID format"}, 400)
+                else:
+                    self._serve_node(node_id)
             elif path == "/api/v1/topology":
                 self._serve_topology()
             elif path == "/api/v1/stats":
@@ -142,7 +149,7 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
                     self._send_json(_format_node_meshtastic(node))
                     return
 
-        self._send_json({"error": f"Node {node_id} not found"}, 404)
+        self._send_json({"error": "Node not found"}, 404)
 
     def _serve_topology(self) -> None:
         """Serve mesh topology links."""
@@ -186,6 +193,8 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
         cors_origin = self._get_cors_origin()
         if cors_origin:
             self.send_header("Access-Control-Allow-Origin", cors_origin)

@@ -351,5 +351,106 @@ class TestProxyResponseHeaders(unittest.TestCase):
             proxy.stop()
 
 
+class TestProxySecurityHeaders(unittest.TestCase):
+    """Test security headers are present on proxy responses."""
+
+    def test_nosniff_header(self):
+        """JSON responses include X-Content-Type-Options: nosniff."""
+        store = MQTTNodeStore()
+        proxy = MeshtasticApiProxy(mqtt_store=store, port=19413)
+        try:
+            proxy.start()
+            time.sleep(0.1)
+
+            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
+            conn.request("GET", "/api/v1/nodes")
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+
+            self.assertEqual(resp.getheader("X-Content-Type-Options"), "nosniff")
+        finally:
+            proxy.stop()
+
+    def test_frame_options_header(self):
+        """JSON responses include X-Frame-Options: DENY."""
+        store = MQTTNodeStore()
+        proxy = MeshtasticApiProxy(mqtt_store=store, port=19414)
+        try:
+            proxy.start()
+            time.sleep(0.1)
+
+            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
+            conn.request("GET", "/api/v1/stats")
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+
+            self.assertEqual(resp.getheader("X-Frame-Options"), "DENY")
+        finally:
+            proxy.stop()
+
+
+class TestProxyNodeIdValidation(unittest.TestCase):
+    """Test node ID validation on proxy endpoints."""
+
+    def test_invalid_node_id_rejected(self):
+        """Invalid node ID returns 400."""
+        store = MQTTNodeStore()
+        proxy = MeshtasticApiProxy(mqtt_store=store, port=19415)
+        try:
+            proxy.start()
+            time.sleep(0.1)
+
+            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
+            conn.request("GET", "/api/v1/nodes/<script>alert(1)</script>")
+            resp = conn.getresponse()
+            data = json.loads(resp.read().decode())
+            conn.close()
+
+            self.assertEqual(resp.status, 400)
+            self.assertIn("Invalid node ID", data["error"])
+        finally:
+            proxy.stop()
+
+    def test_valid_node_id_accepted(self):
+        """Valid hex node ID is accepted (even if not found)."""
+        store = MQTTNodeStore()
+        proxy = MeshtasticApiProxy(mqtt_store=store, port=19416)
+        try:
+            proxy.start()
+            time.sleep(0.1)
+
+            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
+            conn.request("GET", "/api/v1/nodes/!aabbccdd")
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+
+            # Should be 404 (not found), not 400 (invalid)
+            self.assertEqual(resp.status, 404)
+        finally:
+            proxy.stop()
+
+    def test_not_found_does_not_reflect_input(self):
+        """404 response does not echo back the node ID."""
+        store = MQTTNodeStore()
+        proxy = MeshtasticApiProxy(mqtt_store=store, port=19417)
+        try:
+            proxy.start()
+            time.sleep(0.1)
+
+            conn = HTTPConnection("127.0.0.1", proxy.port, timeout=5)
+            conn.request("GET", "/api/v1/nodes/!deadbeef")
+            resp = conn.getresponse()
+            data = json.loads(resp.read().decode())
+            conn.close()
+
+            self.assertEqual(resp.status, 404)
+            self.assertNotIn("deadbeef", data["error"])
+        finally:
+            proxy.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

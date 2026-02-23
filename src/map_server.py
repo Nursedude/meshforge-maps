@@ -1310,7 +1310,7 @@ class MapServer:
             )
             self._aggregator.event_bus.publish(alert_event)
         except Exception as e:
-            logger.debug("Failed to publish alert event: %s", e)
+            logger.warning("Failed to publish alert event: %s", e)
 
     def _start_websocket(self, ws_port: int) -> None:
         """Start the WebSocket server and wire it to the event bus.
