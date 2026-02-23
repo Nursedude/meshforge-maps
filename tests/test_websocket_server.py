@@ -247,6 +247,91 @@ class TestWSStats:
 # Optional dependency handling
 # ---------------------------------------------------------------------------
 
+class TestClientMessageHandling:
+    """Test WebSocket client message type validation."""
+
+    def test_ping_returns_pong(self, ws_server):
+        """Sending a ping message gets a pong response."""
+        async def _test():
+            async with websockets.connect(
+                f"ws://127.0.0.1:{ws_server.port}"
+            ) as ws:
+                await asyncio.sleep(0.1)
+                await ws.send(json.dumps({"type": "ping"}))
+                msg = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                data = json.loads(msg)
+                assert data["type"] == "pong"
+                assert "timestamp" in data
+
+        asyncio.get_event_loop().run_until_complete(_test())
+
+    def test_get_stats_returns_stats(self, ws_server):
+        """Sending get_stats returns server statistics."""
+        async def _test():
+            async with websockets.connect(
+                f"ws://127.0.0.1:{ws_server.port}"
+            ) as ws:
+                await asyncio.sleep(0.1)
+                await ws.send(json.dumps({"type": "get_stats"}))
+                msg = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                data = json.loads(msg)
+                assert data["type"] == "stats"
+                assert "data" in data
+
+        asyncio.get_event_loop().run_until_complete(_test())
+
+    def test_unknown_type_silently_dropped(self, ws_server):
+        """Messages with unrecognized types are silently dropped."""
+        async def _test():
+            async with websockets.connect(
+                f"ws://127.0.0.1:{ws_server.port}"
+            ) as ws:
+                await asyncio.sleep(0.1)
+                await ws.send(json.dumps({"type": "evil_command"}))
+                # Broadcast something real and verify we only get that
+                ws_server.broadcast({"type": "marker", "seq": 1})
+                msg = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                data = json.loads(msg)
+                assert data["type"] == "marker"
+
+        asyncio.get_event_loop().run_until_complete(_test())
+
+    def test_malformed_json_silently_dropped(self, ws_server):
+        """Malformed JSON from client is silently dropped."""
+        async def _test():
+            async with websockets.connect(
+                f"ws://127.0.0.1:{ws_server.port}"
+            ) as ws:
+                await asyncio.sleep(0.1)
+                await ws.send("not json at all")
+                # Should still be connected — send a ping to verify
+                await ws.send(json.dumps({"type": "ping"}))
+                msg = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                data = json.loads(msg)
+                assert data["type"] == "pong"
+
+        asyncio.get_event_loop().run_until_complete(_test())
+
+
+class TestOriginValidation:
+    """Test WebSocket origin restriction."""
+
+    def test_allowed_origins_attribute(self):
+        """Server has allowed origins configured."""
+        server = MapWebSocketServer(host="127.0.0.1", port=_free_port())
+        assert "http://localhost" in server._ALLOWED_ORIGINS
+        assert "https://localhost" in server._ALLOWED_ORIGINS
+
+    def test_allowed_msg_types_attribute(self):
+        """Server has a finite set of allowed message types."""
+        server = MapWebSocketServer(host="127.0.0.1", port=_free_port())
+        assert "ping" in server._ALLOWED_MSG_TYPES
+        assert "get_history" in server._ALLOWED_MSG_TYPES
+        assert "get_stats" in server._ALLOWED_MSG_TYPES
+        # Arbitrary types should NOT be allowed
+        assert "exec" not in server._ALLOWED_MSG_TYPES
+
+
 class TestOptionalDependency:
     def test_start_without_websockets_returns_false(self):
         """When websockets is not installed, start() returns False."""
