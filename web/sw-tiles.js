@@ -22,6 +22,11 @@ const API_CACHE = 'meshforge-maps-api-v1';
 const MAX_TILE_CACHE_ITEMS = 500;  // LRU eviction threshold (reduced for Pi/constrained devices)
 const API_CACHE_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes for API responses
 
+// 1x1 transparent PNG returned for uncached tiles when offline
+const BLANK_TILE = Uint8Array.from(atob(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQ=='
+), c => c.charCodeAt(0));
+
 // Tile domains to cache
 const TILE_DOMAINS = [
     'basemaps.cartocdn.com',
@@ -174,10 +179,10 @@ async function cacheFirst(request, cacheName) {
         }
         return response;
     } catch (error) {
-        // Network failure with no cache -- return offline placeholder
-        return new Response('', {
-            status: 503,
-            statusText: 'Offline - tile not cached',
+        // Network failure with no cache -- return transparent placeholder tile
+        return new Response(BLANK_TILE.buffer, {
+            status: 200,
+            headers: { 'Content-Type': 'image/png' },
         });
     }
 }

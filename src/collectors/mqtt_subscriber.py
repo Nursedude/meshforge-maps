@@ -23,6 +23,7 @@ Reference: https://meshtastic.org/docs/software/integrations/mqtt/
 import json
 import logging
 import math
+import socket
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -554,7 +555,12 @@ class MQTTSubscriber:
         last_cleanup = time.time()
         while self._running.is_set():
             try:
-                self._client.connect(self._broker, self._port, keepalive=60)
+                old_timeout = socket.getdefaulttimeout()
+                try:
+                    socket.setdefaulttimeout(30)
+                    self._client.connect(self._broker, self._port, keepalive=60)
+                finally:
+                    socket.setdefaulttimeout(old_timeout)
                 strategy.reset()  # Reset backoff on successful connection
                 self._client.loop_forever()
             except Exception as e:
@@ -682,19 +688,21 @@ class MQTTSubscriber:
             self._handle_neighborinfo(from_node, decoded.payload)
 
     def _handle_position(self, node_id: str, payload: bytes) -> None:
+        from .base import validate_coordinates
+
         mesh_pb2 = self._proto["mesh_pb2"]
         pos = mesh_pb2.Position()
         pos.ParseFromString(payload)
 
-        lat = pos.latitude_i / 1e7 if pos.latitude_i != 0 else 0.0
-        lon = pos.longitude_i / 1e7 if pos.longitude_i != 0 else 0.0
-
-        if (lat is not None and lon is not None
-                and (-90 <= lat <= 90) and (-180 <= lon <= 180)
-                and not (abs(lat) < 0.01 and abs(lon) < 0.01)):
-            alt = _safe_int(pos.altitude, -500, 100000) if pos.altitude != 0 else 0
-            self._store.update_position(node_id, lat, lon, altitude=alt)
-            self._notify_update(node_id, "position", lat=lat, lon=lon)
+        coords = validate_coordinates(
+            pos.latitude_i, pos.longitude_i, convert_int=True
+        )
+        if coords is None:
+            return
+        lat, lon = coords
+        alt = _safe_int(pos.altitude, -500, 100000) if pos.altitude != 0 else 0
+        self._store.update_position(node_id, lat, lon, altitude=alt)
+        self._notify_update(node_id, "position", lat=lat, lon=lon)
 
     def _handle_nodeinfo(self, node_id: str, payload: bytes) -> None:
         mesh_pb2 = self._proto["mesh_pb2"]

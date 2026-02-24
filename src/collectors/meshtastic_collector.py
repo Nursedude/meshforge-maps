@@ -104,45 +104,53 @@ class MeshtasticCollector(BaseCollector):
         # HTTP timeout must be shorter than the lock timeout so the lock
         # is never released while a request is still in flight.
         http_timeout = max(1.0, self._connection_timeout - 1.0)
-        with self._conn_mgr.acquire(
-            timeout=self._connection_timeout, holder="maps_collector"
-        ) as acquired:
-            if not acquired:
-                logger.debug(
-                    "meshtasticd connection held by '%s', skipping API fetch",
-                    self._conn_mgr.holder,
-                )
-                return features
-
-            url = f"{self._api_base}{NODES_ENDPOINT}"
-            last_err: Optional[Exception] = None
-            for attempt in range(2):
-                try:
-                    req = Request(url, headers={"Accept": "application/json"})
-                    with urlopen(req, timeout=http_timeout) as resp:
-                        data = json.loads(resp.read().decode())
-
-                    nodes = data if isinstance(data, list) else data.get("nodes", [])
-                    for node in nodes:
-                        feature = self._parse_api_node(node)
-                        if feature:
-                            features.append(feature)
-                    logger.debug("meshtasticd API returned %d nodes", len(features))
-                    last_err = None
-                    break
-                except (URLError, OSError, json.JSONDecodeError) as e:
-                    last_err = e
-                    if attempt == 0 and isinstance(e, (URLError, OSError)):
+        for lock_attempt in range(2):
+            with self._conn_mgr.acquire(
+                timeout=self._connection_timeout, holder="maps_collector"
+            ) as acquired:
+                if not acquired:
+                    if lock_attempt == 0:
                         logger.debug(
-                            "meshtasticd API attempt %d failed: %s, retrying",
-                            attempt + 1, e,
+                            "meshtasticd lock contention, retrying in 1s",
                         )
-                        time.sleep(0.5)
+                        time.sleep(1.0)
                         continue
-                    break
+                    logger.debug(
+                        "meshtasticd connection held by '%s', skipping API fetch",
+                        self._conn_mgr.holder,
+                    )
+                    return features
 
-            if last_err is not None:
-                logger.debug("meshtasticd API unavailable: %s", last_err)
+                url = f"{self._api_base}{NODES_ENDPOINT}"
+                last_err: Optional[Exception] = None
+                for attempt in range(2):
+                    try:
+                        req = Request(url, headers={"Accept": "application/json"})
+                        with urlopen(req, timeout=http_timeout) as resp:
+                            data = json.loads(resp.read().decode())
+
+                        nodes = data if isinstance(data, list) else data.get("nodes", [])
+                        for node in nodes:
+                            feature = self._parse_api_node(node)
+                            if feature:
+                                features.append(feature)
+                        logger.debug("meshtasticd API returned %d nodes", len(features))
+                        last_err = None
+                        break
+                    except (URLError, OSError, json.JSONDecodeError) as e:
+                        last_err = e
+                        if attempt == 0 and isinstance(e, (URLError, OSError)):
+                            logger.debug(
+                                "meshtasticd API attempt %d failed: %s, retrying",
+                                attempt + 1, e,
+                            )
+                            time.sleep(0.5)
+                            continue
+                        break
+
+                if last_err is not None:
+                    logger.debug("meshtasticd API unavailable: %s", last_err)
+                return features
         return features
 
     def _parse_api_node(self, node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
