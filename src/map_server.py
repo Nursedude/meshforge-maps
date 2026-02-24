@@ -14,7 +14,6 @@ import hmac
 import json
 import logging
 import os
-import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -25,6 +24,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .collectors.aggregator import DataAggregator
+from .collectors.base import validate_node_id
 from .utils.alert_engine import Alert, AlertEngine
 from .utils.analytics import HistoricalAnalytics
 from .utils.config import NETWORK_COLORS, TILE_PROVIDERS, MapsConfig
@@ -39,10 +39,6 @@ from .utils.websocket_server import MapWebSocketServer
 
 logger = logging.getLogger(__name__)
 
-# Node IDs must be hex strings, optionally prefixed with '!'
-# e.g. "!a1b2c3d4" or "a1b2c3d4" — up to 16 hex chars
-_NODE_ID_RE = re.compile(r"^!?[0-9a-fA-F]{1,16}$")
-
 
 def _safe_query_param(query: Dict[str, List[str]], key: str,
                       default: Optional[str] = None) -> Optional[str]:
@@ -54,11 +50,6 @@ def _safe_query_param(query: Dict[str, List[str]], key: str,
     if not values:
         return default
     return values[0] if values[0] else default
-
-
-def _validate_node_id(node_id: str) -> bool:
-    """Validate that a node ID looks like a valid Meshtastic hex ID."""
-    return bool(_NODE_ID_RE.match(node_id))
 
 
 @dataclass
@@ -186,7 +177,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 parts = path.split("/")
                 if len(parts) >= 4:
                     node_id = parts[3]
-                    if not _validate_node_id(node_id):
+                    if not validate_node_id(node_id):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
                         self._serve_trajectory(node_id, query)
@@ -197,7 +188,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 parts = path.split("/")
                 if len(parts) >= 4:
                     node_id = parts[3]
-                    if not _validate_node_id(node_id):
+                    if not validate_node_id(node_id):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
                         self._serve_node_health(node_id)
@@ -208,7 +199,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 parts = path.split("/")
                 if len(parts) >= 4:
                     node_id = parts[3]
-                    if not _validate_node_id(node_id):
+                    if not validate_node_id(node_id):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
                         self._serve_node_history(node_id, query)
@@ -548,7 +539,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not detector:
             self._send_json({"error": "Config drift detection not available"}, 503)
             return
-        query = getattr(self, "_query", {})
+        query = self._query
         severity = _safe_query_param(query, "severity")
         since_str = _safe_query_param(query, "since")
         since = float(since_str) if since_str else None
@@ -995,7 +986,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         )
 
         # Normalize intensity to 0-1 range for Leaflet.heat
-        max_count = raw[0][2] if raw else 1
+        max_count = max(raw[0][2], 1) if raw else 1
         points = [[lat, lon, count / max_count] for lat, lon, count in raw]
 
         self._send_json({

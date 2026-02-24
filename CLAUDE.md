@@ -61,7 +61,7 @@ scripts/                     install.sh, verify.sh
 - HTML-escape all output rendered in browser (XSS prevention)
 - API key comparison via `hmac.compare_digest()` (timing-safe), not `==`
 - Network bindings default to `127.0.0.1` — `0.0.0.0` only when user explicitly configures it
-- Validate all user inputs; node IDs validated with `_NODE_ID_RE` regex (`^!?[0-9a-fA-F]{1,16}$`)
+- Validate all user inputs; node IDs validated with `NODE_ID_RE` regex (`^!?[0-9a-fA-F]{1,16}$`) from `src/collectors/base.py`
 - No secrets in code — MQTT credentials come from settings.json only
 - CORS disabled by default (`cors_allowed_origin: None` in config)
 - Query parameters extracted via `_safe_query_param()` helper — never access raw query dicts
@@ -73,7 +73,7 @@ scripts/                     install.sh, verify.sh
 
 - Don't monkey-patch attributes onto stdlib objects — use typed containers (`MapServerContext`)
 - Don't add tautological tests (`assert True`, `assert x == x`) — tests must verify real behavior
-- Don't duplicate validation logic — reuse `validate_coordinates()`, `_validate_node_id()`
+- Don't duplicate validation logic — reuse `validate_coordinates()`, `validate_node_id()` from `src/collectors/base.py`
 - Don't swallow exceptions silently — log at minimum (`logger.error`)
 - Don't add unnecessary abstraction layers — keep it stdlib-simple
 - Don't add docstrings/comments/type hints to code you didn't change
@@ -84,7 +84,7 @@ scripts/                     install.sh, verify.sh
 ## Testing
 
 ```bash
-pytest tests/ -v    # 863 tests, no external deps needed
+pytest tests/ -v    # 879 tests, no external deps needed
 ```
 
 - Test files mirror source modules: `test_<module>.py`
