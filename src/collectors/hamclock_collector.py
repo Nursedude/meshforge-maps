@@ -26,6 +26,7 @@ import json
 import logging
 import math
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -96,6 +97,7 @@ class HamClockCollector(BaseCollector):
         self._detected_variant: Optional[str] = None
         # Endpoint map (updated when variant is detected)
         self._endpoints = get_endpoint_map("hamclock")
+        self._detection_lock = threading.Lock()
 
     # ==================== Public API ====================
 
@@ -107,38 +109,39 @@ class HamClockCollector(BaseCollector):
         Updates _hamclock_api to whichever responds.
         Uses detect_variant() to identify which variant is running.
         """
-        # Try OpenHamClock port first (community successor, actively developed)
-        if self._openhamclock_port != self._hamclock_port:
-            openhamclock_url = f"http://{self._hamclock_host}:{self._openhamclock_port}"
-            raw = self._fetch_text(f"{openhamclock_url}/get_sys.txt")
+        with self._detection_lock:
+            # Try OpenHamClock port first (community successor, actively developed)
+            if self._openhamclock_port != self._hamclock_port:
+                openhamclock_url = f"http://{self._hamclock_host}:{self._openhamclock_port}"
+                raw = self._fetch_text(f"{openhamclock_url}/get_sys.txt")
+                if raw is not None and len(raw) > 0:
+                    self._hamclock_api = openhamclock_url
+                    self._hamclock_available = True
+                    self._detected_variant = detect_variant(raw)
+                    self._endpoints = get_endpoint_map(self._detected_variant)
+                    return True
+
+            # Fall back to HamClock legacy port
+            legacy_url = f"http://{self._hamclock_host}:{self._hamclock_port}"
+            raw = self._fetch_text(f"{legacy_url}/get_sys.txt")
             if raw is not None and len(raw) > 0:
-                self._hamclock_api = openhamclock_url
+                self._hamclock_api = legacy_url
                 self._hamclock_available = True
                 self._detected_variant = detect_variant(raw)
                 self._endpoints = get_endpoint_map(self._detected_variant)
+                if self._openhamclock_port != self._hamclock_port:
+                    logger.info(
+                        "%s detected on legacy port %d (OpenHamClock port %d unavailable)",
+                        self._detected_variant,
+                        self._hamclock_port,
+                        self._openhamclock_port,
+                    )
                 return True
 
-        # Fall back to HamClock legacy port
-        legacy_url = f"http://{self._hamclock_host}:{self._hamclock_port}"
-        raw = self._fetch_text(f"{legacy_url}/get_sys.txt")
-        if raw is not None and len(raw) > 0:
-            self._hamclock_api = legacy_url
-            self._hamclock_available = True
-            self._detected_variant = detect_variant(raw)
-            self._endpoints = get_endpoint_map(self._detected_variant)
-            if self._openhamclock_port != self._hamclock_port:
-                logger.info(
-                    "%s detected on legacy port %d (OpenHamClock port %d unavailable)",
-                    self._detected_variant,
-                    self._hamclock_port,
-                    self._openhamclock_port,
-                )
-            return True
-
-        self._hamclock_available = False
-        self._detected_variant = None
-        self._endpoints = get_endpoint_map("hamclock")
-        return False
+            self._hamclock_available = False
+            self._detected_variant = None
+            self._endpoints = get_endpoint_map("hamclock")
+            return False
 
     # ==================== Core Fetch ====================
 

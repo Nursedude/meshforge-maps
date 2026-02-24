@@ -885,6 +885,20 @@ class TestDataAggregator:
         assert agg.last_collect_counts["meshtastic"] == 1
 
 
+# ---------------------------------------------------------------------------
+# HamClock thread safety
+# ---------------------------------------------------------------------------
+
+class TestHamClockThreadSafety:
+    """Verify HamClock detection state is protected by a lock."""
+
+    def test_detection_lock_exists(self):
+        import threading
+        c = HamClockCollector()
+        assert hasattr(c, "_detection_lock")
+        assert isinstance(c._detection_lock, type(threading.Lock()))
+
+
 # Helper config for aggregator tests
 DEFAULT_CONFIG_SUBSET = {
     "enable_meshtastic": True,

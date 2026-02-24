@@ -331,6 +331,8 @@ function renderMarkers() {
 
         const lat = coords[1];
         const lon = coords[0];
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        if (Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
         const network = props.network || 'unknown';
 
         // Determine color: health overlay or network color
