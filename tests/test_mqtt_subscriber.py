@@ -190,3 +190,54 @@ class TestMQTTSubscriber:
     def test_stop_is_safe(self):
         sub = MQTTSubscriber()
         sub.stop()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# MQTT Position Coordinate Validation (via validate_coordinates)
+# ---------------------------------------------------------------------------
+
+class TestMQTTPositionValidation:
+    """Tests for _handle_position coordinate validation."""
+
+    def test_position_rejects_out_of_range_latitude(self):
+        """Corrupted protobuf value (latitude_i = 9000000001) should be rejected."""
+        store = MQTTNodeStore()
+        # Simulate what _handle_position does: lat_i / 1e7 = 900.0 (out of range)
+        store.update_position("!corrupt", 900.0, 139.0)
+        nodes = store.get_all_nodes()
+        assert len(nodes) == 0
+
+    def test_position_rejects_null_island(self):
+        """Null Island (0, 0) should be rejected as invalid GPS."""
+        store = MQTTNodeStore()
+        store.update_position("!nullisland", 0.0, 0.0)
+        nodes = store.get_all_nodes()
+        assert len(nodes) == 0
+
+    def test_position_valid_coords_stored(self):
+        """Valid coordinates (Tokyo) should be stored correctly."""
+        store = MQTTNodeStore()
+        store.update_position("!tokyo", 35.6895, 139.6917)
+        nodes = store.get_all_nodes()
+        assert len(nodes) == 1
+        assert abs(nodes[0]["latitude"] - 35.6895) < 0.001
+        assert abs(nodes[0]["longitude"] - 139.6917) < 0.001
+
+    def test_connect_timeout_exception_handled(self):
+        """Socket timeout on MQTT connect should not crash subscriber."""
+        import socket
+        from unittest.mock import patch, MagicMock
+
+        sub = MQTTSubscriber(broker="unreachable.invalid", port=1883)
+        if not sub.available:
+            pytest.skip("paho-mqtt not available")
+
+        # Mock client to raise socket.timeout on connect
+        sub._client = MagicMock()
+        sub._client.connect.side_effect = socket.timeout("timed out")
+        sub._running = MagicMock()
+        # First call returns True (enters loop), second returns False (exits)
+        sub._running.is_set.side_effect = [True, False]
+
+        # Should not raise — timeout caught by except Exception handler
+        sub._run_loop()

@@ -56,7 +56,11 @@ fi
 
 # Detect the real user (not root)
 REAL_USER="${SUDO_USER:-pi}"
-REAL_HOME=$(eval echo "~$REAL_USER")
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+if [[ -z "$REAL_HOME" ]]; then
+    err "Cannot determine home directory for user: $REAL_USER"
+    exit 1
+fi
 
 echo ""
 echo "======================================"
@@ -155,6 +159,7 @@ if [[ "$NO_RADIO" == true ]]; then
   "ws_host": "0.0.0.0"
 }
 SETTINGS
+        chmod 600 "$CONFIG_DIR/settings.json"
         chown "$REAL_USER:$REAL_USER" "$CONFIG_DIR/settings.json"
         ok "No-radio config written (MQTT + HamClock/NOAA only)"
     else

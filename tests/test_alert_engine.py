@@ -441,6 +441,59 @@ class TestAlertEngineSummary:
 
 
 # ---------------------------------------------------------------------------
+# AlertEngine — cooldown cleanup
+# ---------------------------------------------------------------------------
+
+class TestCooldownCleanup:
+    """Tests for periodic cleanup of stale cooldown entries."""
+
+    def test_stale_cooldowns_removed(self):
+        """Cooldown entries older than 24h should be pruned."""
+        rule = AlertRule(
+            rule_id="test", alert_type=AlertType.BATTERY_LOW,
+            severity=AlertSeverity.WARNING, metric="battery",
+            operator="lte", threshold=20.0, cooldown=60.0,
+        )
+        engine = AlertEngine(rules=[rule])
+        engine.clear_cooldowns()
+
+        # Fire alert at t=1000
+        engine.evaluate_node("!old", {"battery": 10}, now=1000.0)
+        assert len(engine._cooldowns) == 1
+
+        # Force cleanup to run by setting last_cleanup to distant past
+        engine._last_cooldown_cleanup = 0.0
+
+        # Evaluate at t=90000 (>24h later) — should trigger cleanup
+        engine.evaluate_node("!new", {"battery": 10}, now=90000.0)
+
+        # Old entry (t=1000) is >24h stale, should be removed
+        assert "!old:test" not in engine._cooldowns
+        # New entry should exist
+        assert "!new:test" in engine._cooldowns
+
+    def test_recent_cooldowns_preserved(self):
+        """Cooldown entries less than 24h old should be kept."""
+        rule = AlertRule(
+            rule_id="test", alert_type=AlertType.BATTERY_LOW,
+            severity=AlertSeverity.WARNING, metric="battery",
+            operator="lte", threshold=20.0, cooldown=60.0,
+        )
+        engine = AlertEngine(rules=[rule])
+        engine.clear_cooldowns()
+
+        # Fire at t=80000
+        engine.evaluate_node("!recent", {"battery": 10}, now=80000.0)
+
+        # Force cleanup and evaluate at t=90000 (<24h later)
+        engine._last_cooldown_cleanup = 0.0
+        engine.evaluate_node("!other", {"battery": 10}, now=90000.0)
+
+        # Recent entry should still exist
+        assert "!recent:test" in engine._cooldowns
+
+
+# ---------------------------------------------------------------------------
 # AlertEngine — alert message format
 # ---------------------------------------------------------------------------
 
