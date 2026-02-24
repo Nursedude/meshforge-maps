@@ -21,6 +21,7 @@ Delivery:
 Thread-safe: all state behind a lock.
 """
 
+import copy
 import logging
 import threading
 import time
@@ -32,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 # Maximum alerts to retain in history
 MAX_ALERT_HISTORY = 500
+
+# Cooldown cleanup: remove entries older than 24 hours
+_COOLDOWN_MAX_AGE = 86400
+_COOLDOWN_CLEANUP_INTERVAL = 3600
 
 # Default cooldown per node+rule (seconds) — avoid re-firing same alert
 DEFAULT_COOLDOWN = 600  # 10 minutes
@@ -216,9 +221,9 @@ class AlertEngine:
         self._cooldowns: Dict[str, float] = {}  # "node_id:rule_id" -> last_fired
         self._alert_counter = 0
         self._total_alerts_fired = 0
+        self._last_cooldown_cleanup: float = 0.0
 
         # Load rules — copy defaults to avoid shared mutation
-        import copy
         source = rules if rules is not None else DEFAULT_RULES
         for rule in source:
             self._rules[rule.rule_id] = copy.copy(rule)
@@ -282,6 +287,10 @@ class AlertEngine:
         """
         if now is None:
             now = time.time()
+
+        # Periodic cleanup of stale cooldown entries
+        if now - self._last_cooldown_cleanup > _COOLDOWN_CLEANUP_INTERVAL:
+            self._cleanup_stale_cooldowns(now)
 
         # Build evaluation context: node props + health score
         context = dict(props)
@@ -406,6 +415,15 @@ class AlertEngine:
                 self._history = self._history[-self._max_history:]
 
         return alert
+
+    def _cleanup_stale_cooldowns(self, now: float) -> None:
+        """Remove cooldown entries older than _COOLDOWN_MAX_AGE (24h)."""
+        with self._lock:
+            stale = [k for k, t in self._cooldowns.items()
+                     if now - t > _COOLDOWN_MAX_AGE]
+            for k in stale:
+                del self._cooldowns[k]
+            self._last_cooldown_cleanup = now
 
     def acknowledge(self, alert_id: str) -> bool:
         """Acknowledge an alert by ID. Returns True if found."""
