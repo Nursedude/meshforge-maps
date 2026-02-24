@@ -26,24 +26,39 @@ Endpoints:
 
 import json
 import logging
-import re
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+from ..collectors.base import NODE_ID_RE
+
 logger = logging.getLogger(__name__)
 
 # Default port matches meshtasticd convention
 DEFAULT_PROXY_PORT = 4404  # Adjacent to meshtasticd's 4403
 
-# Node IDs must be hex strings, optionally prefixed with '!'
-_NODE_ID_RE = re.compile(r"^!?[0-9a-fA-F]{1,16}$")
+
+class ProxyHTTPServer(HTTPServer):
+    """HTTPServer subclass with typed attributes for the Meshtastic API proxy.
+
+    Replaces the previous pattern of monkey-patching _mf_mqtt_store and
+    _mf_proxy onto a bare HTTPServer instance.
+    """
+
+    def __init__(self, server_address: tuple, handler_class: type,
+                 mqtt_store: Optional[Any] = None,
+                 proxy: Optional["MeshtasticApiProxy"] = None) -> None:
+        super().__init__(server_address, handler_class)
+        self.mqtt_store = mqtt_store
+        self.proxy = proxy
 
 
 class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the Meshtastic API proxy."""
+
+    server: ProxyHTTPServer  # type annotation for IDE support
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -54,7 +69,7 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
                 self._serve_nodes()
             elif path.startswith("/api/v1/nodes/"):
                 node_id = path.split("/")[-1]
-                if not _NODE_ID_RE.match(node_id):
+                if not NODE_ID_RE.match(node_id):
                     self._send_json({"error": "Invalid node ID format"}, 400)
                 else:
                     self._serve_node(node_id)
@@ -75,8 +90,8 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
 
     def _get_cors_origin(self):
         """Get configured CORS origin, or None for same-origin."""
-        proxy = self._get_proxy()
-        return getattr(proxy, "_cors_origin", None) if proxy else None
+        proxy = self.server.proxy
+        return proxy._cors_origin if proxy else None
 
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests."""
@@ -91,11 +106,11 @@ class MeshtasticApiProxyHandler(BaseHTTPRequestHandler):
 
     def _get_store(self):
         """Get the MQTTNodeStore from the server instance."""
-        return getattr(self.server, "_mf_mqtt_store", None)
+        return self.server.mqtt_store
 
     def _get_proxy(self):
         """Get the MeshtasticApiProxy from the server instance."""
-        return getattr(self.server, "_mf_proxy", None)
+        return self.server.proxy
 
     def _serve_nodes(self) -> None:
         """Serve all nodes as a JSON array in meshtasticd-compatible format."""
@@ -341,7 +356,7 @@ class MeshtasticApiProxy:
         self._host = host
         self._port = port
         self._cors_origin = cors_origin
-        self._server: Optional[HTTPServer] = None
+        self._server: Optional[ProxyHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._request_count = 0
@@ -388,7 +403,7 @@ class MeshtasticApiProxy:
         self._mqtt_store = store
         server = self._server
         if server is not None:
-            server._mf_mqtt_store = store  # type: ignore[attr-defined]
+            server.mqtt_store = store
 
     def start(self) -> bool:
         """Start the proxy server in a background thread.
@@ -402,11 +417,11 @@ class MeshtasticApiProxy:
         for offset in range(5):
             port = self._port + offset
             try:
-                self._server = HTTPServer(
-                    (self._host, port), MeshtasticApiProxyHandler
+                self._server = ProxyHTTPServer(
+                    (self._host, port), MeshtasticApiProxyHandler,
+                    mqtt_store=self._mqtt_store,
+                    proxy=self,
                 )
-                self._server._mf_mqtt_store = self._mqtt_store  # type: ignore[attr-defined]
-                self._server._mf_proxy = self  # type: ignore[attr-defined]
 
                 self._thread = threading.Thread(
                     target=self._serve_forever_safe,

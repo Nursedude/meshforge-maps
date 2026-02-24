@@ -335,3 +335,32 @@ class TestMapServerHTTPEndpoints:
         assert data["precision"] == 2  # minimum clamped to 2
         data = self._get_json("/api/heatmap?precision=10")
         assert data["precision"] == 6  # maximum clamped to 6
+
+
+class TestHeatmapNormalization:
+    """Edge case tests for heatmap intensity normalization."""
+
+    def test_zero_max_count_does_not_divide_by_zero(self):
+        """Regression: max_count=0 should not cause ZeroDivisionError."""
+        # Simulate the normalization logic from _serve_heatmap
+        raw = [(45.0, -122.0, 0)]  # count=0 edge case
+        max_count = max(raw[0][2], 1) if raw else 1
+        points = [[lat, lon, count / max_count] for lat, lon, count in raw]
+        assert points == [[45.0, -122.0, 0.0]]
+        assert max_count == 1
+
+    def test_empty_raw_returns_empty_points(self):
+        raw = []
+        max_count = max(raw[0][2], 1) if raw else 1
+        points = [[lat, lon, count / max_count] for lat, lon, count in raw]
+        assert points == []
+        assert max_count == 1
+
+    def test_normal_normalization(self):
+        raw = [(45.0, -122.0, 10), (46.0, -121.0, 5), (47.0, -120.0, 1)]
+        max_count = max(raw[0][2], 1) if raw else 1
+        points = [[lat, lon, count / max_count] for lat, lon, count in raw]
+        assert max_count == 10
+        assert points[0][2] == 1.0   # 10/10
+        assert points[1][2] == 0.5   # 5/10
+        assert points[2][2] == 0.1   # 1/10

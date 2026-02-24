@@ -50,7 +50,10 @@ class SharedHealthStateReader:
         self._connect()
 
     def _connect(self) -> None:
-        """Open a read-only connection to the health state DB."""
+        """Open a read-only connection to the health state DB.
+
+        Thread-safe: acquires self._lock around state mutations.
+        """
         if not self._db_path.exists():
             logger.debug(
                 "Shared health DB not found at %s (core not running?)",
@@ -61,15 +64,18 @@ class SharedHealthStateReader:
         try:
             # Open in read-only mode using URI
             uri = f"file:{self._db_path}?mode=ro"
-            self._conn = sqlite3.connect(
+            conn = sqlite3.connect(
                 uri, uri=True, check_same_thread=False,
             )
-            self._conn.execute("PRAGMA busy_timeout=1000")
-            self._available = True
+            conn.execute("PRAGMA busy_timeout=1000")
+            with self._lock:
+                self._conn = conn
+                self._available = True
             logger.info("Connected to shared health DB at %s", self._db_path)
         except Exception as e:
             logger.debug("Failed to open shared health DB: %s", e)
-            self._conn = None
+            with self._lock:
+                self._conn = None
 
     @property
     def available(self) -> bool:
@@ -201,17 +207,20 @@ class SharedHealthStateReader:
 
         Returns True if the DB is now available.
         """
-        if self._conn:
-            return True
+        with self._lock:
+            if self._conn:
+                return True
         self._connect()
-        return self._available
+        with self._lock:
+            return self._available
 
     def close(self) -> None:
         """Close the database connection."""
-        if self._conn:
-            try:
-                self._conn.close()
-            except Exception as e:
-                logger.debug("Error closing shared health DB: %s", e)
-            self._conn = None
-            self._available = False
+        with self._lock:
+            if self._conn:
+                try:
+                    self._conn.close()
+                except Exception as e:
+                    logger.debug("Error closing shared health DB: %s", e)
+                self._conn = None
+                self._available = False

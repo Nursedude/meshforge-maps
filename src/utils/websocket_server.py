@@ -216,7 +216,7 @@ class MapWebSocketServer:
         """Handle a single client connection."""
         with self._lock:
             self._clients.add(websocket)
-        self._stats.total_connections += 1
+        self._stats.record_connection()
         client_addr = f"{websocket.remote_address}" if hasattr(websocket, "remote_address") else "unknown"
         logger.info("WebSocket client connected: %s (total: %d)",
                      client_addr, self.client_count)
@@ -227,7 +227,7 @@ class MapWebSocketServer:
                 history = list(self._history)
             for msg in history:
                 await websocket.send(msg)
-                self._stats.total_messages_sent += 1
+                self._stats.record_message_sent()
 
             # Keep connection alive and handle client messages.
             # Only accept messages with a recognized type.
@@ -282,14 +282,33 @@ class MapWebSocketServer:
         for client in clients:
             try:
                 await client.send(text)
-                self._stats.total_messages_sent += 1
+                self._stats.record_message_sent()
             except Exception:
                 # Client will be cleaned up in _handler
                 pass
 
 
 class _WSStats:
-    """Counters for WebSocket diagnostics."""
+    """Thread-safe counters for WebSocket diagnostics."""
     def __init__(self) -> None:
-        self.total_connections = 0
-        self.total_messages_sent = 0
+        self._lock = threading.Lock()
+        self._total_connections = 0
+        self._total_messages_sent = 0
+
+    @property
+    def total_connections(self) -> int:
+        with self._lock:
+            return self._total_connections
+
+    @property
+    def total_messages_sent(self) -> int:
+        with self._lock:
+            return self._total_messages_sent
+
+    def record_connection(self) -> None:
+        with self._lock:
+            self._total_connections += 1
+
+    def record_message_sent(self, count: int = 1) -> None:
+        with self._lock:
+            self._total_messages_sent += count

@@ -94,38 +94,38 @@ class TestNodeHistoryDBInitSafety:
 # ---------------------------------------------------------------------------
 
 class TestNodeIdValidation:
-    """Verify _validate_node_id and _NODE_ID_RE."""
+    """Verify validate_node_id and NODE_ID_RE from base.py."""
 
     def test_valid_hex_ids(self):
-        from src.map_server import _validate_node_id
+        from src.collectors.base import validate_node_id
 
-        assert _validate_node_id("!a1b2c3d4") is True
-        assert _validate_node_id("!DEADBEEF") is True
-        assert _validate_node_id("a1b2c3d4") is True
-        assert _validate_node_id("!0") is True
-        assert _validate_node_id("!abcdef0123456789") is True
+        assert validate_node_id("!a1b2c3d4") is True
+        assert validate_node_id("!DEADBEEF") is True
+        assert validate_node_id("a1b2c3d4") is True
+        assert validate_node_id("!0") is True
+        assert validate_node_id("!abcdef0123456789") is True
 
     def test_invalid_ids(self):
-        from src.map_server import _validate_node_id
+        from src.collectors.base import validate_node_id
 
-        assert _validate_node_id("") is False
-        assert _validate_node_id("!") is False
-        assert _validate_node_id("!xyz") is False
-        assert _validate_node_id("test_node") is False
-        assert _validate_node_id("!a1b2c3d4e5f6g7h8i") is False  # too long
-        assert _validate_node_id("'; DROP TABLE nodes;--") is False
-        assert _validate_node_id("../../../etc/passwd") is False
+        assert validate_node_id("") is False
+        assert validate_node_id("!") is False
+        assert validate_node_id("!xyz") is False
+        assert validate_node_id("test_node") is False
+        assert validate_node_id("!a1b2c3d4e5f6g7h8i") is False  # too long
+        assert validate_node_id("'; DROP TABLE nodes;--") is False
+        assert validate_node_id("../../../etc/passwd") is False
 
     def test_invalid_node_id_returns_400(self):
         """Integration test: invalid node ID returns HTTP 400."""
         # This is tested via the existing test_map_server.py integration tests
         # but we add an explicit unit test for the regex
-        from src.map_server import _NODE_ID_RE
+        from src.collectors.base import NODE_ID_RE
 
         # These should NOT match
         for bad_id in ["test", "!test", "nonexistent", "!nonexistent",
                        "SELECT", "../etc", "!g1h2"]:
-            assert _NODE_ID_RE.match(bad_id) is None, f"Should reject: {bad_id}"
+            assert NODE_ID_RE.match(bad_id) is None, f"Should reject: {bad_id}"
 
 
 # ---------------------------------------------------------------------------

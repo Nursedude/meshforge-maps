@@ -90,13 +90,20 @@ class ReconnectStrategy:
         with self._lock:
             self._attempt = 0
 
-    def wait(self) -> float:
+    def wait(self, stop_event: Optional[threading.Event] = None) -> float:
         """Calculate delay and sleep for that duration.
+
+        If *stop_event* is provided, uses ``stop_event.wait(delay)`` instead
+        of ``time.sleep(delay)`` for graceful shutdown support (matches the
+        parent meshforge pattern of interruptible waits in daemon loops).
 
         Returns the actual delay waited (seconds).
         """
         delay = self.next_delay()
-        time.sleep(delay)
+        if stop_event is not None:
+            stop_event.wait(delay)
+        else:
+            time.sleep(delay)
         return delay
 
     @classmethod

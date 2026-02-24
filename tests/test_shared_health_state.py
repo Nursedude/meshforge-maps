@@ -1,6 +1,7 @@
 """Tests for SharedHealthStateReader - cross-process health DB access."""
 
 import sqlite3
+import threading
 import pytest
 
 from src.utils.shared_health_state import SharedHealthStateReader
@@ -194,3 +195,54 @@ class TestSharedHealthStateReader:
         reader.close()
         assert reader.available is False
         assert reader.get_service_states() == []
+
+    def test_concurrent_refresh_is_thread_safe(self, tmp_path):
+        """Multiple threads calling refresh() should not corrupt state."""
+        db_path = tmp_path / "health.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.close()
+
+        reader = SharedHealthStateReader(db_path=db_path)
+        reader.close()  # Reset to unavailable
+
+        errors = []
+
+        def _refresh():
+            try:
+                reader.refresh()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=_refresh) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert not errors, f"Concurrent refresh raised: {errors}"
+        assert reader.available is True
+        reader.close()
+
+    def test_concurrent_close_is_thread_safe(self, tmp_path):
+        """Multiple threads calling close() should not raise."""
+        db_path = tmp_path / "health.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.close()
+
+        reader = SharedHealthStateReader(db_path=db_path)
+        errors = []
+
+        def _close():
+            try:
+                reader.close()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=_close) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert not errors, f"Concurrent close raised: {errors}"
+        assert reader.available is False
