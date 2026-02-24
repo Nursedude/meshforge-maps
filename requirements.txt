@@ -1,0 +1,25 @@
+# MeshForge Maps - Dependencies
+#
+# Core: Python 3.9+ stdlib only (no required external packages)
+#
+# Optional dependencies (features degrade gracefully when absent):
+
+# Live MQTT node updates from Meshtastic public/private brokers
+paho-mqtt>=1.6.0
+
+# Real-time WebSocket broadcast to map frontend
+websockets>=12.0
+
+# Meshtastic protobuf decoding for MQTT messages
+protobuf>=4.0
+
+# Meshtastic Python library (for local daemon integration)
+# meshtastic>=2.0
+
+# TLS certificate handling for secure MQTT connections
+# pyopenssl>=25.3.0
+# cryptography>=45.0.7,<47
+
+# Development / testing
+# pytest>=7.0
+# pytest-cov>=4.0

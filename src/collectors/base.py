@@ -7,6 +7,7 @@ Each collector outputs standardized GeoJSON FeatureCollections.
 
 import logging
 import math
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -17,6 +18,15 @@ from ..utils.paths import get_data_dir
 from ..utils.reconnect import ReconnectStrategy
 
 logger = logging.getLogger(__name__)
+
+# Node IDs must be hex strings, optionally prefixed with '!'
+# e.g. "!a1b2c3d4" or "a1b2c3d4" — up to 16 hex chars
+NODE_ID_RE = re.compile(r"^!?[0-9a-fA-F]{1,16}$")
+
+
+def validate_node_id(node_id: str) -> bool:
+    """Validate that a node ID looks like a valid Meshtastic hex ID."""
+    return bool(NODE_ID_RE.match(node_id))
 
 # Common data directory and unified cache path (shared across all collectors)
 MESHFORGE_DATA_DIR = get_data_dir()
