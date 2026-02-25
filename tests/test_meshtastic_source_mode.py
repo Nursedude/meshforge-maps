@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from src.collectors.base import make_feature
 from src.collectors.meshtastic_collector import MeshtasticCollector
 
 
@@ -110,3 +111,47 @@ class TestLockContentionRetry:
                 result = collector._fetch_from_api()
 
         assert result == []
+
+
+class TestSourceModeDataFlow:
+    """Verify that features from mock sources appear in the final result."""
+
+    def _make_test_feature(self, node_id, lat, lon):
+        return make_feature(
+            node_id=node_id, lat=lat, lon=lon,
+            network="meshtastic", name=f"Node {node_id}",
+        )
+
+    @patch.object(MeshtasticCollector, "_fetch_from_mqtt_cache")
+    @patch.object(MeshtasticCollector, "_fetch_from_live_mqtt")
+    @patch.object(MeshtasticCollector, "_fetch_from_api")
+    def test_auto_mode_merges_all_sources(self, mock_api, mock_live, mock_cache):
+        """Auto mode should include features from all three sources."""
+        mock_api.return_value = [self._make_test_feature("!api1", 30.0, -90.0)]
+        mock_live.return_value = [self._make_test_feature("!mqtt1", 31.0, -91.0)]
+        mock_cache.return_value = [self._make_test_feature("!cache1", 32.0, -92.0)]
+
+        collector = MeshtasticCollector(source_mode="auto")
+        result = collector._fetch()
+
+        assert result["type"] == "FeatureCollection"
+        ids = {f["properties"]["id"] for f in result["features"]}
+        assert "!api1" in ids
+        assert "!mqtt1" in ids
+        assert "!cache1" in ids
+
+    @patch.object(MeshtasticCollector, "_fetch_from_mqtt_cache")
+    @patch.object(MeshtasticCollector, "_fetch_from_live_mqtt")
+    @patch.object(MeshtasticCollector, "_fetch_from_api")
+    def test_auto_mode_deduplicates(self, mock_api, mock_live, mock_cache):
+        """Duplicate node IDs across sources should be deduplicated."""
+        f = self._make_test_feature("!dup1", 30.0, -90.0)
+        mock_api.return_value = [f]
+        mock_live.return_value = [f]
+        mock_cache.return_value = []
+
+        collector = MeshtasticCollector(source_mode="auto")
+        result = collector._fetch()
+
+        ids = [f["properties"]["id"] for f in result["features"]]
+        assert ids.count("!dup1") == 1

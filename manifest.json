@@ -96,6 +96,92 @@
             "type": "number",
             "default": 8808,
             "label": "Map Server HTTP Port"
+        },
+        "http_host": {
+            "type": "string",
+            "default": "127.0.0.1",
+            "label": "HTTP Bind Address"
+        },
+        "ws_host": {
+            "type": "string",
+            "default": "127.0.0.1",
+            "label": "WebSocket Bind Address"
+        },
+        "enable_noaa_alerts": {
+            "type": "boolean",
+            "default": true,
+            "label": "Enable NOAA Weather Alerts"
+        },
+        "noaa_alerts_area": {
+            "type": "string",
+            "default": null,
+            "label": "NOAA Alerts Area (state code, e.g. TX)"
+        },
+        "noaa_alerts_severity": {
+            "type": "string",
+            "default": null,
+            "label": "NOAA Severity Filter (e.g. Extreme,Severe)"
+        },
+        "meshtastic_source": {
+            "type": "choice",
+            "choices": ["auto", "mqtt_only", "local_only"],
+            "default": "auto",
+            "label": "Meshtastic Data Source"
+        },
+        "meshtastic_proxy_port": {
+            "type": "number",
+            "default": 4404,
+            "label": "Meshtastic Proxy Port"
+        },
+        "mqtt_broker": {
+            "type": "string",
+            "default": "mqtt.meshtastic.org",
+            "label": "MQTT Broker Host"
+        },
+        "mqtt_port": {
+            "type": "number",
+            "default": 1883,
+            "label": "MQTT Broker Port"
+        },
+        "mqtt_topic": {
+            "type": "string",
+            "default": "msh/#",
+            "label": "MQTT Topic"
+        },
+        "mqtt_username": {
+            "type": "string",
+            "default": null,
+            "label": "MQTT Username"
+        },
+        "mqtt_password": {
+            "type": "password",
+            "default": null,
+            "label": "MQTT Password"
+        },
+        "hamclock_host": {
+            "type": "string",
+            "default": "localhost",
+            "label": "HamClock Host"
+        },
+        "hamclock_port": {
+            "type": "number",
+            "default": 8080,
+            "label": "HamClock Port"
+        },
+        "openhamclock_port": {
+            "type": "number",
+            "default": 3000,
+            "label": "OpenHamClock Port"
+        },
+        "api_key": {
+            "type": "password",
+            "default": null,
+            "label": "API Key (optional)"
+        },
+        "cors_allowed_origin": {
+            "type": "string",
+            "default": null,
+            "label": "CORS Allowed Origin"
         }
     }
 }
