@@ -534,6 +534,7 @@ class MQTTSubscriber:
         """Return MQTT subscriber statistics (upstream: monitoring integration)."""
         with self._stats_lock:
             messages = self._messages_received
+            errors = self._parse_errors
         return {
             "broker": self._broker,
             "port": self._port,
@@ -542,7 +543,7 @@ class MQTTSubscriber:
             "running": self._running.is_set(),
             "has_credentials": self._username is not None,
             "messages_received": messages,
-            "parse_errors": self._parse_errors,
+            "parse_errors": errors,
             "node_count": self._store.node_count,
             "protobuf_available": self._proto is not None,
         }
@@ -619,14 +620,17 @@ class MQTTSubscriber:
                 self._decode_json(msg.payload, msg.topic)
         except (ValueError, TypeError, KeyError, AttributeError):
             # Unparseable messages are common on the public broker
-            self._parse_errors += 1
-            if self._parse_errors % 1000 == 0:
+            with self._stats_lock:
+                self._parse_errors += 1
+                count = self._parse_errors
+            if count % 1000 == 0:
                 logger.warning(
                     "MQTT: %d total unparseable messages dropped",
-                    self._parse_errors,
+                    count,
                 )
         except Exception as e:
-            self._parse_errors += 1
+            with self._stats_lock:
+                self._parse_errors += 1
             logger.debug("MQTT message processing error on %s: %s", msg.topic, e)
 
     def _notify_update(self, node_id: str, update_type: str, **kwargs) -> None:

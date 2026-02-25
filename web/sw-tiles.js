@@ -45,6 +45,7 @@ const STATIC_ASSETS = [
 // CDN libraries to cache on first use
 const CDN_DOMAINS = [
     'unpkg.com',
+    'cdnjs.cloudflare.com',
     'd3js.org',
 ];
 

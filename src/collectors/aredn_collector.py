@@ -67,6 +67,8 @@ class AREDNCollector(BaseCollector):
         lqm_links: List[Dict[str, Any]] = []
 
         # Source 1: Direct AREDN node queries (if on mesh)
+        if not self._node_targets:
+            logger.debug("AREDN: no node_targets configured, skipping direct queries")
         for target in self._node_targets:
             node_features, links = self._fetch_from_node(target)
             lqm_links.extend(links)
@@ -123,40 +125,54 @@ class AREDNCollector(BaseCollector):
         # AREDN API runs on port 8080 (not port 80)
         # Use explicit port check to avoid IPv6 false positives
         host = target if ":" in target and not target.startswith("[") else f"{target}:8080"
-        url = f"http://{host}/a/sysinfo?lqm=1"
-        try:
-            req = Request(url, headers={
-                "Accept": "application/json",
-                "User-Agent": "MeshForge/1.0",
-            })
-            with urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode())
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "MeshForge/1.0",
+        }
+        # Try new API endpoint first (AREDN 3.25+), fall back to legacy
+        endpoints = [
+            f"http://{host}/a/sysinfo?lqm=1",
+            f"http://{host}/cgi-bin/sysinfo.json?lqm=1",
+        ]
+        data = None
+        last_err = None
+        for url in endpoints:
+            try:
+                req = Request(url, headers=headers)
+                with urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+                break
+            except (URLError, OSError, json.JSONDecodeError) as e:
+                last_err = e
+                continue
 
-            # Validate this is actually an AREDN node response
-            if not isinstance(data, dict):
-                logger.debug("AREDN node %s: response is not a JSON object", target)
-                return features, links
-            if not ("node" in data or "sysinfo" in data or "meshrf" in data):
-                logger.debug("AREDN node %s: missing expected AREDN fields", target)
-                return features, links
+        if data is None:
+            logger.debug("AREDN node %s unreachable: %s", target, last_err)
+            return features, links
 
-            # Parse the queried node itself
-            feature = self._parse_sysinfo(data, target)
-            if feature:
-                features.append(feature)
+        # Validate this is actually an AREDN node response
+        if not isinstance(data, dict):
+            logger.debug("AREDN node %s: response is not a JSON object", target)
+            return features, links
+        if not ("node" in data or "sysinfo" in data or "meshrf" in data):
+            logger.debug("AREDN node %s: missing expected AREDN fields", target)
+            return features, links
 
-            # Parse LQM neighbor entries for topology links
-            node_name = data.get("node", target)
-            lqm = data.get("lqm", [])
-            if isinstance(lqm, list):
-                for neighbor in lqm:
-                    link = self._parse_lqm_neighbor(neighbor, node_name)
-                    if link:
-                        links.append(link)
+        # Parse the queried node itself
+        feature = self._parse_sysinfo(data, target)
+        if feature:
+            features.append(feature)
 
-            logger.debug("AREDN node %s returned %d entries", target, len(features))
-        except (URLError, OSError, json.JSONDecodeError) as e:
-            logger.debug("AREDN node %s unreachable: %s", target, e)
+        # Parse LQM neighbor entries for topology links
+        node_name = data.get("node", target)
+        lqm = data.get("lqm", [])
+        if isinstance(lqm, list):
+            for neighbor in lqm:
+                link = self._parse_lqm_neighbor(neighbor, node_name)
+                if link:
+                    links.append(link)
+
+        logger.debug("AREDN node %s returned %d entries", target, len(features))
         return features, links
 
     def _parse_sysinfo(

@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
+from datetime import datetime, timezone
+
 from .base import BaseCollector, make_feature_collection
 
 logger = logging.getLogger(__name__)
@@ -127,7 +129,6 @@ class NOAAAlertCollector(BaseCollector):
             expires = props.get("expires")
             if expires:
                 try:
-                    from datetime import datetime, timezone
                     exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
                     if exp_dt < datetime.now(timezone.utc):
                         continue
