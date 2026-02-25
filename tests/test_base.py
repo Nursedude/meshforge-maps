@@ -220,3 +220,47 @@ class TestBaseCollector:
         assert info["total_errors"] == 1
         assert info["last_error"] == "test failure"
         assert "last_error_age_seconds" in info
+
+
+class TestDeduplicateFeatures:
+    """Direct unit tests for deduplicate_features()."""
+
+    def test_removes_duplicates_first_wins(self):
+        from src.collectors.base import deduplicate_features
+        f1 = {"properties": {"id": "node1", "name": "First"}}
+        f2 = {"properties": {"id": "node1", "name": "Second"}}
+        result = deduplicate_features([[f1], [f2]])
+        assert len(result) == 1
+        assert result[0]["properties"]["name"] == "First"
+
+    def test_distinct_ids_preserved(self):
+        from src.collectors.base import deduplicate_features
+        f1 = {"properties": {"id": "node1"}}
+        f2 = {"properties": {"id": "node2"}}
+        f3 = {"properties": {"id": "node3"}}
+        result = deduplicate_features([[f1, f2], [f3]])
+        assert len(result) == 3
+
+    def test_no_id_included_when_allowed(self):
+        from src.collectors.base import deduplicate_features
+        f_with_id = {"properties": {"id": "node1"}}
+        f_no_id = {"properties": {"name": "anonymous"}}
+        result = deduplicate_features([[f_with_id, f_no_id]], allow_no_id=True)
+        assert len(result) == 2
+
+    def test_no_id_excluded_when_disallowed(self):
+        from src.collectors.base import deduplicate_features
+        f_with_id = {"properties": {"id": "node1"}}
+        f_no_id = {"properties": {"name": "anonymous"}}
+        result = deduplicate_features([[f_with_id, f_no_id]], allow_no_id=False)
+        assert len(result) == 1
+
+    def test_none_features_skipped(self):
+        from src.collectors.base import deduplicate_features
+        result = deduplicate_features([[None, {"properties": {"id": "x"}}]])
+        assert len(result) == 1
+
+    def test_empty_lists(self):
+        from src.collectors.base import deduplicate_features
+        result = deduplicate_features([[], []])
+        assert result == []

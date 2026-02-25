@@ -241,3 +241,34 @@ class TestMQTTPositionValidation:
 
         # Should not raise — timeout caught by except Exception handler
         sub._run_loop()
+
+
+class TestMQTTParseErrorsThreadSafety:
+    """Tests that _parse_errors counter is read under the stats lock."""
+
+    def test_parse_errors_in_get_stats(self):
+        """get_stats() should return _parse_errors consistently."""
+        sub = MQTTSubscriber(broker="test.invalid")
+        with sub._stats_lock:
+            sub._parse_errors = 42
+        stats = sub.get_stats()
+        assert stats["parse_errors"] == 42
+
+    def test_parse_errors_concurrent_increments(self):
+        """Concurrent increments under lock should be consistent."""
+        import threading
+        sub = MQTTSubscriber(broker="test.invalid")
+        barrier = threading.Barrier(10)
+
+        def increment():
+            barrier.wait()
+            with sub._stats_lock:
+                sub._parse_errors += 1
+
+        threads = [threading.Thread(target=increment) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sub._parse_errors == 10

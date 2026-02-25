@@ -46,6 +46,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "mqtt_password": None,
     # CORS: None = same-origin (no CORS headers sent); set to "*" or a specific origin to enable
     "cors_allowed_origin": None,
+    # API key for protecting /api/ endpoints (None = no auth required)
+    "api_key": None,
+    # Meshtastic API proxy port (meshtasticd-compatible JSON proxy)
+    "meshtastic_proxy_port": 4404,
 }
 
 # Tile provider definitions for Leaflet.js
