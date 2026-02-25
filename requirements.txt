@@ -5,7 +5,7 @@
 # Optional dependencies (features degrade gracefully when absent):
 
 # Live MQTT node updates from Meshtastic public/private brokers
-paho-mqtt>=1.6.0
+paho-mqtt>=1.6.0,<3.0
 
 # Real-time WebSocket broadcast to map frontend
 websockets>=12.0

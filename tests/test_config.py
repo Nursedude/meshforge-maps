@@ -210,3 +210,29 @@ class TestTileProviders:
             assert "{y}" in url, f"{key} url missing {{y}}"
 
 
+class TestConfigKeyPersistence:
+    """Tests that all config keys used in map_server.py exist in DEFAULT_CONFIG."""
+
+    def test_api_key_in_defaults(self):
+        assert "api_key" in DEFAULT_CONFIG
+        assert DEFAULT_CONFIG["api_key"] is None
+
+    def test_meshtastic_proxy_port_in_defaults(self):
+        assert "meshtastic_proxy_port" in DEFAULT_CONFIG
+        assert DEFAULT_CONFIG["meshtastic_proxy_port"] == 4404
+
+    def test_api_key_round_trips(self, tmp_config):
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.set("api_key", "test-secret-key")
+        cfg.save()
+        cfg2 = MapsConfig(config_path=tmp_config)
+        assert cfg2.get("api_key") == "test-secret-key"
+
+    def test_proxy_port_round_trips(self, tmp_config):
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.set("meshtastic_proxy_port", 5500)
+        cfg.save()
+        cfg2 = MapsConfig(config_path=tmp_config)
+        assert cfg2.get("meshtastic_proxy_port") == 5500
+
+
