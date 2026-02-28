@@ -43,7 +43,7 @@ PORTNUM_TRACEROUTE = 70
 PORTNUM_MAP_REPORT = 73
 
 # How long before a node is considered stale (seconds)
-NODE_STALE_THRESHOLD = 3600  # 1 hour
+NODE_STALE_THRESHOLD = 900  # 15 minutes (aligned with upstream OFFLINE_THRESHOLD)
 
 # How long before a node is removed from the store entirely (seconds)
 NODE_REMOVE_THRESHOLD = 259200  # 72 hours
@@ -506,7 +506,7 @@ class MQTTSubscriber:
             try:
                 client.disconnect()
             except Exception as e:
-                logger.debug("MQTT disconnect error: %s", e)
+                logger.warning("MQTT disconnect error: %s", e)
             try:
                 # Use loop_stop with a timeout thread to avoid hanging
                 stop_thread = threading.Thread(
@@ -631,7 +631,7 @@ class MQTTSubscriber:
         except Exception as e:
             with self._stats_lock:
                 self._parse_errors += 1
-            logger.debug("MQTT message processing error on %s: %s", msg.topic, e)
+            logger.warning("MQTT message processing error on %s: %s", msg.topic, e)
 
     def _notify_update(self, node_id: str, update_type: str, **kwargs) -> None:
         """Safely invoke the on_node_update callback and publish to event bus."""
@@ -660,7 +660,7 @@ class MQTTSubscriber:
             if factory:
                 bus.publish(factory(node_id, source="mqtt", **kwargs))
         except Exception as e:
-            logger.debug("Event bus publish error: %s", e)
+            logger.warning("Event bus publish error: %s", e)
 
     def _decode_protobuf(self, payload: bytes, topic: str) -> None:
         """Decode ServiceEnvelope protobuf message."""
