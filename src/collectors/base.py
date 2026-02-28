@@ -23,6 +23,32 @@ logger = logging.getLogger(__name__)
 # e.g. "!a1b2c3d4" or "a1b2c3d4" — up to 16 hex chars
 NODE_ID_RE = re.compile(r"^!?[0-9a-fA-F]{1,16}$")
 
+# Per-source online thresholds (seconds since last_seen).
+# Mirrors upstream MeshForge _is_node_online() per-source thresholds.
+ONLINE_THRESHOLDS = {
+    "meshtastic": 900,    # 15 minutes — frequent heartbeats
+    "mqtt": 900,          # 15 minutes — real-time broker
+    "reticulum": 1800,    # 30 minutes — infrequent announces
+    "aredn": 3600,        # 60 minutes — slow poll scans
+}
+DEFAULT_ONLINE_THRESHOLD = 900  # 15 minutes
+
+
+def is_node_online(last_heard: Any, network: str = "") -> Optional[bool]:
+    """Determine node online status using per-source thresholds.
+
+    Returns True/False based on age vs. network-specific threshold,
+    or None if *last_heard* is missing/zero (unknown status).
+    """
+    if not last_heard:
+        return None
+    try:
+        age = time.time() - float(last_heard)
+    except (ValueError, TypeError):
+        return None
+    threshold = ONLINE_THRESHOLDS.get(network, DEFAULT_ONLINE_THRESHOLD)
+    return age < threshold
+
 
 def validate_node_id(node_id: str) -> bool:
     """Validate that a node ID looks like a valid Meshtastic hex ID."""

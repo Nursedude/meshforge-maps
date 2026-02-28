@@ -182,7 +182,7 @@ class NodeStateTracker:
             try:
                 self._on_transition(*transition)
             except Exception as e:
-                logger.debug("State transition callback error: %s", e)
+                logger.warning("State transition callback error: %s", e)
 
         return (old_state, new_state if transition else old_state)
 
@@ -220,7 +220,7 @@ class NodeStateTracker:
                 try:
                     self._on_transition(*t)
                 except Exception as e:
-                    logger.debug("State transition callback error: %s", e)
+                    logger.warning("State transition callback error: %s", e)
 
         return transitioned
 

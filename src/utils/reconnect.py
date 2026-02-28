@@ -121,6 +121,20 @@ class ReconnectStrategy:
         )
 
     @classmethod
+    def for_websocket(cls) -> "ReconnectStrategy":
+        """Factory: strategy tuned for WebSocket reconnection.
+
+        Starts at 2s, maxes at 30s, unlimited retries.
+        """
+        return cls(
+            base_delay=2.0,
+            max_delay=30.0,
+            multiplier=2.0,
+            jitter_factor=0.2,
+            max_retries=None,
+        )
+
+    @classmethod
     def for_collector(cls) -> "ReconnectStrategy":
         """Factory: strategy tuned for HTTP collector retries.
 

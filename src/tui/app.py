@@ -24,6 +24,7 @@ import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..utils.reconnect import ReconnectStrategy
 from .data_client import MapDataClient
 from .helpers import (
     CP_ALERT_WARNING,
@@ -82,6 +83,9 @@ class TuiApp:
         self._ws_connected = False
         self._ws_thread: Optional[threading.Thread] = None
 
+        # Shutdown signal for interruptible waits
+        self._stop_event = threading.Event()
+
         # Search/filter state
         self._search_active = False
         self._search_query = ""
@@ -109,6 +113,7 @@ class TuiApp:
         stdscr.timeout(500)  # 500ms input timeout for responsive refresh
 
         self._running = True
+        self._stop_event.clear()
 
         # Start background data fetcher
         fetch_thread = threading.Thread(target=self._fetch_loop, daemon=True)
@@ -121,15 +126,18 @@ class TuiApp:
         # Initial data fetch
         self._refresh_data()
 
-        while self._running:
-            self._draw()
-            self._handle_input()
+        try:
+            while self._running:
+                self._draw()
+                self._handle_input()
+        finally:
+            self._stop_event.set()
 
     def _fetch_loop(self) -> None:
         """Background thread that periodically fetches fresh data."""
         while self._running:
-            time.sleep(REFRESH_INTERVAL)
-            if self._running:
+            self._stop_event.wait(REFRESH_INTERVAL)
+            if self._running and not self._stop_event.is_set():
                 self._refresh_data()
 
     def _refresh_data(self) -> None:
@@ -232,6 +240,7 @@ class TuiApp:
                 self._detail_scroll = 0
                 return
             self._running = False
+            self._stop_event.set()
             return
 
         # Escape exits detail view
@@ -375,6 +384,19 @@ class TuiApp:
             self._detail_scroll = 0
             self._refresh_data()
 
+    def _safe_draw_tab(self, draw_fn: Any, *args: Any) -> None:
+        """Wrap a tab draw call with error isolation.
+
+        Catches exceptions from individual tab renderers so one broken tab
+        never crashes the entire TUI (mirrors upstream _safe_call pattern).
+        """
+        try:
+            draw_fn(*args)
+        except Exception as e:
+            logger.warning("Tab draw error in %s: %s",
+                           getattr(draw_fn, "__name__", repr(draw_fn)), e)
+            safe_addstr(self._stdscr, 2, 2, f"Render error: {e}")
+
     def _draw(self) -> None:
         """Render the full TUI frame."""
         self._stdscr.erase()
@@ -410,20 +432,20 @@ class TuiApp:
         else:
             tab = self._active_tab
             if tab == 0:
-                self._draw_dashboard(content_top, content_height, cols, cache)
+                self._safe_draw_tab(self._draw_dashboard, content_top, content_height, cols, cache)
             elif tab == 1:
                 if self._detail_node_id:
-                    self._draw_node_detail(content_top, content_height, cols, cache)
+                    self._safe_draw_tab(self._draw_node_detail, content_top, content_height, cols, cache)
                 else:
-                    self._draw_nodes(content_top, content_height, cols, cache)
+                    self._safe_draw_tab(self._draw_nodes, content_top, content_height, cols, cache)
             elif tab == 2:
-                self._draw_alerts(content_top, content_height, cols, cache)
+                self._safe_draw_tab(self._draw_alerts, content_top, content_height, cols, cache)
             elif tab == 3:
-                self._draw_propagation(content_top, content_height, cols, cache)
+                self._safe_draw_tab(self._draw_propagation, content_top, content_height, cols, cache)
             elif tab == 4:
-                self._draw_topology(content_top, content_height, cols, cache)
+                self._safe_draw_tab(self._draw_topology, content_top, content_height, cols, cache)
             elif tab == 5:
-                self._draw_events(content_top, content_height, cols)
+                self._safe_draw_tab(self._draw_events, content_top, content_height, cols)
 
         self._stdscr.refresh()
 
@@ -590,13 +612,14 @@ class TuiApp:
         """WebSocket listener using the ``websockets`` library."""
         loop = _asyncio.new_event_loop()
         _asyncio.set_event_loop(loop)
+        strategy = ReconnectStrategy.for_websocket()
 
         async def _listen() -> None:
             while self._running:
                 try:
                     endpoint = self._resolve_ws_endpoint()
                     if not endpoint:
-                        await _asyncio.sleep(5)
+                        await _asyncio.sleep(strategy.next_delay())
                         continue
 
                     host, port = endpoint
@@ -606,6 +629,7 @@ class TuiApp:
                         max_size=self._WS_MAX_FRAME_SIZE,
                         close_timeout=5,
                     ) as conn:
+                        strategy.reset()
                         with self._data_lock:
                             self._ws_connected = True
                         async for raw in conn:
@@ -616,13 +640,13 @@ class TuiApp:
                                 self._on_ws_message(msg)
                             except (ValueError, TypeError):
                                 pass
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("WebSocket library connection error: %s", e)
                 finally:
                     with self._data_lock:
                         self._ws_connected = False
                 if self._running:
-                    await _asyncio.sleep(5)
+                    await _asyncio.sleep(strategy.next_delay())
 
         try:
             loop.run_until_complete(_listen())
@@ -633,12 +657,13 @@ class TuiApp:
 
     def _ws_listen_loop_raw(self) -> None:
         """Fallback raw-socket WebSocket listener (stdlib only)."""
+        strategy = ReconnectStrategy.for_websocket()
         while self._running:
             sock = None
             try:
                 endpoint = self._resolve_ws_endpoint()
                 if not endpoint:
-                    time.sleep(5)
+                    self._stop_event.wait(strategy.next_delay())
                     continue
 
                 host, port = endpoint
@@ -670,6 +695,7 @@ class TuiApp:
                 if b"101" not in response.split(b"\r\n")[0]:
                     raise ConnectionError("WS upgrade rejected")
 
+                strategy.reset()
                 with self._data_lock:
                     self._ws_connected = True
 
@@ -685,8 +711,8 @@ class TuiApp:
                     except (ValueError, TypeError):
                         pass
 
-            except (OSError, ConnectionError, socket.timeout):
-                pass
+            except (OSError, ConnectionError, socket.timeout) as e:
+                logger.warning("WebSocket raw connection error: %s", e)
             finally:
                 with self._data_lock:
                     self._ws_connected = False
@@ -697,7 +723,7 @@ class TuiApp:
                         pass
 
             if self._running:
-                time.sleep(5)
+                self._stop_event.wait(strategy.next_delay())
 
     def _ws_read_frame(self, sock: Any) -> Optional[str]:
         """Read a single WebSocket text frame. Returns None on close/error."""
