@@ -24,10 +24,13 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+import time as _time
+
 from .base import (
     MESHFORGE_DATA_DIR,
     UNIFIED_CACHE_PATH,
     BaseCollector,
+    is_node_online,
     make_feature,
     make_feature_collection,
     validate_coordinates,
@@ -206,7 +209,7 @@ class AREDNCollector(BaseCollector):
             api_version=api_version,
             uptime=uptime,
             load_avg=loads[0] if loads else None,
-            is_online=True,
+            is_online=is_node_online(_time.time(), "aredn"),
             grid_square=data.get("grid_square", ""),
             description=f"AREDN {model} - {firmware}",
         )

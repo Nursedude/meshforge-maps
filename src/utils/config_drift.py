@@ -147,7 +147,7 @@ class ConfigDriftDetector:
             try:
                 self._on_drift(node_id, drifts)
             except Exception as e:
-                logger.debug("Drift callback error: %s", e)
+                logger.warning("Drift callback error: %s", e)
 
         return drifts
 
