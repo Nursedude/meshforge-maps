@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .base import MESHFORGE_DATA_DIR, BaseCollector, make_feature, make_feature_collection, validate_coordinates
+from .base import MESHFORGE_DATA_DIR, BaseCollector, is_node_online, make_feature, make_feature_collection, validate_coordinates
 from ..utils.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
@@ -184,10 +184,7 @@ class MeshtasticCollector(BaseCollector):
         last_heard = node.get("lastHeard")
         hops_away = node.get("hopsAway")
         via_mqtt = node.get("viaMqtt")
-        is_online = None
-        if last_heard:
-            age_seconds = time.time() - last_heard
-            is_online = age_seconds < 900  # 15 min threshold
+        is_online = is_node_online(last_heard, "meshtastic")
 
         return make_feature(
             node_id=str(node_id),
@@ -277,7 +274,7 @@ class MeshtasticCollector(BaseCollector):
             battery=node.get("battery"),
             voltage=node.get("voltage"),
             snr=node.get("snr"),
-            is_online=node.get("is_online"),
+            is_online=is_node_online(node.get("last_seen"), "mqtt"),
             last_seen=node.get("last_seen"),
             temperature=node.get("temperature"),
             humidity=node.get("humidity"),

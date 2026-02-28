@@ -34,7 +34,7 @@ class MapDataClient:
             with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
-            logger.debug("API fetch failed %s: %s", path, e)
+            logger.warning("API fetch failed %s: %s", path, e)
             return None
 
     # -- High-level data accessors --

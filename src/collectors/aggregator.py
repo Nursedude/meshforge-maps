@@ -306,9 +306,10 @@ class DataAggregator:
             self._cached_overlay = {}
 
     def shutdown(self) -> None:
-        """Stop MQTT subscriber and release resources."""
+        """Stop MQTT subscriber, reset event bus, and release resources."""
         if self._mqtt_subscriber:
             self._mqtt_subscriber.stop()
             self._mqtt_subscriber = None
+        self._event_bus.reset()
         self._cached_overlay = {}
         logger.info("DataAggregator shut down")
