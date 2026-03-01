@@ -427,6 +427,7 @@ class MQTTSubscriber:
         self._client = None
         self._thread: Optional[threading.Thread] = None
         self._running = threading.Event()
+        self._stop_event = threading.Event()
         self._connected = threading.Event()
         self._stats_lock = threading.Lock()
         self._messages_received: int = 0
@@ -500,6 +501,7 @@ class MQTTSubscriber:
 
     def stop(self) -> None:
         """Stop the MQTT subscriber gracefully."""
+        self._stop_event.set()
         self._running.clear()
         client = self._client
         if client:
@@ -528,6 +530,7 @@ class MQTTSubscriber:
         self._client = None
         self._thread = None
         self._connected.clear()
+        self._stop_event.clear()
         logger.info("MQTT subscriber stopped")
 
     def get_stats(self) -> Dict[str, Any]:
@@ -574,7 +577,9 @@ class MQTTSubscriber:
                     delay,
                     strategy.attempt,
                 )
-                time.sleep(delay)
+                self._stop_event.wait(delay)
+                if self._stop_event.is_set():
+                    break
 
             # Periodic stale node cleanup (every 30 minutes)
             now = time.time()
