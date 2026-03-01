@@ -236,10 +236,10 @@ class MapWebSocketServer:
                     data = json.loads(raw)
                     if isinstance(data, dict):
                         await self._handle_client_message(websocket, data)
-                except (json.JSONDecodeError, TypeError):
-                    pass  # silently drop malformed messages
-        except Exception:
-            pass  # connection closed or error
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug("WebSocket: dropped malformed client message: %s", e)
+        except Exception as e:
+            logger.debug("WebSocket client connection error: %s", e)
         finally:
             with self._lock:
                 self._clients.discard(websocket)

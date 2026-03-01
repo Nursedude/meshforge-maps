@@ -238,6 +238,10 @@ class TestMQTTPositionValidation:
         sub._running = MagicMock()
         # First call returns True (enters loop), second returns False (exits)
         sub._running.is_set.side_effect = [True, False]
+        # Mock _stop_event so interruptible wait doesn't block
+        sub._stop_event = MagicMock()
+        sub._stop_event.wait.return_value = None
+        sub._stop_event.is_set.return_value = False
 
         # Should not raise — timeout caught by except Exception handler
         sub._run_loop()
@@ -272,3 +276,39 @@ class TestMQTTParseErrorsThreadSafety:
             t.join()
 
         assert sub._parse_errors == 10
+
+
+class TestMQTTSubscriberStopEvent:
+    """Tests for interruptible shutdown via _stop_event."""
+
+    def test_stop_event_initialized(self):
+        """MQTTSubscriber should have a _stop_event threading.Event, initially unset."""
+        import threading
+
+        sub = MQTTSubscriber()
+        assert isinstance(sub._stop_event, threading.Event)
+        assert not sub._stop_event.is_set()
+
+    def test_run_loop_exits_on_stop_event(self):
+        """_run_loop should exit promptly when _stop_event is set mid-backoff."""
+        import socket
+        import time
+        from unittest.mock import MagicMock
+
+        sub = MQTTSubscriber()
+        if not sub.available:
+            pytest.skip("paho-mqtt not available")
+
+        sub._client = MagicMock()
+        sub._client.connect.side_effect = socket.timeout("timed out")
+        sub._running.set()
+
+        # Pre-set stop_event to simulate shutdown during wait
+        sub._stop_event.set()
+
+        start = time.time()
+        sub._run_loop()
+        elapsed = time.time() - start
+
+        # Should exit near-instantly, not wait for full backoff delay
+        assert elapsed < 2.0
