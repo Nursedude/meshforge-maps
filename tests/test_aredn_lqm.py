@@ -1,8 +1,11 @@
 """Tests for AREDN LQM neighbor resolution."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from src.collectors.aredn_collector import AREDNCollector
+from src.collectors.aggregator import DataAggregator
 
 
 class TestLQMNeighborParsing:
@@ -161,3 +164,60 @@ class TestAREDNSysinfoLQMIntegration:
         assert links[0]["snr"] == 25.0
         assert links[1]["target"] == "AB1CDE-OMNI"
         assert links[1]["snr"] == 18.0
+
+
+class TestPartialTopologyLinks:
+    """Tests for partial (unresolved) AREDN topology links in GeoJSON."""
+
+    def test_partial_link_included_with_null_geometry(self):
+        """Links with one unresolved endpoint should appear with null geometry."""
+        config = {
+            "enable_meshtastic": False,
+            "enable_reticulum": False,
+            "enable_hamclock": False,
+            "enable_aredn": True,
+            "enable_noaa_alerts": False,
+        }
+        aggregator = DataAggregator(config)
+
+        # Inject a mock AREDN collector with partial links
+        mock_aredn = MagicMock()
+        mock_aredn.get_topology_links.return_value = [
+            # Full link (both endpoints resolved)
+            {
+                "source": "nodeA",
+                "target": "nodeB",
+                "source_lat": 34.0, "source_lon": -118.0,
+                "target_lat": 34.1, "target_lon": -118.1,
+                "snr": 20.0,
+                "quality": 100,
+                "link_type": "RF",
+            },
+            # Partial link (target not resolved)
+            {
+                "source": "nodeA",
+                "target": "nodeC",
+                "quality": 85,
+                "link_type": "RF",
+            },
+        ]
+        aggregator._collectors["aredn"] = mock_aredn
+
+        topo = aggregator.get_topology_geojson()
+        features = topo["features"]
+
+        # Should have both links
+        assert len(features) == 2
+
+        # Find the partial link
+        partial = [f for f in features if f["properties"].get("partial")]
+        assert len(partial) == 1
+        assert partial[0]["geometry"] is None
+        assert partial[0]["properties"]["source"] == "nodeA"
+        assert partial[0]["properties"]["target"] == "nodeC"
+        assert partial[0]["properties"]["network"] == "aredn"
+
+        # Find the full link
+        full = [f for f in features if not f["properties"].get("partial")]
+        assert len(full) == 1
+        assert full[0]["geometry"]["type"] == "LineString"

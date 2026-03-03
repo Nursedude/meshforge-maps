@@ -468,9 +468,9 @@ class TestCooldownCleanup:
         engine.evaluate_node("!new", {"battery": 10}, now=90000.0)
 
         # Old entry (t=1000) is >24h stale, should be removed
-        assert "!old:test" not in engine._cooldowns
+        assert "!old||test" not in engine._cooldowns
         # New entry should exist
-        assert "!new:test" in engine._cooldowns
+        assert "!new||test" in engine._cooldowns
 
     def test_recent_cooldowns_preserved(self):
         """Cooldown entries less than 24h old should be kept."""
@@ -490,7 +490,7 @@ class TestCooldownCleanup:
         engine.evaluate_node("!other", {"battery": 10}, now=90000.0)
 
         # Recent entry should still exist
-        assert "!recent:test" in engine._cooldowns
+        assert "!recent||test" in engine._cooldowns
 
 
 # ---------------------------------------------------------------------------
@@ -505,4 +505,37 @@ class TestAlertMessage:
         for a in alerts:
             assert "!abc123" in a.message
             assert a.metric in a.message
+
+
+# ---------------------------------------------------------------------------
+# AlertEngine — cooldown key collision safety
+# ---------------------------------------------------------------------------
+
+class TestCooldownKeyCollision:
+    """Ensure cooldown keys don't collide when node IDs contain colons."""
+
+    def test_colon_in_node_id_no_collision(self):
+        """Two different node IDs containing colons should have independent cooldowns."""
+        engine = AlertEngine()
+        engine.clear_cooldowns()
+        # Two different IPv6-like node IDs
+        alerts1 = engine.evaluate_node("fe80::1:abc", {"battery": 5}, now=1000.0)
+        alerts2 = engine.evaluate_node("fe80::1", {"battery": 5}, now=1000.0)
+        # Both should fire (independent nodes, independent cooldowns)
+        assert len(alerts1) > 0
+        assert len(alerts2) > 0
+        # Total should be sum of both (no collision suppression)
+        assert len(alerts1) + len(alerts2) >= 2
+
+    def test_offline_alert_colon_node_id(self):
+        """Offline alert cooldown should work correctly with colon-containing IDs."""
+        engine = AlertEngine()
+        engine.clear_cooldowns()
+        alert1 = engine.evaluate_offline("fe80::1", last_seen=0, now=5000.0)
+        alert2 = engine.evaluate_offline("fe80::1:abc", last_seen=0, now=5000.0)
+        assert alert1 is not None
+        assert alert2 is not None
+        # They should be independent alerts, not suppressed by cooldown collision
+        assert alert1.node_id == "fe80::1"
+        assert alert2.node_id == "fe80::1:abc"
 

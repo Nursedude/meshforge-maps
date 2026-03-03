@@ -195,8 +195,21 @@ class DataAggregator:
         aredn = self._collectors.get("aredn")
         if aredn and hasattr(aredn, "get_topology_links"):
             for link in aredn.get_topology_links():
-                # Only include links with resolved coordinates
+                # Include partially-resolved links as metadata-only features
                 if "source_lat" not in link or "target_lat" not in link:
+                    partial_feature = {
+                        "type": "Feature",
+                        "geometry": None,  # GeoJSON allows null geometry
+                        "properties": {
+                            "source": link.get("source", ""),
+                            "target": link.get("target", ""),
+                            "network": "aredn",
+                            "link_type": link.get("link_type", ""),
+                            "quality": link.get("quality"),
+                            "partial": True,
+                        },
+                    }
+                    result["features"].append(partial_feature)
                     continue
                 snr = link.get("snr")
                 quality_label, color = _classify_snr(snr)
