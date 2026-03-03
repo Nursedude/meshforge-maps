@@ -325,7 +325,7 @@ class AlertEngine:
                 continue
 
             # Cooldown check
-            cooldown_key = f"{node_id}:{rule.rule_id}"
+            cooldown_key = f"{node_id}||{rule.rule_id}"
             with self._lock:
                 last_fired = self._cooldowns.get(cooldown_key, 0)
                 if now - last_fired < rule.cooldown:
@@ -388,7 +388,7 @@ class AlertEngine:
         if age <= offline_threshold:
             return None
 
-        cooldown_key = f"{node_id}:node_offline"
+        cooldown_key = f"{node_id}||node_offline"
         with self._lock:
             last_fired = self._cooldowns.get(cooldown_key, 0)
             if now - last_fired < DEFAULT_COOLDOWN:

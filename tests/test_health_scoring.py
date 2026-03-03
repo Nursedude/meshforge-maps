@@ -337,9 +337,24 @@ class TestScorerCache:
         scorer.score_node("n1", {"battery": 80}, now=1000.0)
         scorer.score_node("n2", {"battery": 80}, now=2000.0)
         scorer.score_node("n3", {"battery": 80}, now=3000.0)
-        # At capacity (3), adding n4 should evict n1 (oldest)
+        # At capacity (3), adding n4 should evict n1 (least recently accessed)
         scorer.score_node("n4", {"battery": 80}, now=4000.0)
         assert scorer.get_node_score("n1") is None
+        assert scorer.get_node_score("n4") is not None
+        assert scorer.scored_node_count == 3
+
+    def test_eviction_lru_access_preserves_node(self, scorer):
+        """Accessing a node via get_node_score updates its LRU timestamp,
+        preventing eviction even if it was scored earliest."""
+        scorer.score_node("n1", {"battery": 80}, now=1000.0)
+        scorer.score_node("n2", {"battery": 80}, now=2000.0)
+        scorer.score_node("n3", {"battery": 80}, now=3000.0)
+        # Access n1 — this should update its last_accessed time
+        scorer.get_node_score("n1")
+        # Adding n4 at capacity should evict n2 (least recently accessed), not n1
+        scorer.score_node("n4", {"battery": 80}, now=5000.0)
+        assert scorer.get_node_score("n1") is not None  # preserved by access
+        assert scorer.get_node_score("n2") is None  # evicted (least recently accessed)
         assert scorer.get_node_score("n4") is not None
         assert scorer.scored_node_count == 3
 
