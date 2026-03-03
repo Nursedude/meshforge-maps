@@ -111,6 +111,10 @@ class MapDataClient:
         """Fetch topology as GeoJSON with link quality data."""
         return self._get("/api/topology/geojson")
 
+    def dependencies_info(self) -> Optional[Dict[str, Any]]:
+        """Fetch dependency version information for the System tab."""
+        return self._get("/api/dependencies")
+
     def is_alive(self) -> bool:
         """Quick liveness check."""
         result = self.health_check()

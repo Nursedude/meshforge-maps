@@ -139,6 +139,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/export/analytics/ranking": "_serve_export_analytics_ranking",
         "/api/weather/alerts": "_serve_weather_alerts",
         "/api/heatmap": "_serve_heatmap",
+        "/api/dependencies": "_serve_dependencies",
     }
 
     # Valid source names for /api/nodes/<source> endpoint
@@ -1052,6 +1053,81 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "websocket": websocket_stats,
             "event_bus": event_bus_stats,
             "alerts": self._ctx.alert_engine.get_summary() if self._ctx.alert_engine else None,
+        })
+
+    # Cache for PyPI latest version (avoid hammering PyPI on every request)
+    _pypi_cache: Dict[str, Any] = {}
+    _pypi_cache_time: float = 0.0
+    _PYPI_CACHE_TTL = 300  # 5 minutes
+
+    def _serve_dependencies(self) -> None:
+        """Serve dependency version information for the System/Upgrade TUI tab."""
+        import importlib.metadata as _meta
+
+        packages = [
+            ("meshtastic", "Protobuf MQTT decoding & local daemon"),
+            ("protobuf", "Protocol buffer serialization"),
+            ("paho-mqtt", "Live MQTT subscription"),
+            ("websockets", "Real-time WebSocket push"),
+            ("pyOpenSSL", "TLS for MQTT connections"),
+            ("cryptography", "Cryptographic backend for TLS"),
+        ]
+
+        results = []
+        for pkg_name, description in packages:
+            try:
+                installed = _meta.version(pkg_name)
+            except _meta.PackageNotFoundError:
+                installed = None
+            results.append({
+                "name": pkg_name,
+                "installed_version": installed,
+                "description": description,
+            })
+
+        # Fetch latest meshtastic version from PyPI (cached)
+        latest_meshtastic = None
+        now = time.time()
+        if (now - MapRequestHandler._pypi_cache_time) > self._PYPI_CACHE_TTL:
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    "https://pypi.org/pypi/meshtastic/json",
+                    headers={"Accept": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    pypi_data = json.loads(resp.read().decode("utf-8"))
+                latest_meshtastic = pypi_data.get("info", {}).get("version")
+                MapRequestHandler._pypi_cache = {"meshtastic": latest_meshtastic}
+                MapRequestHandler._pypi_cache_time = now
+            except Exception as e:
+                logger.debug("PyPI version check failed: %s", e)
+                latest_meshtastic = MapRequestHandler._pypi_cache.get("meshtastic")
+        else:
+            latest_meshtastic = MapRequestHandler._pypi_cache.get("meshtastic")
+
+        # Annotate meshtastic entry with latest version
+        for entry in results:
+            if entry["name"] == "meshtastic":
+                entry["latest_version"] = latest_meshtastic
+                if entry["installed_version"] and latest_meshtastic:
+                    entry["upgrade_available"] = entry["installed_version"] != latest_meshtastic
+                else:
+                    entry["upgrade_available"] = None
+
+        # Build upgrade command
+        upgrade_parts = ["pip install --upgrade"]
+        for entry in results:
+            if entry.get("upgrade_available") is True:
+                upgrade_parts.append(entry["name"])
+        upgrade_cmd = " ".join(upgrade_parts) if len(upgrade_parts) > 2 else None
+        if upgrade_cmd is None and latest_meshtastic:
+            upgrade_cmd = "pip install --upgrade meshtastic protobuf"
+
+        self._send_json({
+            "packages": results,
+            "upgrade_command": upgrade_cmd,
+            "recommended_version": ">=2.5.0",
         })
 
     def _send_json(self, data: Any, status: int = 200) -> None:
