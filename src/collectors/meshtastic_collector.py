@@ -293,4 +293,27 @@ class MeshtasticCollector(BaseCollector):
             heart_bpm=node.get("heart_bpm"),
             spo2=node.get("spo2"),
             body_temperature=node.get("body_temperature"),
+            # Weather / environmental (expanded)
+            wind_direction=node.get("wind_direction"),
+            wind_speed=node.get("wind_speed"),
+            wind_gust=node.get("wind_gust"),
+            rainfall_1h=node.get("rainfall_1h"),
+            rainfall_24h=node.get("rainfall_24h"),
+            soil_moisture=node.get("soil_moisture"),
+            soil_temperature=node.get("soil_temperature"),
+            lux=node.get("lux"),
+            uv_lux=node.get("uv_lux"),
+            radiation=node.get("radiation"),
+            # Power metrics
+            power_ch1_voltage=node.get("power_ch1_voltage"),
+            power_ch1_current=node.get("power_ch1_current"),
+            power_ch2_voltage=node.get("power_ch2_voltage"),
+            power_ch2_current=node.get("power_ch2_current"),
+            # Device stats
+            noise_floor=node.get("noise_floor"),
+            num_online_nodes=node.get("num_online_nodes"),
+            # Map report fields
+            firmware_version=node.get("firmware_version"),
+            region=node.get("region"),
+            modem_preset=node.get("modem_preset"),
         )
