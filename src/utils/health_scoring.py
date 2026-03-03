@@ -92,7 +92,7 @@ class NodeHealthScore:
 
     __slots__ = (
         "node_id", "score", "status", "components",
-        "available_weight", "timestamp",
+        "available_weight", "timestamp", "last_accessed",
     )
 
     def __init__(
@@ -110,6 +110,7 @@ class NodeHealthScore:
         self.components = components
         self.available_weight = available_weight
         self.timestamp = timestamp
+        self.last_accessed = timestamp
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -238,7 +239,10 @@ class NodeHealthScorer:
         """Get cached score for a node."""
         with self._lock:
             entry = self._scores.get(node_id)
-            return entry.to_dict() if entry else None
+            if entry is None:
+                return None
+            entry.last_accessed = time.time()
+            return entry.to_dict()
 
     def get_all_scores(self) -> Dict[str, int]:
         """Return {node_id: score} for all scored nodes."""
@@ -488,11 +492,11 @@ class NodeHealthScorer:
         return (points, detail)
 
     def _evict_oldest_locked(self) -> None:
-        """Evict the node with the oldest score timestamp. Must hold lock."""
+        """Evict the least-recently-accessed node. Must hold lock."""
         if not self._scores:
             return
         oldest_id = min(
             self._scores,
-            key=lambda nid: self._scores[nid].timestamp,
+            key=lambda nid: self._scores[nid].last_accessed,
         )
         del self._scores[oldest_id]

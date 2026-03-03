@@ -1,6 +1,7 @@
 """Tests for individual data collectors."""
 
 import json
+import subprocess
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
@@ -256,6 +257,24 @@ class TestReticulumCollector:
         mock_run.side_effect = FileNotFoundError
         c = ReticulumCollector()
         assert c._fetch_from_rnstatus() == []
+
+    @patch("subprocess.run")
+    def test_fetch_from_rnstatus_timeout_logged(self, mock_run):
+        """TimeoutExpired should be caught gracefully, not crash."""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="rnstatus", timeout=10)
+        c = ReticulumCollector()
+        result = c._fetch_from_rnstatus()
+        assert result == []
+
+    @patch("subprocess.run")
+    def test_fetch_from_rnstatus_nonzero_with_stderr(self, mock_run):
+        """Non-zero return code should return empty without crashing."""
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="RNS daemon not running"
+        )
+        c = ReticulumCollector()
+        result = c._fetch_from_rnstatus()
+        assert result == []
 
 
 # ==========================================================================

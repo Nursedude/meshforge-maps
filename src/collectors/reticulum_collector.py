@@ -105,7 +105,9 @@ class ReticulumCollector(BaseCollector):
                 timeout=10,
             )
             if result.returncode != 0:
-                logger.debug("rnstatus not available or failed")
+                if result.stderr:
+                    logger.debug("rnstatus stderr: %s", result.stderr.strip()[:200])
+                logger.debug("rnstatus not available or failed (rc=%d)", result.returncode)
                 return features
 
             data = json.loads(result.stdout)
@@ -115,9 +117,11 @@ class ReticulumCollector(BaseCollector):
                 if feature:
                     features.append(feature)
             logger.debug("rnstatus returned %d interfaces", len(features))
+        except subprocess.TimeoutExpired:
+            logger.warning("rnstatus timed out after 10s — Reticulum data may be stale")
         except FileNotFoundError:
             logger.debug("rnstatus command not found")
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.debug("rnstatus failed: %s", e)
         return features
 

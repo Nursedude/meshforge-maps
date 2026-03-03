@@ -508,3 +508,61 @@ class TestCoordinateBuildUp:
 
         collector._fetch()
         assert "nodeB" not in collector._node_coords
+
+
+class TestIPv6AddressHandling:
+    """Tests for correct IPv6 address detection in AREDN node queries."""
+
+    @pytest.fixture
+    def collector(self):
+        return AREDNCollector(cache_ttl_seconds=0)
+
+    @patch("src.collectors.aredn_collector.urlopen")
+    def test_bare_ipv6_wrapped_in_brackets(self, mock_urlopen, collector):
+        """Bare IPv6 like '::1' should become '[::1]:8080'."""
+        mock_urlopen.side_effect = URLError("test")
+        collector._fetch_from_node("::1")
+        # Check first URL attempted (new API endpoint)
+        first_url = mock_urlopen.call_args_list[0][0][0].full_url
+        assert "[::1]:8080" in first_url
+
+    @patch("src.collectors.aredn_collector.urlopen")
+    def test_bare_ipv6_link_local(self, mock_urlopen, collector):
+        """Link-local IPv6 like 'fe80::1' should become '[fe80::1]:8080'."""
+        mock_urlopen.side_effect = URLError("test")
+        collector._fetch_from_node("fe80::1")
+        first_url = mock_urlopen.call_args_list[0][0][0].full_url
+        assert "[fe80::1]:8080" in first_url
+
+    @patch("src.collectors.aredn_collector.urlopen")
+    def test_bracketed_ipv6_with_port_unchanged(self, mock_urlopen, collector):
+        """'[::1]:9090' already has port — should not add :8080."""
+        mock_urlopen.side_effect = URLError("test")
+        collector._fetch_from_node("[::1]:9090")
+        first_url = mock_urlopen.call_args_list[0][0][0].full_url
+        assert "[::1]:9090" in first_url
+        assert "8080" not in first_url
+
+    @patch("src.collectors.aredn_collector.urlopen")
+    def test_hostname_gets_default_port(self, mock_urlopen, collector):
+        """Plain hostname should get :8080 appended."""
+        mock_urlopen.side_effect = URLError("test")
+        collector._fetch_from_node("mynode.local.mesh")
+        first_url = mock_urlopen.call_args_list[0][0][0].full_url
+        assert "mynode.local.mesh:8080" in first_url
+
+    @patch("src.collectors.aredn_collector.urlopen")
+    def test_ipv4_with_port_unchanged(self, mock_urlopen, collector):
+        """'192.168.1.1:8080' already has port — should not double-add."""
+        mock_urlopen.side_effect = URLError("test")
+        collector._fetch_from_node("192.168.1.1:8080")
+        first_url = mock_urlopen.call_args_list[0][0][0].full_url
+        assert "192.168.1.1:8080" in first_url
+
+    @patch("src.collectors.aredn_collector.urlopen")
+    def test_ipv4_without_port(self, mock_urlopen, collector):
+        """'192.168.1.1' should get :8080 appended."""
+        mock_urlopen.side_effect = URLError("test")
+        collector._fetch_from_node("192.168.1.1")
+        first_url = mock_urlopen.call_args_list[0][0][0].full_url
+        assert "192.168.1.1:8080" in first_url
