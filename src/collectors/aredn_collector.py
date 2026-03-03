@@ -18,6 +18,7 @@ See: https://docs.arednmesh.org/en/latest/arednHow-toGuides/devtools.html
 
 import json
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -37,6 +38,12 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Detect whether a target string already includes an explicit port.
+# Matches "[::1]:8080" (bracketed IPv6+port) or "host:8080" / "1.2.3.4:8080"
+# (non-IPv6 host+port).  Must NOT match bare IPv6 like "::1" or "fe80::1".
+_BRACKETED_PORT_RE = re.compile(r"\]:\d+$")          # [::1]:8080
+_SIMPLE_PORT_RE = re.compile(r"^[^:\[]+:\d+$")       # host:8080, 1.2.3.4:8080
 
 # MeshForge AREDN cache
 AREDN_CACHE_PATH = MESHFORGE_DATA_DIR / "aredn_nodes.json"
@@ -126,8 +133,13 @@ class AREDNCollector(BaseCollector):
         features: List[Dict[str, Any]] = []
         links: List[Dict[str, Any]] = []
         # AREDN API runs on port 8080 (not port 80)
-        # Use explicit port check to avoid IPv6 false positives
-        host = target if ":" in target and not target.startswith("[") else f"{target}:8080"
+        # Detect whether target already has a port; wrap bare IPv6 in brackets
+        if _BRACKETED_PORT_RE.search(target) or _SIMPLE_PORT_RE.match(target):
+            host = target  # Already has port (e.g. "node:8080", "[::1]:9090")
+        elif ":" in target:
+            host = f"[{target}]:8080"  # Bare IPv6 — wrap and add port
+        else:
+            host = f"{target}:8080"  # Hostname or IPv4
         headers = {
             "Accept": "application/json",
             "User-Agent": "MeshForge/1.0",

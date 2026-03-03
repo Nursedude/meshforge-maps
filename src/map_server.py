@@ -1209,6 +1209,10 @@ class MapServer:
         # Alert engine for threshold-based monitoring
         self._alert_engine = AlertEngine()
 
+        # Periodic offline node check timer
+        self._offline_check_timer: Optional[threading.Timer] = None
+        self._offline_check_stop = threading.Event()
+
         # Historical analytics (read-only aggregation over history + alerts)
         self._analytics = HistoricalAnalytics(
             node_history=self._node_history,
@@ -1304,6 +1308,9 @@ class MapServer:
                     EventType.NODE_TELEMETRY, self._handle_telemetry_for_alerts,
                 )
 
+                # Start periodic offline node detection
+                self._schedule_offline_check()
+
                 # Start Meshtastic API proxy (non-fatal if it fails)
                 if self._proxy:
                     if not self._proxy.start():
@@ -1366,6 +1373,34 @@ class MapServer:
         # Publish each triggered alert as an ALERT_FIRED event
         for alert in triggered:
             self._publish_alert_event(alert)
+
+    def _schedule_offline_check(self) -> None:
+        """Schedule the next periodic offline node check."""
+        if self._offline_check_stop.is_set():
+            return
+        self._offline_check_timer = threading.Timer(60.0, self._check_offline_nodes)
+        self._offline_check_timer.daemon = True
+        self._offline_check_timer.start()
+
+    def _check_offline_nodes(self) -> None:
+        """Check all tracked nodes for offline transitions and fire alerts."""
+        try:
+            newly_offline = self._node_state.check_offline()
+            for node_id in newly_offline:
+                info = self._node_state.get_node_info(node_id)
+                if not info:
+                    continue
+                last_seen = info.get("last_seen", 0)
+                alert = self._alert_engine.evaluate_offline(
+                    node_id, last_seen=last_seen,
+                )
+                if alert:
+                    self._publish_alert_event(alert)
+        except Exception as e:
+            logger.warning("Offline check failed: %s", e)
+        finally:
+            # Reschedule for the next cycle
+            self._schedule_offline_check()
 
     def _publish_alert_event(self, alert: "Alert") -> None:
         """Publish an alert as an ALERT_FIRED event on the EventBus."""
@@ -1448,6 +1483,11 @@ class MapServer:
 
     def stop(self) -> None:
         """Stop the HTTP server, WebSocket server, and clean up all resources."""
+        # Cancel offline check timer
+        self._offline_check_stop.set()
+        if self._offline_check_timer:
+            self._offline_check_timer.cancel()
+            self._offline_check_timer = None
         if self._proxy:
             self._proxy.stop()
             self._proxy = None
