@@ -40,6 +40,7 @@ from .tabs.alerts import draw_alerts
 from .tabs.propagation import draw_propagation
 from .tabs.topology import draw_topology
 from .tabs.events import draw_events
+from .tabs.system import draw_system
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ REFRESH_INTERVAL = 5
 class TuiApp:
     """Main TUI application controller."""
 
-    TAB_NAMES = ["Dashboard", "Nodes", "Alerts", "Propagation", "Topology", "Events"]
+    TAB_NAMES = ["Dashboard", "Nodes", "Alerts", "Propagation", "Topology", "Events", "System"]
 
     def __init__(self, host: str = "127.0.0.1", port: int = 8808):
         self._client = MapDataClient(host, port)
@@ -193,6 +194,8 @@ class TuiApp:
             elif tab == 4:  # Topology
                 new_cache["topo"] = self._client.topology_geojson()
                 new_cache["nodes"] = self._client.nodes_geojson()
+            elif tab == 6:  # System
+                new_cache["dependencies"] = self._client.dependencies_info()
 
             with self._data_lock:
                 self._cache.update(new_cache)
@@ -251,7 +254,7 @@ class TuiApp:
                 return
 
         # Tab switching by number (1-6)
-        tab_keys = [ord("1"), ord("2"), ord("3"), ord("4"), ord("5"), ord("6")]
+        tab_keys = [ord("1"), ord("2"), ord("3"), ord("4"), ord("5"), ord("6"), ord("7")]
         if key in tab_keys:
             new_tab = tab_keys.index(key)
             if new_tab < len(self.TAB_NAMES) and new_tab != self._active_tab:
@@ -446,6 +449,8 @@ class TuiApp:
                 self._safe_draw_tab(self._draw_topology, content_top, content_height, cols, cache)
             elif tab == 5:
                 self._safe_draw_tab(self._draw_events, content_top, content_height, cols)
+            elif tab == 6:
+                self._safe_draw_tab(self._draw_system, content_top, content_height, cols, cache)
 
         self._stdscr.refresh()
 
@@ -511,7 +516,7 @@ class TuiApp:
                         filter_str, attr)
 
         # Right: keybindings hint
-        hint = "q:Quit  r:Refresh  /:Search  1-6:Tab  j/k:Scroll"
+        hint = "q:Quit  r:Refresh  /:Search  1-7:Tab  j/k:Scroll"
         safe_addstr(self._stdscr, y, cols - len(hint) - 2, hint, attr)
 
     # ── Tab drawing delegates ─────────────────────────────────────
@@ -567,6 +572,11 @@ class TuiApp:
                     self._scroll[5], events, ws_connected,
                     self._events_paused, self._event_type_filter,
                     self._search_query)
+
+    def _draw_system(self, top: int, height: int, cols: int,
+                     cache: Dict[str, Any]) -> None:
+        draw_system(self._stdscr, top, height, cols, cache,
+                    self._scroll[6])
 
     # ── WebSocket Client ──────────────────────────────────────────
 
