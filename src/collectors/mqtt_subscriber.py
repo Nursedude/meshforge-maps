@@ -695,6 +695,8 @@ class MQTTSubscriber:
             self._handle_telemetry(from_node, decoded.payload)
         elif portnum == PORTNUM_NEIGHBORINFO:
             self._handle_neighborinfo(from_node, decoded.payload)
+        elif portnum == PORTNUM_MAP_REPORT:
+            self._handle_map_report(from_node, decoded.payload)
 
     def _handle_position(self, node_id: str, payload: bytes) -> None:
         from .base import validate_coordinates
@@ -754,7 +756,7 @@ class MQTTSubscriber:
                 air_util_tx=air_util_tx,
             )
 
-        # Environmental sensors (temperature, humidity, pressure, IAQ)
+        # Environmental sensors (temperature, humidity, pressure, IAQ, wind, rain, soil, light)
         if telem.HasField("environment_metrics"):
             em = telem.environment_metrics
             temperature = _safe_float(
@@ -773,6 +775,18 @@ class MQTTSubscriber:
                 humidity=humidity,
                 pressure=pressure,
                 iaq=iaq,
+                wind_direction=_safe_int(getattr(em, "wind_direction", None), 0, 360),
+                wind_speed=_safe_float(getattr(em, "wind_speed", None), 0.0, 200.0),
+                wind_gust=_safe_float(getattr(em, "wind_gust", None), 0.0, 200.0),
+                wind_lull=_safe_float(getattr(em, "wind_lull", None), 0.0, 200.0),
+                rainfall_1h=_safe_float(getattr(em, "rainfall_1h", None), 0.0, 500.0),
+                rainfall_24h=_safe_float(getattr(em, "rainfall_24h", None), 0.0, 2000.0),
+                soil_moisture=_safe_float(getattr(em, "soil_moisture", None), 0.0, 100.0),
+                soil_temperature=_safe_float(getattr(em, "soil_temperature", None), -50.0, 100.0),
+                lux=_safe_float(getattr(em, "lux", None), 0.0, 200000.0),
+                uv_lux=_safe_float(getattr(em, "uv_lux", None), 0.0, 100000.0),
+                radiation=_safe_float(getattr(em, "radiation", None), 0.0, 100000.0),
+                distance=_safe_float(getattr(em, "distance", None), 0.0, 100000.0),
             )
 
         # Air quality sensors (PM2.5, PM10, CO2, VOC, NOx)
@@ -803,6 +817,42 @@ class MQTTSubscriber:
                 ),
             )
 
+        # Power metrics (multi-channel voltage/current monitoring)
+        if telem.HasField("power_metrics"):
+            pm = telem.power_metrics
+            self._store.update_telemetry(
+                node_id,
+                power_ch1_voltage=_safe_float(getattr(pm, "ch1_voltage", None), 0.0, 1000.0),
+                power_ch1_current=_safe_float(getattr(pm, "ch1_current", None), -1000.0, 1000.0),
+                power_ch2_voltage=_safe_float(getattr(pm, "ch2_voltage", None), 0.0, 1000.0),
+                power_ch2_current=_safe_float(getattr(pm, "ch2_current", None), -1000.0, 1000.0),
+                power_ch3_voltage=_safe_float(getattr(pm, "ch3_voltage", None), 0.0, 1000.0),
+                power_ch3_current=_safe_float(getattr(pm, "ch3_current", None), -1000.0, 1000.0),
+            )
+
+        # Local device stats (packet counters, noise floor)
+        if telem.HasField("local_stats"):
+            ls = telem.local_stats
+            self._store.update_telemetry(
+                node_id,
+                device_uptime=_safe_int(getattr(ls, "uptime_seconds", None), 0, 2**31),
+                num_packets_tx=_safe_int(getattr(ls, "num_packets_tx", None), 0, 2**31),
+                num_packets_rx=_safe_int(getattr(ls, "num_packets_rx", None), 0, 2**31),
+                num_packets_rx_bad=_safe_int(getattr(ls, "num_packets_rx_bad", None), 0, 2**31),
+                num_online_nodes=_safe_int(getattr(ls, "num_online_nodes", None), 0, 100000),
+                num_total_nodes=_safe_int(getattr(ls, "num_total_nodes", None), 0, 100000),
+                noise_floor=_safe_float(getattr(ls, "noise_floor", None), -200.0, 0.0),
+            )
+
+        # Host system metrics (for Linux/Pi-based nodes)
+        if telem.HasField("host_metrics"):
+            hom = telem.host_metrics
+            self._store.update_telemetry(
+                node_id,
+                host_uptime=_safe_int(getattr(hom, "uptime_seconds", None), 0, 2**31),
+                host_freemem=_safe_int(getattr(hom, "freemem_bytes", None), 0, 2**40),
+            )
+
         self._notify_update(node_id, "telemetry")
 
     def _handle_neighborinfo(self, node_id: str, payload: bytes) -> None:
@@ -818,6 +868,40 @@ class MQTTSubscriber:
             })
         self._store.update_neighbors(node_id, neighbors)
         self._notify_update(node_id, "topology", neighbor_count=len(neighbors))
+
+    def _handle_map_report(self, node_id: str, payload: bytes) -> None:
+        """Handle MAP_REPORT_APP — self-reported node info broadcast."""
+        mqtt_pb2 = self._proto["mqtt_pb2"]
+        try:
+            report = mqtt_pb2.MapReport()
+        except AttributeError:
+            return  # MapReport not available in this protobuf version
+        report.ParseFromString(payload)
+
+        long_name = getattr(report, "long_name", "")
+        short_name = getattr(report, "short_name", "")
+        hw_model = str(report.hw_model) if getattr(report, "hw_model", None) else ""
+        role = str(report.role) if getattr(report, "role", None) else ""
+        firmware_version = getattr(report, "firmware_version", "")
+        region = str(report.region) if getattr(report, "region", None) else ""
+        modem_preset = str(report.modem_preset) if getattr(report, "modem_preset", None) else ""
+        num_online = _safe_int(getattr(report, "num_online_local_nodes", None), 0, 100000)
+
+        self._store.update_nodeinfo(
+            node_id,
+            long_name=long_name,
+            short_name=short_name,
+            hw_model=hw_model,
+            role=role,
+        )
+        self._store.update_telemetry(
+            node_id,
+            firmware_version=firmware_version or None,
+            region=region or None,
+            modem_preset=modem_preset or None,
+            num_online_local_nodes=num_online,
+        )
+        self._notify_update(node_id, "nodeinfo", long_name=long_name, short_name=short_name)
 
     def _decode_json(self, payload: bytes, topic: str) -> None:
         """Fallback: try to decode as JSON (when device has JSON MQTT enabled)."""
