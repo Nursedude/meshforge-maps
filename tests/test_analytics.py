@@ -371,3 +371,48 @@ class TestAnalyticsIntegration:
 
         trends = analytics.alert_trends()
         assert trends["total_alerts"] > 0
+
+
+class TestSlowQueryLogging:
+    """Tests for slow query logging."""
+
+    def test_slow_queries_initially_empty(self):
+        analytics = HistoricalAnalytics()
+        assert analytics.get_slow_queries() == []
+
+    def test_slow_queries_captured(self, populated_db):
+        analytics = HistoricalAnalytics(node_history=populated_db)
+        # Set threshold to 0 so all queries are "slow"
+        analytics._slow_query_threshold_ms = 0.0
+        analytics.network_growth()
+        slow = analytics.get_slow_queries()
+        assert len(slow) >= 1
+        assert "query" in slow[0]
+        assert "duration_ms" in slow[0]
+        assert "timestamp" in slow[0]
+        assert "row_count" in slow[0]
+
+    def test_slow_queries_bounded(self, populated_db):
+        analytics = HistoricalAnalytics(node_history=populated_db)
+        analytics._slow_query_threshold_ms = 0.0
+        # Run enough queries to exceed deque maxlen
+        for _ in range(60):
+            analytics.network_growth()
+        slow = analytics.get_slow_queries()
+        assert len(slow) <= 50
+
+    def test_fast_queries_not_logged(self, populated_db):
+        analytics = HistoricalAnalytics(node_history=populated_db)
+        # Default threshold is 100ms — typical queries are faster
+        analytics._slow_query_threshold_ms = 100000.0  # 100 seconds
+        analytics.network_growth()
+        slow = analytics.get_slow_queries()
+        assert len(slow) == 0
+
+    def test_query_text_truncated(self, populated_db):
+        analytics = HistoricalAnalytics(node_history=populated_db)
+        analytics._slow_query_threshold_ms = 0.0
+        analytics.network_growth()
+        slow = analytics.get_slow_queries()
+        assert len(slow) >= 1
+        assert len(slow[0]["query"]) <= 200

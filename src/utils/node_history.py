@@ -65,12 +65,35 @@ class NodeHistoryDB:
         conn = None
         try:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(
-                str(self._db_path),
-                check_same_thread=False,
-            )
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
+            conn = self._open_connection()
+
+            # Integrity check — rotate corrupt databases
+            try:
+                result = conn.execute("PRAGMA integrity_check").fetchone()
+                if result and result[0] != "ok":
+                    logger.critical(
+                        "Database integrity check failed: %s — rotating corrupt DB",
+                        result[0],
+                    )
+                    conn.close()
+                    corrupt_path = self._db_path.with_suffix(
+                        f".db.corrupt.{int(time.time())}"
+                    )
+                    self._db_path.rename(corrupt_path)
+                    logger.critical("Corrupt DB moved to %s", corrupt_path)
+                    conn = self._open_connection()
+            except sqlite3.DatabaseError as e:
+                logger.critical("Cannot check DB integrity: %s — re-creating", e)
+                conn.close()
+                corrupt_path = self._db_path.with_suffix(
+                    f".db.corrupt.{int(time.time())}"
+                )
+                try:
+                    self._db_path.rename(corrupt_path)
+                except OSError:
+                    self._db_path.unlink(missing_ok=True)
+                conn = self._open_connection()
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS observations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,6 +127,22 @@ class NodeHistoryDB:
                 except Exception:
                     pass
             self._conn = None
+
+    def _open_connection(self) -> sqlite3.Connection:
+        """Open a SQLite connection with standard PRAGMAs."""
+        conn = sqlite3.connect(
+            str(self._db_path), check_same_thread=False,
+        )
+        try:
+            # auto_vacuum must be set BEFORE journal_mode=WAL, which
+            # initializes the DB and locks in the vacuum mode.
+            conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        except Exception:
+            conn.close()
+            raise
+        return conn
 
     def execute_read(self, query: str, params: tuple = ()) -> list:
         """Execute a read-only query under the DB lock. Returns list of rows."""
@@ -393,6 +432,10 @@ class NodeHistoryDB:
                 deleted = cursor.rowcount
                 if deleted:
                     logger.info("Pruned %d old node history observations", deleted)
+                    try:
+                        self._conn.execute("PRAGMA incremental_vacuum(100)")
+                    except Exception as ve:
+                        logger.debug("Incremental vacuum failed: %s", ve)
                 return deleted
             except Exception as e:
                 logger.error("Prune failed: %s", e)
@@ -488,6 +531,22 @@ class NodeHistoryDB:
                 return []
 
         return [(r[0], r[1], r[2]) for r in rows]
+
+    def create_backup(self, backup_path: Path) -> bool:
+        """Create an online SQLite backup at the given path."""
+        with self._lock:
+            if not self._conn:
+                return False
+            try:
+                backup_path.parent.mkdir(parents=True, exist_ok=True)
+                backup_conn = sqlite3.connect(str(backup_path))
+                self._conn.backup(backup_conn)
+                backup_conn.close()
+                logger.info("DB backup created at %s", backup_path)
+                return True
+            except Exception as e:
+                logger.error("Backup failed: %s", e)
+                return False
 
     def close(self) -> None:
         """Close the database connection."""
