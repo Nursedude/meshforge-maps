@@ -236,3 +236,52 @@ class TestConfigKeyPersistence:
         assert cfg2.get("meshtastic_proxy_port") == 5500
 
 
+class TestAtomicConfigWrite:
+    """Tests for atomic config file writing (Step 10)."""
+
+    def test_save_creates_backup(self, tmp_config):
+        """Saving an existing config creates a .bak file."""
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.set("http_port", 9999)
+        cfg.save()  # First save creates the file
+        cfg.set("http_port", 8888)
+        cfg.save()  # Second save should create .bak
+
+        bak_path = tmp_config.with_suffix(".json.bak")
+        assert bak_path.exists()
+
+        # .bak should contain the old value (9999)
+        import json
+        with open(bak_path) as f:
+            bak_data = json.load(f)
+        assert bak_data["http_port"] == 9999
+
+    def test_atomic_write_produces_valid_json(self, tmp_config):
+        """After atomic write, the config file is valid JSON."""
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.set("http_port", 7777)
+        cfg.save()
+
+        import json
+        with open(tmp_config) as f:
+            data = json.load(f)
+        assert data["http_port"] == 7777
+
+    def test_no_temp_files_left_on_success(self, tmp_config):
+        """Successful save leaves no temp files behind."""
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.save()
+
+        parent = tmp_config.parent
+        temp_files = list(parent.glob(".settings_*.tmp"))
+        assert len(temp_files) == 0
+
+    def test_original_intact_if_no_first_save(self, tmp_config):
+        """First save with no existing file does not create .bak."""
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.save()
+
+        bak_path = tmp_config.with_suffix(".json.bak")
+        assert not bak_path.exists()
+
+

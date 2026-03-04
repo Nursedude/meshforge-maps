@@ -539,3 +539,125 @@ class TestCooldownKeyCollision:
         assert alert1.node_id == "fe80::1"
         assert alert2.node_id == "fe80::1:abc"
 
+
+class TestAlertEscalation:
+    """Tests for alert escalation chains."""
+
+    def _make_escalation_rule(self, escalation_after=60.0):
+        return AlertRule(
+            rule_id="esc_test",
+            alert_type=AlertType.BATTERY_LOW,
+            severity=AlertSeverity.WARNING,
+            metric="battery",
+            operator="lte",
+            threshold=20.0,
+            cooldown=10.0,
+            escalation_after=escalation_after,
+        )
+
+    def test_escalation_after_window(self):
+        """Alert escalates after escalation_after seconds."""
+        rule = self._make_escalation_rule(escalation_after=60.0)
+        engine = AlertEngine(rules=[rule])
+        engine.clear_cooldowns()
+
+        # Fire initial alert at t=1000
+        alerts = engine.evaluate_node(
+            "!node1", {"battery": 10}, now=1000.0,
+        )
+        assert len(alerts) == 1
+        assert alerts[0].severity == "warning"
+        assert alerts[0].escalation_level == 0
+
+        # At t=1050 (before escalation window), no escalation
+        engine.clear_cooldowns()
+        alerts2 = engine.evaluate_node(
+            "!node1", {"battery": 10}, now=1050.0,
+        )
+        # Should get a new base alert but NO escalation (50s < 60s)
+        escalated = [a for a in alerts2 if a.escalation_level > 0]
+        assert len(escalated) == 0
+
+        # At t=1070 (past escalation window for original alert), escalation fires
+        engine.clear_cooldowns()
+        alerts3 = engine.evaluate_node(
+            "!node1", {"battery": 10}, now=1070.0,
+        )
+        escalated = [a for a in alerts3 if a.escalation_level > 0]
+        assert len(escalated) >= 1
+        assert escalated[0].severity == "critical"  # WARNING -> CRITICAL
+        assert escalated[0].escalation_level == 1
+
+    def test_no_escalation_when_disabled(self):
+        """Rules without escalation_after do not escalate."""
+        rule = AlertRule(
+            rule_id="no_esc",
+            alert_type=AlertType.BATTERY_LOW,
+            severity=AlertSeverity.WARNING,
+            metric="battery",
+            operator="lte",
+            threshold=20.0,
+            escalation_after=None,
+        )
+        engine = AlertEngine(rules=[rule])
+        engine.clear_cooldowns()
+
+        engine.evaluate_node("!n", {"battery": 5}, now=1000.0)
+        engine.clear_cooldowns()
+        alerts = engine.evaluate_node("!n", {"battery": 5}, now=2000.0)
+        escalated = [a for a in alerts if a.escalation_level > 0]
+        assert len(escalated) == 0
+
+    def test_critical_does_not_promote_further(self):
+        """CRITICAL severity stays CRITICAL on escalation."""
+        rule = AlertRule(
+            rule_id="crit",
+            alert_type=AlertType.BATTERY_CRITICAL,
+            severity=AlertSeverity.CRITICAL,
+            metric="battery",
+            operator="lte",
+            threshold=5.0,
+            cooldown=10.0,
+            escalation_after=30.0,
+        )
+        engine = AlertEngine(rules=[rule])
+        engine.clear_cooldowns()
+
+        engine.evaluate_node("!n", {"battery": 1}, now=1000.0)
+        engine.clear_cooldowns()
+        alerts = engine.evaluate_node("!n", {"battery": 1}, now=1050.0)
+        escalated = [a for a in alerts if a.escalation_level > 0]
+        if escalated:
+            assert escalated[0].severity == "critical"
+
+    def test_acknowledged_alerts_not_escalated(self):
+        """Acknowledged alerts should not trigger escalation."""
+        rule = self._make_escalation_rule(escalation_after=30.0)
+        engine = AlertEngine(rules=[rule])
+        engine.clear_cooldowns()
+
+        alerts = engine.evaluate_node("!n", {"battery": 5}, now=1000.0)
+        assert len(alerts) == 1
+        engine.acknowledge(alerts[0].alert_id)
+
+        engine.clear_cooldowns()
+        alerts2 = engine.evaluate_node("!n", {"battery": 5}, now=1050.0)
+        escalated = [a for a in alerts2 if a.escalation_level > 0]
+        assert len(escalated) == 0
+
+    def test_escalation_level_in_to_dict(self):
+        """Alert.to_dict() includes escalation_level."""
+        rule = self._make_escalation_rule()
+        engine = AlertEngine(rules=[rule])
+        engine.clear_cooldowns()
+        alerts = engine.evaluate_node("!n", {"battery": 5}, now=1000.0)
+        d = alerts[0].to_dict()
+        assert "escalation_level" in d
+        assert d["escalation_level"] == 0
+
+    def test_escalation_after_in_rule_to_dict(self):
+        """AlertRule.to_dict() includes escalation_after."""
+        rule = self._make_escalation_rule(escalation_after=120.0)
+        d = rule.to_dict()
+        assert d["escalation_after"] == 120.0
+
