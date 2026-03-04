@@ -17,6 +17,7 @@ Thread-safe: delegates to NodeHistoryDB and AlertEngine which hold their own loc
 
 import logging
 import time
+from collections import deque
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ class HistoricalAnalytics:
     def __init__(self, node_history=None, alert_engine=None):
         self._history = node_history
         self._alert_engine = alert_engine
+        self._slow_queries: deque = deque(maxlen=50)
+        self._slow_query_threshold_ms = 100.0
 
     def network_growth(
         self,
@@ -85,7 +88,7 @@ class HistoricalAnalytics:
             ORDER BY bucket_start ASC
         """
 
-        rows = self._history.execute_read(
+        rows = self._timed_read(
             query, (bucket_seconds, bucket_seconds, since, until)
         )
 
@@ -137,7 +140,7 @@ class HistoricalAnalytics:
             ORDER BY hour ASC
         """
 
-        rows = self._history.execute_read(query, (since, until))
+        rows = self._timed_read(query, (since, until))
 
         hours = [0] * 24
         for hour, count in rows:
@@ -183,7 +186,7 @@ class HistoricalAnalytics:
             LIMIT ?
         """
 
-        rows = self._history.execute_read(query, (since, limit))
+        rows = self._timed_read(query, (since, limit))
 
         nodes = []
         for row in rows:
@@ -237,8 +240,8 @@ class HistoricalAnalytics:
             ORDER BY node_count DESC
         """
 
-        totals_rows = self._history.execute_read(query_totals, (since,))
-        network_rows = self._history.execute_read(query_networks, (since,))
+        totals_rows = self._timed_read(query_totals, (since,))
+        network_rows = self._timed_read(query_networks, (since,))
 
         totals_row = totals_rows[0] if totals_rows else None
         unique_nodes = totals_row[0] if totals_row else 0
@@ -311,3 +314,26 @@ class HistoricalAnalytics:
             "total_alerts": len(alerts),
             "total_buckets": len(buckets),
         }
+
+    def _timed_read(self, query: str, params: tuple = ()) -> list:
+        """Execute a read query with timing and slow-query logging."""
+        if not self._history:
+            return []
+        start = time.monotonic()
+        result = self._history.execute_read(query, params)
+        elapsed_ms = (time.monotonic() - start) * 1000
+        if elapsed_ms > self._slow_query_threshold_ms:
+            logger.warning(
+                "Slow query (%.1fms): %s", elapsed_ms, query.strip()[:200],
+            )
+            self._slow_queries.append({
+                "query": query.strip()[:200],
+                "duration_ms": round(elapsed_ms, 2),
+                "timestamp": time.time(),
+                "row_count": len(result),
+            })
+        return result
+
+    def get_slow_queries(self) -> List[Dict[str, Any]]:
+        """Return recent slow queries."""
+        return list(self._slow_queries)
