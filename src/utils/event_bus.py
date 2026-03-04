@@ -9,12 +9,17 @@ Typed events:
     ServiceEvent - Collector/service health state changes
 """
 
+import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
+
+from .paths import get_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -231,3 +236,92 @@ class EventBus:
         self._total_published = 0
         self._total_delivered = 0
         self._total_errors = 0
+
+
+# Maximum JSONL file size before rotation (10 MB)
+_MAX_LOG_SIZE = 10 * 1024 * 1024
+
+# Maximum data summary length per event
+_MAX_SUMMARY_LEN = 200
+
+
+class FileEventLogger:
+    """Logs EventBus events to a JSONL file with automatic rotation.
+
+    Each event is written as a single JSON line containing event_type,
+    timestamp, source, and a truncated data summary.
+
+    Rotation: when the log exceeds 10 MB, the current file is renamed
+    to ``.1`` and a fresh file is started. Only one rotated generation
+    is kept.
+    """
+
+    def __init__(self, log_path: Optional[Path] = None) -> None:
+        self._log_path = log_path or (get_data_dir() / "events.jsonl")
+        self._lock = threading.Lock()
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._events_written = 0
+
+    def log_event(self, event: Event) -> None:
+        """Serialize and append one event to the JSONL log."""
+        try:
+            data_summary = str(event.data)[:_MAX_SUMMARY_LEN]
+            record = {
+                "event_type": event.event_type.value,
+                "timestamp": event.timestamp,
+                "source": event.source,
+                "summary": data_summary,
+            }
+            line = json.dumps(record, default=str) + "\n"
+        except Exception as e:
+            logger.debug("Event serialization failed: %s", e)
+            return
+
+        with self._lock:
+            self._maybe_rotate()
+            try:
+                with open(self._log_path, "a") as f:
+                    f.write(line)
+                self._events_written += 1
+            except OSError as e:
+                logger.debug("Event log write failed: %s", e)
+
+    def _maybe_rotate(self) -> None:
+        """Rotate if the log file exceeds the size limit. Must hold lock."""
+        try:
+            if not self._log_path.exists():
+                return
+            size = self._log_path.stat().st_size
+            if size < _MAX_LOG_SIZE:
+                return
+            rotated = self._log_path.with_suffix(".jsonl.1")
+            # Remove old rotated file
+            if rotated.exists():
+                try:
+                    rotated.unlink()
+                except OSError:
+                    pass
+            os.replace(str(self._log_path), str(rotated))
+            logger.info("Rotated event log to %s", rotated)
+        except OSError as e:
+            logger.debug("Event log rotation failed: %s", e)
+
+    @property
+    def events_written(self) -> int:
+        return self._events_written
+
+    @property
+    def log_path(self) -> Path:
+        return self._log_path
+
+
+def enable_event_logging(
+    bus: "EventBus", log_path: Optional[Path] = None,
+) -> FileEventLogger:
+    """Subscribe a FileEventLogger as a wildcard listener on the bus.
+
+    Returns the logger instance so callers can check stats or path.
+    """
+    file_logger = FileEventLogger(log_path=log_path)
+    bus.subscribe(None, file_logger.log_event)
+    return file_logger

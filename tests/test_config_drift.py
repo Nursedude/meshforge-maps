@@ -218,5 +218,75 @@ class TestConfigDriftDetector(unittest.TestCase):
         self.assertEqual(DriftSeverity.CRITICAL.value, "critical")
 
 
+class TestConfigDriftPersistence(unittest.TestCase):
+    """Tests for persistent config drift storage (Step 11)."""
+
+    def test_schema_creation(self):
+        """DB tables are created on init."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "drift.db"
+            detector = ConfigDriftDetector(db_path=db_path)
+            self.assertTrue(db_path.exists())
+            self.assertIsNotNone(detector._db_conn)
+            detector.close()
+
+    def test_persistence_across_instances(self):
+        """Snapshots persist and reload from DB."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "drift.db"
+
+            # First instance: add some data
+            d1 = ConfigDriftDetector(db_path=db_path)
+            d1.check_node("!node1", role="CLIENT", hardware="TBEAM")
+            d1.check_node("!node1", role="ROUTER")  # drift
+            self.assertEqual(d1.tracked_node_count, 1)
+            self.assertEqual(d1.total_drifts, 1)
+            d1.close()
+
+            # Second instance: should see the snapshot
+            d2 = ConfigDriftDetector(db_path=db_path)
+            snap = d2.get_node_snapshot("!node1")
+            self.assertIsNotNone(snap)
+            self.assertEqual(snap["role"], "ROUTER")
+            self.assertEqual(d2.tracked_node_count, 1)
+            d2.close()
+
+    def test_drift_events_persisted(self):
+        """Drift events are written to DB."""
+        import tempfile
+        import sqlite3
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "drift.db"
+            d = ConfigDriftDetector(db_path=db_path)
+            d.check_node("!node1", role="CLIENT")
+            d.check_node("!node1", role="ROUTER")
+            d.close()
+
+            # Read DB directly to verify
+            conn = sqlite3.connect(str(db_path))
+            rows = conn.execute(
+                "SELECT node_id, field, old_value, new_value FROM drift_events"
+            ).fetchall()
+            conn.close()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][0], "!node1")
+            self.assertEqual(rows[0][1], "role")
+
+    def test_close_cleans_up(self):
+        """close() sets connection to None."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "drift.db"
+            d = ConfigDriftDetector(db_path=db_path)
+            d.close()
+            self.assertIsNone(d._db_conn)
+
+
 if __name__ == "__main__":
     unittest.main()

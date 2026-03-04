@@ -8,6 +8,8 @@ Settings persist to ~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 import json
 import logging
 import os
+import shutil
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -138,15 +140,38 @@ class MapsConfig:
             logger.info("No settings file found, using defaults")
 
     def save(self) -> None:
-        """Persist current settings to disk."""
+        """Persist current settings to disk with atomic write."""
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with self._lock:
                 snapshot = dict(self._settings)
+
+            # Create single-generation backup
+            if self._config_path.exists():
+                backup_path = self._config_path.with_suffix(".json.bak")
+                try:
+                    shutil.copy2(str(self._config_path), str(backup_path))
+                except OSError as e:
+                    logger.warning("Failed to create config backup: %s", e)
+
+            # Atomic write: temp file + os.replace()
             old_umask = os.umask(0o077)
             try:
-                with open(self._config_path, "w") as f:
-                    json.dump(snapshot, f, indent=2)
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=str(self._config_path.parent),
+                    prefix=".settings_",
+                    suffix=".tmp",
+                )
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        json.dump(snapshot, f, indent=2)
+                    os.replace(tmp_path, str(self._config_path))
+                except Exception:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
             finally:
                 os.umask(old_umask)
             logger.info("Saved settings to %s", self._config_path)

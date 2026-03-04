@@ -5,6 +5,7 @@ Abstract base class for all data source collectors.
 Each collector outputs standardized GeoJSON FeatureCollections.
 """
 
+import json
 import logging
 import math
 import re
@@ -203,10 +204,14 @@ class BaseCollector(ABC):
 
     source_name: str = "unknown"
 
+    # Maximum age of a persistent cache file to consider valid (4 hours)
+    _PERSISTENT_CACHE_MAX_STALENESS = 14400
+
     def __init__(
         self,
         cache_ttl_seconds: int = 900,
         max_retries: int = 0,
+        persistent_cache: bool = False,
     ):
         self._cache_lock = threading.Lock()
         self._cache: Optional[Dict[str, Any]] = None
@@ -218,6 +223,51 @@ class BaseCollector(ABC):
         self._last_success_time: float = 0
         self._total_collections: int = 0
         self._total_errors: int = 0
+        self._persistent_cache = persistent_cache
+        self._persistent_cache_path = (
+            get_data_dir() / "cache" / f"{self.source_name}.json"
+        )
+        if persistent_cache:
+            self._load_persistent_cache()
+
+    def _load_persistent_cache(self) -> None:
+        """Load cached data from disk on startup if within staleness limit."""
+        try:
+            path = self._persistent_cache_path
+            if not path.exists():
+                return
+            age = time.time() - path.stat().st_mtime
+            if age > self._PERSISTENT_CACHE_MAX_STALENESS:
+                logger.debug(
+                    "%s: persistent cache too stale (%.0fs)", self.source_name, age,
+                )
+                return
+            with open(path, "r") as f:
+                data = json.load(f)
+            if not isinstance(data, dict) or data.get("type") != "FeatureCollection":
+                logger.debug("%s: invalid persistent cache format", self.source_name)
+                return
+            with self._cache_lock:
+                if self._cache is None:
+                    self._cache = data
+                    self._cache_time = path.stat().st_mtime
+                    logger.info(
+                        "%s: loaded persistent cache (%d features, %.0fs old)",
+                        self.source_name,
+                        len(data.get("features", [])),
+                        age,
+                    )
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            logger.debug("%s: persistent cache load failed: %s", self.source_name, e)
+
+    def _save_persistent_cache(self, data: Dict[str, Any]) -> None:
+        """Write cache data to disk for persistence across restarts."""
+        try:
+            self._persistent_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._persistent_cache_path, "w") as f:
+                json.dump(data, f, default=str)
+        except (OSError, TypeError) as e:
+            logger.debug("%s: persistent cache save failed: %s", self.source_name, e)
 
     def collect(self) -> Dict[str, Any]:
         """Collect data, using cache if fresh enough.
@@ -243,6 +293,8 @@ class BaseCollector(ABC):
                     self._cache_time = time.time()
                 self._last_success_time = time.time()
                 self._total_collections += 1
+                if self._persistent_cache:
+                    self._save_persistent_cache(data)
                 count = len(data.get("features", []))
                 if attempt > 0:
                     logger.info(

@@ -12,11 +12,14 @@ Data sources:
 Thread-safe: all state behind a lock.
 """
 
+import json
 import logging
+import sqlite3
 import threading
 import time
 from collections import deque
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -73,6 +76,7 @@ class ConfigDriftDetector:
         on_drift: Optional[Callable] = None,
         max_history: int = MAX_DRIFT_HISTORY,
         max_nodes: int = MAX_TRACKED_NODES,
+        db_path: Optional[Path] = None,
     ):
         self._snapshots: Dict[str, Dict[str, Any]] = {}
         self._drift_history: Dict[str, deque] = {}
@@ -81,6 +85,125 @@ class ConfigDriftDetector:
         self._max_history = max_history
         self._max_nodes = max_nodes
         self._total_drifts = 0
+        self._db_path = db_path
+        self._db_conn: Optional[sqlite3.Connection] = None
+        if db_path:
+            self._init_db()
+
+    def _init_db(self) -> None:
+        """Initialize SQLite database for persistent drift storage."""
+        try:
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(
+                str(self._db_path), check_same_thread=False,
+            )
+            conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS drift_events (
+                    id INTEGER PRIMARY KEY,
+                    node_id TEXT NOT NULL,
+                    field TEXT NOT NULL,
+                    old_value TEXT,
+                    new_value TEXT,
+                    severity TEXT NOT NULL,
+                    timestamp REAL NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS node_snapshots (
+                    node_id TEXT PRIMARY KEY,
+                    snapshot_json TEXT NOT NULL,
+                    first_seen REAL NOT NULL,
+                    last_seen REAL NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_drift_node_time
+                ON drift_events (node_id, timestamp)
+            """)
+            conn.commit()
+            self._db_conn = conn
+            self._load_snapshots_from_db()
+            logger.info("Config drift DB initialized at %s", self._db_path)
+        except Exception as e:
+            logger.error("Failed to initialize config drift DB: %s", e)
+            self._db_conn = None
+
+    def _load_snapshots_from_db(self) -> None:
+        """Load node snapshots from DB into memory on startup."""
+        if not self._db_conn:
+            return
+        try:
+            rows = self._db_conn.execute(
+                "SELECT node_id, snapshot_json, first_seen, last_seen "
+                "FROM node_snapshots"
+            ).fetchall()
+            for node_id, snap_json, first_seen, last_seen in rows:
+                try:
+                    snap = json.loads(snap_json)
+                    snap["_first_seen"] = first_seen
+                    snap["_last_seen"] = last_seen
+                    self._snapshots[node_id] = snap
+                except json.JSONDecodeError:
+                    pass
+            if rows:
+                logger.info(
+                    "Loaded %d config drift snapshots from DB", len(rows),
+                )
+        except Exception as e:
+            logger.error("Failed to load drift snapshots: %s", e)
+
+    def _persist_drift(
+        self, node_id: str, drifts: List[Dict[str, Any]],
+    ) -> None:
+        """Write drift events and updated snapshot to DB."""
+        if not self._db_conn:
+            return
+        try:
+            snap = self._snapshots.get(node_id)
+            if snap:
+                snap_copy = {
+                    k: v for k, v in snap.items() if not k.startswith("_")
+                }
+                self._db_conn.execute(
+                    "INSERT OR REPLACE INTO node_snapshots "
+                    "(node_id, snapshot_json, first_seen, last_seen) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        node_id,
+                        json.dumps(snap_copy, default=str),
+                        snap.get("_first_seen", time.time()),
+                        snap.get("_last_seen", time.time()),
+                    ),
+                )
+            for drift in drifts:
+                self._db_conn.execute(
+                    "INSERT INTO drift_events "
+                    "(node_id, field, old_value, new_value, severity, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        drift["node_id"],
+                        drift["field"],
+                        str(drift["old_value"]),
+                        str(drift["new_value"]),
+                        drift["severity"],
+                        drift["timestamp"],
+                    ),
+                )
+            self._db_conn.commit()
+        except Exception as e:
+            logger.error("Failed to persist drift data: %s", e)
+
+    def close(self) -> None:
+        """Close the database connection."""
+        if self._db_conn:
+            try:
+                self._db_conn.close()
+            except Exception as e:
+                logger.debug("Error closing config drift DB: %s", e)
+            self._db_conn = None
 
     def check_node(self, node_id: str, **fields: Any) -> List[Dict[str, Any]]:
         """Compare a node's current fields against its last-known snapshot.
@@ -107,6 +230,8 @@ class ConfigDriftDetector:
                 self._snapshots[node_id] = {
                     **current, "_first_seen": now, "_last_seen": now,
                 }
+                # Persist first-seen snapshot
+                self._persist_drift(node_id, [])
                 return []
 
             for field, new_value in current.items():
@@ -141,6 +266,13 @@ class ConfigDriftDetector:
 
             previous.update(current)
             previous["_last_seen"] = now
+
+        # Persist to DB
+        if drifts:
+            self._persist_drift(node_id, drifts)
+        elif self._db_conn and node_id in self._snapshots:
+            # Update snapshot timestamp even without drifts
+            self._persist_drift(node_id, [])
 
         # Notify callback outside the lock
         if drifts and self._on_drift:

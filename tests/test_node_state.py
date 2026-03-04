@@ -250,5 +250,100 @@ class TestNodeStateTracker(unittest.TestCase):
         self.assertEqual(len(offline_transitions), 1)
 
 
+class TestNodeStatePersistence(unittest.TestCase):
+    """Tests for persistent node state snapshots (Step 12)."""
+
+    def test_schema_creation(self):
+        """DB tables are created on init."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "state.db"
+            tracker = NodeStateTracker(db_path=db_path)
+            self.assertTrue(db_path.exists())
+            self.assertIsNotNone(tracker._db_conn)
+            tracker.close()
+
+    def test_state_persists_across_instances(self):
+        """Node states are restored from DB, preventing false 'new'."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "state.db"
+
+            # First instance: build up stable state, then flush
+            t1 = NodeStateTracker(
+                db_path=db_path, expected_interval=300, flush_interval=0,
+            )
+            for i in range(5):
+                t1.record_heartbeat("!node1", timestamp=1000 + i * 300)
+            self.assertEqual(t1.get_node_state("!node1"), NodeState.STABLE)
+            t1.close()
+
+            # Second instance: node should be loaded (not falsely 'new')
+            t2 = NodeStateTracker(db_path=db_path)
+            state = t2.get_node_state("!node1")
+            self.assertIsNotNone(state)
+            self.assertEqual(state, NodeState.STABLE)
+            t2.close()
+
+    def test_close_flushes_all_dirty(self):
+        """close() flushes all nodes to DB."""
+        import tempfile
+        import sqlite3
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "state.db"
+            # Use a very long flush_interval so periodic flush doesn't trigger
+            tracker = NodeStateTracker(
+                db_path=db_path, flush_interval=99999,
+            )
+            tracker.record_heartbeat("!node1", timestamp=1000.0)
+            tracker.record_heartbeat("!node2", timestamp=1000.0)
+            tracker.close()
+
+            conn = sqlite3.connect(str(db_path))
+            rows = conn.execute("SELECT node_id FROM node_states").fetchall()
+            conn.close()
+            node_ids = {r[0] for r in rows}
+            self.assertIn("!node1", node_ids)
+            self.assertIn("!node2", node_ids)
+
+    def test_prune_old_data(self):
+        """prune_old_data removes old entries from DB."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "state.db"
+            tracker = NodeStateTracker(
+                db_path=db_path, flush_interval=0,
+            )
+            tracker.record_heartbeat("!old", timestamp=1000.0)
+            tracker.record_heartbeat("!new", timestamp=time.time())
+            tracker.close()
+
+            # Reopen and prune
+            t2 = NodeStateTracker(db_path=db_path)
+            deleted = t2.prune_old_data(before_timestamp=5000.0)
+            self.assertEqual(deleted, 1)
+            t2.close()
+
+    def test_dirty_tracking_on_transition(self):
+        """Transitions mark nodes dirty for flushing."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "state.db"
+            tracker = NodeStateTracker(
+                db_path=db_path, expected_interval=300,
+                flush_interval=99999,  # Don't auto-flush
+            )
+            for i in range(5):
+                tracker.record_heartbeat("!node1", timestamp=1000 + i * 300)
+            # Should have dirty nodes
+            self.assertIn("!node1", tracker._dirty_nodes)
+            tracker.close()
+
+
 if __name__ == "__main__":
     unittest.main()

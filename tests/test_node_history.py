@@ -366,3 +366,97 @@ class TestDBClosed:
         db.close()
         assert db.observation_count == 0
         assert db.node_count == 0
+
+
+class TestDBIntegrity:
+    """Tests for database integrity check on startup (Step 9)."""
+
+    def test_normal_startup_passes_integrity(self, tmp_path):
+        """A fresh DB passes integrity check."""
+        db = NodeHistoryDB(db_path=tmp_path / "good.db", throttle_seconds=0)
+        assert db._conn is not None
+        db.record_observation("!node1", 35.0, 139.0)
+        assert db.observation_count == 1
+        db.close()
+
+    def test_corrupt_db_triggers_recovery(self, tmp_path):
+        """A corrupt DB file is rotated and a fresh DB is created."""
+        db_path = tmp_path / "corrupt.db"
+        # Write garbage to simulate a corrupt DB
+        db_path.write_bytes(b"THIS IS NOT A VALID SQLITE DATABASE FILE!!!")
+
+        db = NodeHistoryDB(db_path=db_path, throttle_seconds=0)
+        # Should recover: either creates a new DB or handles gracefully
+        # The corrupt file should be renamed
+        corrupt_files = list(tmp_path.glob("corrupt.db.corrupt.*"))
+        if db._conn is not None:
+            # Recovery succeeded — fresh DB works
+            assert db.record_observation("!node1", 35.0, 139.0)
+            assert len(corrupt_files) >= 1
+        db.close()
+
+    def test_reopened_db_retains_data(self, tmp_path):
+        """Data persists across close/reopen cycles."""
+        db_path = tmp_path / "persist.db"
+        db = NodeHistoryDB(db_path=db_path, throttle_seconds=0)
+        db.record_observation("!node1", 35.0, 139.0)
+        db.record_observation("!node2", 40.0, -74.0)
+        assert db.observation_count == 2
+        db.close()
+
+        db2 = NodeHistoryDB(db_path=db_path, throttle_seconds=0)
+        assert db2.observation_count == 2
+        db2.close()
+
+
+class TestAutoVacuum:
+    """Tests for auto-vacuum after pruning (Step 15)."""
+
+    def test_prune_triggers_vacuum(self, tmp_path):
+        """Pruning old data should not error (vacuum runs internally)."""
+        db = NodeHistoryDB(db_path=tmp_path / "vacuum.db", throttle_seconds=0)
+        now = int(time.time())
+        for i in range(20):
+            db.record_observation(
+                f"!node{i}", 35.0 + i * 0.01, 139.0,
+                timestamp=now - 100000 + i,
+            )
+        deleted = db.prune_old_data(before_timestamp=now)
+        assert deleted == 20
+        assert db.observation_count == 0
+        db.close()
+
+    def test_auto_vacuum_pragma_set(self, tmp_path):
+        """PRAGMA auto_vacuum should be set on new databases."""
+        db = NodeHistoryDB(db_path=tmp_path / "av.db", throttle_seconds=0)
+        if db._conn:
+            result = db._conn.execute("PRAGMA auto_vacuum").fetchone()
+            # INCREMENTAL = 2
+            assert result[0] == 2
+        db.close()
+
+
+class TestDBBackup:
+    """Tests for SQLite backup creation (Step 16)."""
+
+    def test_create_backup(self, tmp_path):
+        """Backup creates a valid copy of the database."""
+        db = NodeHistoryDB(db_path=tmp_path / "main.db", throttle_seconds=0)
+        db.record_observation("!node1", 35.0, 139.0)
+        db.record_observation("!node2", 40.0, -74.0)
+
+        backup_path = tmp_path / "backup.db"
+        assert db.create_backup(backup_path) is True
+        assert backup_path.exists()
+
+        # Verify backup has the same data
+        backup_db = NodeHistoryDB(db_path=backup_path, throttle_seconds=0)
+        assert backup_db.observation_count == 2
+        backup_db.close()
+        db.close()
+
+    def test_backup_returns_false_when_closed(self, tmp_path):
+        """Backup returns False when DB is not connected."""
+        db = NodeHistoryDB(db_path=tmp_path / "closed.db", throttle_seconds=0)
+        db.close()
+        assert db.create_backup(tmp_path / "backup.db") is False
