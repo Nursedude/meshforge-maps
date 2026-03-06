@@ -140,9 +140,6 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/weather/alerts": "_serve_weather_alerts",
         "/api/heatmap": "_serve_heatmap",
         "/api/dependencies": "_serve_dependencies",
-        "/api/perf/endpoints": "_serve_perf_endpoints",
-        "/api/capacity": "_serve_capacity",
-        "/api/export/all": "_serve_export_all",
     }
 
     # Valid source names for /api/nodes/<source> endpoint
@@ -160,8 +157,6 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         return False
 
     def do_GET(self) -> None:
-        request_start = time.monotonic()
-        self._response_status = 200
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         query = parse_qs(parsed.query)
@@ -171,7 +166,6 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
         # API key authentication (skip for static files and map page)
         if path.startswith("/api/") and not self._check_api_key():
-            self._record_request_timing(path, request_start)
             return
 
         method_name = self._ROUTE_TABLE.get(path)
@@ -241,36 +235,10 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             pass
         except Exception as e:
             logger.error("Request handler error for %s: %s", self.path, e)
-            self._response_status = 500
             try:
                 self._send_json({"error": "Internal server error"}, 500)
             except (BrokenPipeError, ConnectionResetError):
                 pass
-        finally:
-            self._record_request_timing(path, request_start)
-
-    def _record_request_timing(
-        self, path: str, request_start: float,
-    ) -> None:
-        """Record request timing to PerfMonitor for per-endpoint metrics."""
-        try:
-            aggregator = self._ctx.aggregator
-            if not aggregator:
-                return
-            elapsed_ms = (time.monotonic() - request_start) * 1000
-            # Normalize dynamic paths to avoid one entry per node ID
-            import re
-            normalized = re.sub(
-                r"/api/nodes/[0-9a-fA-F!]+/", "/api/nodes/*/", path,
-            )
-            normalized = re.sub(
-                r"/api/snapshot/\d+", "/api/snapshot/*", normalized,
-            )
-            aggregator.perf_monitor.record_request(
-                normalized, elapsed_ms, getattr(self, "_response_status", 200),
-            )
-        except Exception:
-            pass
 
     def _get_cors_origin(self) -> Optional[str]:
         """Get configured CORS origin, or None for same-origin (no CORS headers)."""
@@ -741,34 +709,15 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         self._send_json(scorer.get_summary())
 
     def _serve_perf_stats(self) -> None:
-        """Serve performance profiling statistics with memory snapshot."""
-        from .utils.perf_monitor import get_memory_snapshot
-
+        """Serve performance profiling statistics."""
         aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "Aggregator not available"}, 503)
             return
         stats = aggregator.perf_monitor.get_stats()
-        stats["memory"] = get_memory_snapshot(self._ctx)
         if self._ctx.analytics:
             stats["slow_queries"] = self._ctx.analytics.get_slow_queries()
         self._send_json(stats)
-
-    def _serve_perf_endpoints(self) -> None:
-        """Serve per-endpoint request metrics."""
-        aggregator = self._ctx.aggregator
-        if not aggregator:
-            self._send_json({"error": "Aggregator not available"}, 503)
-            return
-        self._send_json(aggregator.perf_monitor.get_endpoint_stats())
-
-    def _serve_capacity(self) -> None:
-        """Serve capacity planning metrics."""
-        aggregator = self._ctx.aggregator
-        if not aggregator:
-            self._send_json({"error": "Aggregator not available"}, 503)
-            return
-        self._send_json(aggregator.perf_monitor.get_capacity_metrics())
 
     def _serve_alerts(self) -> None:
         """Serve alert history with optional filters."""
@@ -1026,40 +975,6 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 str(n.get("observation_count", 0)), str(n.get("active_seconds", 0)),
             ])
         self._send_csv(rows, "meshforge_ranking.csv")
-
-    def _serve_export_all(self) -> None:
-        """Export combined data from all subsystems as a single JSON bundle."""
-        result: Dict[str, Any] = {"exported_at": time.time()}
-
-        # Nodes
-        history = self._ctx.node_history
-        if history:
-            result["nodes"] = history.get_tracked_nodes()
-
-        # Alerts
-        engine = self._ctx.alert_engine
-        if engine:
-            result["alerts"] = engine.get_alert_history(limit=500)
-            result["alert_summary"] = engine.get_summary()
-
-        # Analytics
-        analytics = self._ctx.analytics
-        if analytics:
-            result["network_growth"] = analytics.network_growth()
-            result["activity_heatmap"] = analytics.activity_heatmap()
-            result["network_summary"] = analytics.network_summary()
-
-        # Config drift
-        drift = self._ctx.config_drift
-        if drift:
-            result["config_drift"] = drift.get_summary()
-
-        # Node states
-        ns = self._ctx.node_state
-        if ns:
-            result["node_states"] = ns.get_summary()
-
-        self._send_json(result)
 
     # ------------------------------------------------------------------
     # Weather alert endpoints

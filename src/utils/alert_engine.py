@@ -85,8 +85,6 @@ class AlertRule:
     enabled: bool = True
     network_filter: Optional[str] = None
     description: str = ""
-    escalation_after: Optional[float] = None  # seconds; None = no escalation
-
     def evaluate(self, value: float) -> bool:
         """Check if the value triggers this rule."""
         ops = {
@@ -113,7 +111,6 @@ class AlertRule:
             "enabled": self.enabled,
             "network_filter": self.network_filter,
             "description": self.description,
-            "escalation_after": self.escalation_after,
         }
 
 
@@ -131,8 +128,6 @@ class Alert:
     message: str
     timestamp: float = field(default_factory=time.time)
     acknowledged: bool = False
-    escalation_level: int = 0
-
     def to_dict(self) -> Dict[str, Any]:
         return {
             "alert_id": self.alert_id,
@@ -146,7 +141,6 @@ class Alert:
             "message": self.message,
             "timestamp": self.timestamp,
             "acknowledged": self.acknowledged,
-            "escalation_level": self.escalation_level,
         }
 
 
@@ -198,15 +192,6 @@ DEFAULT_RULES = [
         description="Node health score is critical (<=20)",
     ),
 ]
-
-
-_SEVERITY_ESCALATION = {
-    AlertSeverity.INFO.value: AlertSeverity.WARNING.value,
-    AlertSeverity.WARNING.value: AlertSeverity.CRITICAL.value,
-    AlertSeverity.CRITICAL.value: AlertSeverity.CRITICAL.value,
-}
-
-_MAX_ESCALATION_LEVEL = 3
 
 
 class AlertEngine:
@@ -371,10 +356,6 @@ class AlertEngine:
 
             triggered.append(alert)
 
-        # Check for escalations on unacknowledged alerts
-        escalated = self._check_escalations(now)
-        triggered.extend(escalated)
-
         return triggered
 
     def evaluate_offline(
@@ -432,60 +413,6 @@ class AlertEngine:
                 self._history = self._history[-self._max_history:]
 
         return alert
-
-    def _check_escalations(self, now: float) -> List[Alert]:
-        """Check for unacknowledged alerts past their escalation window."""
-        escalated: List[Alert] = []
-        with self._lock:
-            rules = dict(self._rules)
-            alerts = list(self._history)
-
-        for alert in alerts:
-            if alert.acknowledged:
-                continue
-            if alert.escalation_level >= _MAX_ESCALATION_LEVEL:
-                continue
-            rule = rules.get(alert.rule_id)
-            if not rule or not rule.escalation_after:
-                continue
-            age = now - alert.timestamp
-            if age < rule.escalation_after:
-                continue
-
-            # Check escalation cooldown
-            esc_key = f"{alert.node_id}||{alert.rule_id}||esc{alert.escalation_level + 1}"
-            with self._lock:
-                last_esc = self._cooldowns.get(esc_key, 0)
-                if now - last_esc < rule.cooldown:
-                    continue
-
-                new_severity = _SEVERITY_ESCALATION.get(
-                    alert.severity, AlertSeverity.CRITICAL.value,
-                )
-                self._alert_counter += 1
-                esc_alert = Alert(
-                    alert_id=f"alert-{self._alert_counter}",
-                    rule_id=alert.rule_id,
-                    alert_type=alert.alert_type,
-                    severity=new_severity,
-                    node_id=alert.node_id,
-                    metric=alert.metric,
-                    value=alert.value,
-                    threshold=alert.threshold,
-                    message=f"ESCALATED: {alert.message}",
-                    timestamp=now,
-                    escalation_level=alert.escalation_level + 1,
-                )
-                self._cooldowns[esc_key] = now
-                self._history.append(esc_alert)
-                self._total_alerts_fired += 1
-
-                if len(self._history) > self._max_history:
-                    self._history = self._history[-self._max_history:]
-
-            escalated.append(esc_alert)
-
-        return escalated
 
     def _cleanup_stale_cooldowns(self, now: float) -> None:
         """Remove cooldown entries older than _COOLDOWN_MAX_AGE (24h)."""
