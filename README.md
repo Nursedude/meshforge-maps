@@ -8,7 +8,7 @@ Visualization plugin for the [MeshForge ecosystem](https://github.com/Nursedude/
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-863%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-974-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
 A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
@@ -16,6 +16,8 @@ A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RM
 **Runs standalone** or as a [MeshForge](https://github.com/Nursedude/meshforge) extension via plugin auto-discovery.
 
 > This repo can be installed as an extension of [Nursedude/meshforge](https://github.com/Nursedude/meshforge). MeshForge discovers it automatically via `manifest.json` on launch. No MeshForge core dependency is required -- meshforge-maps runs independently with its own HTTP server.
+
+> **Beta notice:** This project is under active development. While core functionality (map rendering, data collection, REST API) is working, many features — particularly real-time MQTT ingestion, alerting delivery, TUI dashboard, and multi-source topology — have not been extensively tested against live production meshes. Community testing and bug reports are welcome. See [Testing Status](#testing-status) for details.
 
 ## How It Works
 
@@ -344,20 +346,27 @@ Per-node sysinfo API at `http://<node>.local.mesh/a/sysinfo?lqm=1`. Requires mes
 
 ## Installation
 
-### Standalone
+### Prerequisites
+
+- **Python 3.9+** (3.11+ recommended)
+- **git** for cloning and updates
+- No external Python packages required for core functionality — stdlib only (`http.server`, `json`, `urllib`, `subprocess`, `threading`, `sqlite3`)
+
+### Standalone (Quick Start)
 
 ```bash
 git clone https://github.com/Nursedude/meshforge-maps.git
 cd meshforge-maps
 python -m src.main
-# Opens http://127.0.0.1:8808 (map) + ws://127.0.0.1:8809 (real-time)
+# Web map at http://127.0.0.1:8808
+# WebSocket at ws://127.0.0.1:8809
 ```
 
-No external Python dependencies required for core functionality -- uses only stdlib (`http.server`, `json`, `urllib`, `subprocess`, `threading`, `sqlite3`).
+### As a MeshForge Extension
 
-### As MeshForge Extension
+meshforge-maps integrates with [MeshForge](https://github.com/Nursedude/meshforge) as an auto-discovered extension. MeshForge is a turnkey Mesh Network Operations Center — meshforge-maps adds the mapping and visualization layer.
 
-meshforge-maps can run as a [MeshForge](https://github.com/Nursedude/meshforge) extension. MeshForge discovers it automatically via `manifest.json` on launch -- no core dependency is required, and the maps server runs its own HTTP endpoint independently.
+**Install into MeshForge's plugin directory:**
 
 ```bash
 git clone https://github.com/Nursedude/meshforge-maps.git \
@@ -367,10 +376,47 @@ git clone https://github.com/Nursedude/meshforge-maps.git \
 ```
 
 When running as a MeshForge extension:
-- MeshForge discovers `manifest.json` at startup and loads the extension
+- MeshForge discovers `manifest.json` (plugin ID: `org.meshforge.extension.maps`) at startup
 - Maps launches its own HTTP server on port 8808 (configurable) + WebSocket on 8809
 - Configuration is stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/settings.json`
-- The extension operates independently -- MeshForge core is not required at runtime
+- The extension operates independently — MeshForge core is **not** required at runtime
+- MeshForge provides the NOC framework; meshforge-maps provides the map visualization
+
+You do **not** need MeshForge installed to use meshforge-maps. It runs fully standalone with its own HTTP server. MeshForge integration simply adds plugin lifecycle management and a unified settings path.
+
+### Scripted Install (Raspberry Pi / Linux)
+
+For Raspberry Pi or headless Linux deployments, use the install script:
+
+```bash
+git clone https://github.com/Nursedude/meshforge-maps.git
+cd meshforge-maps
+
+# Full install (local radio hardware available)
+sudo bash scripts/install.sh
+
+# Headless / no radio hardware (MQTT + NOAA only)
+sudo bash scripts/install.sh --no-radio
+
+# Use current directory instead of copying to /opt
+sudo bash scripts/install.sh --in-place
+```
+
+The install script:
+- Detects your OS and Python version
+- Creates a Python virtual environment (PEP 668 / Debian Trixie safe)
+- Installs optional dependencies (`paho-mqtt`, `websockets`, `pyopenssl`)
+- Installs and enables a `meshforge-maps` systemd service
+- Creates config/data/cache directories with correct permissions
+
+After install:
+
+```bash
+sudo systemctl start meshforge-maps    # Start the service
+sudo systemctl status meshforge-maps   # Check status
+journalctl -u meshforge-maps -f        # View logs
+bash scripts/verify.sh                 # Verify installation
+```
 
 ### Optional Dependencies
 
@@ -385,16 +431,37 @@ pip install websockets
 pip install 'pyopenssl>=25.3.0' 'cryptography>=45.0.7,<47'
 ```
 
-All optional dependencies degrade gracefully -- features that require them are silently disabled when the libraries are not installed.
+All optional dependencies degrade gracefully — features that require them are silently disabled when the libraries are not installed. The core map server works with zero pip packages.
 
-### Upgrading
+### Updating
+
+**Standalone or in-place install:**
 
 ```bash
 cd meshforge-maps
 git pull origin main
+# Restart if running as a service
+sudo systemctl restart meshforge-maps
 ```
 
-No database migrations are needed -- the SQLite node history database schema is forward-compatible. New features (alerting, analytics) activate automatically on upgrade. Configuration is preserved in `settings.json`.
+**MeshForge extension:**
+
+```bash
+cd ~/.config/meshforge/plugins/meshforge-maps/
+git pull origin main
+# Restart MeshForge or just the maps service
+```
+
+**Scripted update (re-run the installer):**
+
+```bash
+cd meshforge-maps
+git pull origin main
+sudo bash scripts/install.sh           # Re-syncs to /opt, preserves settings
+sudo systemctl restart meshforge-maps
+```
+
+No database migrations are needed — the SQLite node history database schema is forward-compatible. New features activate automatically on upgrade. Your `settings.json` configuration is preserved across updates.
 
 ## Supported Hardware
 
@@ -655,23 +722,33 @@ flowchart LR
 
 ```bash
 pip install pytest
-pytest tests/ -v
-# 863 tests covering:
-#   - Base helpers, config, coordinate validation
-#   - All 4 collectors (Meshtastic, Reticulum, HamClock, AREDN)
-#   - Aggregator deduplication, MQTT node store, topology links
-#   - Map server startup/port fallback, plugin lifecycle/events
-#   - Circuit breaker, reconnect strategy, event bus
-#   - WebSocket server, real-time pipeline
-#   - OpenHamClock auto-detection and port priority
-#   - Per-node health scoring (all 5 components, normalization, cache)
-#   - Performance profiling (timing, percentiles, memory)
-#   - AREDN hardening (network errors, malformed responses, cache, LQM edges)
-#   - Node history DB, shared health state, topology GeoJSON
-#   - Config drift detection, node state machine
-#   - Alert engine (rules, cooldown, MQTT publish, EventBus propagation, webhooks)
-#   - Historical analytics (growth, heatmap, ranking, summary, alert trends)
+pytest tests/ -v    # ~974 tests, no network access needed
 ```
+
+All tests use mocked HTTP/MQTT responses — no live radio, broker, or network required.
+
+### Testing Status
+
+This project is in **beta**. The unit test suite (~974 tests) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
+
+| Area | Unit Tested | Live Tested | Notes |
+|------|:-----------:|:-----------:|-------|
+| **Map rendering (Leaflet.js)** | N/A | Partial | Browser-side; needs manual testing across devices |
+| **Meshtastic collector (API)** | Yes | Partial | Tested against meshtasticd; MQTT broker variations untested |
+| **Meshtastic MQTT (live)** | Yes | Needs testing | Protobuf decoding tested with fixtures, not sustained live feeds |
+| **Reticulum/RMAP collector** | Yes | Needs testing | Mocked rnstatus output; needs live RNS stack validation |
+| **AREDN collector** | Yes | Needs testing | Mocked sysinfo.json; needs on-mesh testing with real nodes |
+| **HamClock/NOAA collector** | Yes | Partial | NOAA SWPC APIs tested; OpenHamClock integration partially validated |
+| **NOAA weather alerts** | Yes | Needs testing | API parsing tested; polygon rendering and area filtering need validation |
+| **Alert engine** | Yes | Needs testing | Rule evaluation and cooldown logic tested; MQTT/webhook delivery needs live validation |
+| **TUI dashboard** | Yes | Needs testing | Curses rendering tested; needs terminal compatibility testing |
+| **WebSocket real-time** | Yes | Needs testing | Protocol tested; sustained connections under load untested |
+| **Topology visualization** | Yes | Partial | GeoJSON generation tested; D3.js rendering needs manual verification |
+| **Offline tile caching** | N/A | Needs testing | Service worker; needs browser testing in offline scenarios |
+| **systemd service** | N/A | Partial | Install script tested on Pi 4; other platforms need validation |
+| **Multi-source aggregation** | Yes | Needs testing | Dedup logic tested; real multi-source concurrent collection untested |
+
+**How to help:** If you run meshforge-maps against a live mesh, please report issues at [GitHub Issues](https://github.com/Nursedude/meshforge-maps/issues) with your setup details (hardware, OS, data sources, node count).
 
 ## Roadmap
 
@@ -687,6 +764,7 @@ pytest tests/ -v
 
 ### Ongoing
 
+- **Live testing against production meshes** -- validating all collectors, alerting, and real-time features with real hardware and network conditions (see [Testing Status](#testing-status))
 - Collector hardening and edge case coverage across all data sources
 - Performance optimization for large meshes (1000+ nodes)
 - Community-contributed tile providers and overlay plugins
