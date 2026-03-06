@@ -37,6 +37,9 @@ class DataAggregator:
         self._cached_overlay: Dict[str, Any] = {}
         self._last_collect_time: float = 0
         self._last_collect_counts: Dict[str, int] = {}
+        self._cached_result: Optional[Dict[str, Any]] = None
+        self._cached_result_time: float = 0
+        self._RESULT_CACHE_TTL = 2.0  # seconds — dedup rapid requests
 
         # Event bus for decoupled real-time communication
         self._event_bus = EventBus()
@@ -108,7 +111,17 @@ class DataAggregator:
     _OVERLAY_ONLY_COLLECTORS = {"noaa_alerts"}
 
     def collect_all(self) -> Dict[str, Any]:
-        """Collect from all enabled sources and merge into one FeatureCollection."""
+        """Collect from all enabled sources and merge into one FeatureCollection.
+
+        Results are cached for 2 seconds to avoid redundant collection cycles
+        when multiple clients request data simultaneously.
+        """
+        now = time.monotonic()
+        with self._data_lock:
+            if (self._cached_result is not None
+                    and now - self._cached_result_time < self._RESULT_CACHE_TTL):
+                return self._cached_result
+
         per_source_features: List[List[Dict[str, Any]]] = []
         source_counts: Dict[str, int] = {}
         overlay_data: Dict[str, Any] = {}
@@ -145,12 +158,17 @@ class DataAggregator:
             self._cached_overlay = overlay_data
             self._last_collect_time = time.time()
             self._last_collect_counts = dict(source_counts)
+            # Cache the full result for dedup (cleared after _RESULT_CACHE_TTL)
+            self._cached_result_time = time.monotonic()
 
         result = make_feature_collection(all_features, "aggregated")
         result["properties"]["sources"] = source_counts
         result["properties"]["total_nodes"] = len(all_features)
         result["properties"]["enabled_sources"] = list(self._collectors.keys())
         result["properties"]["overlay_data"] = overlay_data
+
+        with self._data_lock:
+            self._cached_result = result
 
         logger.info(
             "Aggregated %d nodes from %d sources: %s",
@@ -317,6 +335,7 @@ class DataAggregator:
             collector.clear_cache()
         with self._data_lock:
             self._cached_overlay = {}
+            self._cached_result = None
 
     def shutdown(self) -> None:
         """Stop MQTT subscriber, reset event bus, and release resources."""
