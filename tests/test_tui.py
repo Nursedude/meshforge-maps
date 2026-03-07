@@ -742,6 +742,101 @@ class TestWebSocketState:
         result = app._ws_read_frame(mock_sock)
         assert result is None
 
+    def test_ws_handshake_buffer_limit(self):
+        """Handshake loop rejects oversized responses (prevents unbounded memory growth)."""
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._running = True
+        app._stop_event = threading.Event()
+
+        # Mock endpoint resolution to return a valid target
+        with patch.object(app, '_resolve_ws_endpoint', return_value=('127.0.0.1', 9999)):
+            # Create a mock socket that sends endless data without \r\n\r\n
+            mock_sock = MagicMock()
+            mock_sock.settimeout = MagicMock()
+            mock_sock.connect = MagicMock()
+            mock_sock.sendall = MagicMock()
+            # Each recv returns 4096 bytes of junk (no \r\n\r\n terminator)
+            mock_sock.recv.return_value = b"X" * 4096
+            mock_sock.__enter__ = MagicMock(return_value=mock_sock)
+            mock_sock.__exit__ = MagicMock(return_value=False)
+
+            with patch('socket.socket', return_value=mock_sock):
+                # Run one iteration then stop
+                original_running = app._running
+
+                def stop_after_one(*args, **kwargs):
+                    app._running = False
+                    return 0.1
+
+                with patch.object(app._stop_event, 'wait', side_effect=stop_after_one):
+                    app._ws_listen_loop_raw()
+
+            # The socket should have been used (connect was called)
+            mock_sock.connect.assert_called_once()
+            # recv should have been called multiple times before hitting the limit
+            assert mock_sock.recv.call_count >= 2
+            # Buffer limit is 8192, each chunk is 4096, so exactly 3 reads
+            # would exceed it (3 * 4096 = 12288 > 8192)
+            assert mock_sock.recv.call_count <= 3
+
+    def test_ws_raw_socket_context_manager_cleanup(self):
+        """Socket is cleaned up via context manager even on connect failure."""
+        from src.tui.app import TuiApp
+        app = TuiApp()
+        app._running = True
+        app._stop_event = threading.Event()
+
+        with patch.object(app, '_resolve_ws_endpoint', return_value=('127.0.0.1', 9999)):
+            mock_sock = MagicMock()
+            mock_sock.settimeout = MagicMock()
+            mock_sock.connect.side_effect = OSError("Connection refused")
+            mock_sock.__enter__ = MagicMock(return_value=mock_sock)
+            mock_sock.__exit__ = MagicMock(return_value=False)
+
+            with patch('socket.socket', return_value=mock_sock):
+                def stop_after_one(*args, **kwargs):
+                    app._running = False
+                    return 0.1
+
+                with patch.object(app._stop_event, 'wait', side_effect=stop_after_one):
+                    app._ws_listen_loop_raw()
+
+            # Context manager __exit__ was called (socket cleanup)
+            mock_sock.__exit__.assert_called_once()
+
+    def test_tui_thread_join_on_shutdown(self):
+        """Threads are joined during TUI shutdown."""
+        from src.tui.app import TuiApp
+        import curses as real_curses
+        app = TuiApp()
+
+        mock_stdscr = MagicMock()
+        mock_stdscr.getmaxyx.return_value = (40, 120)
+        # Return quit key on first getch call
+        mock_stdscr.getch.return_value = ord("q")
+
+        mc = MagicMock()
+        mc.color_pair.return_value = 0
+        mc.A_BOLD = 1
+        mc.A_REVERSE = 8
+        mc.error = real_curses.error
+
+        with patch("src.tui.app.curses", mc), \
+             patch("src.tui.helpers.curses", mc), \
+             patch("src.tui.app._init_colors"), \
+             patch.object(app, '_refresh_data'), \
+             patch.object(app, '_fetch_loop'), \
+             patch.object(app, '_ws_listen_loop'), \
+             patch("src.tui.app.get_real_home") as mock_home:
+            mock_home.return_value = MagicMock()
+            mock_home.return_value.__truediv__ = MagicMock(return_value=MagicMock())
+            app._main(mock_stdscr)
+
+        # After _main returns, _running should be False and _stop_event set
+        assert app._running is False
+        assert app._stop_event.is_set()
+
 
 # ── Draw Method Tests (with mocked curses) ─────────────────────────
 

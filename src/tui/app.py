@@ -19,11 +19,13 @@ import logging
 import os
 import socket
 import struct
+import sys
 import threading
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..utils.paths import get_real_home
 from ..utils.reconnect import ReconnectStrategy
 from .data_client import MapDataClient
 from .helpers import (
@@ -113,6 +115,18 @@ class TuiApp:
         stdscr.nodelay(False)
         stdscr.timeout(500)  # 500ms input timeout for responsive refresh
 
+        # Redirect stderr to a log file so library output doesn't corrupt
+        # the curses display (mirrors upstream meshforge TUI pattern).
+        original_stderr = sys.stderr
+        stderr_file = None
+        try:
+            log_dir = get_real_home() / ".cache" / "meshforge"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            stderr_file = open(log_dir / "maps-tui-stderr.log", "a")
+            sys.stderr = stderr_file
+        except OSError:
+            pass  # If redirect fails, continue with original stderr
+
         self._running = True
         self._stop_event.clear()
 
@@ -132,7 +146,14 @@ class TuiApp:
                 self._draw()
                 self._handle_input()
         finally:
+            self._running = False
             self._stop_event.set()
+            fetch_thread.join(timeout=2)
+            if self._ws_thread:
+                self._ws_thread.join(timeout=2)
+            sys.stderr = original_stderr
+            if stderr_file:
+                stderr_file.close()
 
     def _fetch_loop(self) -> None:
         """Background thread that periodically fetches fresh data."""
@@ -584,6 +605,11 @@ class TuiApp:
     # malformed frame headers.
     _WS_MAX_FRAME_SIZE = 16 * 1024 * 1024
 
+    # Maximum handshake response size (8 KB) -- a valid 101 Upgrade response
+    # is well under 1 KB; this prevents unbounded memory growth if the server
+    # sends continuous data without the expected \r\n\r\n terminator.
+    _WS_MAX_HANDSHAKE_SIZE = 8192
+
     def _resolve_ws_endpoint(self) -> Optional[tuple]:
         """Resolve WebSocket host and port from server status API.
 
@@ -669,7 +695,6 @@ class TuiApp:
         """Fallback raw-socket WebSocket listener (stdlib only)."""
         strategy = ReconnectStrategy.for_websocket()
         while self._running:
-            sock = None
             try:
                 endpoint = self._resolve_ws_endpoint()
                 if not endpoint:
@@ -678,59 +703,56 @@ class TuiApp:
 
                 host, port = endpoint
 
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(10)
-                sock.connect((host, port))
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(10)
+                    sock.connect((host, port))
 
-                # RFC 6455 handshake
-                ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
-                handshake = (
-                    f"GET / HTTP/1.1\r\n"
-                    f"Host: {host}:{port}\r\n"
-                    f"Upgrade: websocket\r\n"
-                    f"Connection: Upgrade\r\n"
-                    f"Sec-WebSocket-Key: {ws_key}\r\n"
-                    f"Sec-WebSocket-Version: 13\r\n"
-                    f"\r\n"
-                )
-                sock.sendall(handshake.encode("utf-8"))
+                    # RFC 6455 handshake
+                    ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
+                    handshake = (
+                        f"GET / HTTP/1.1\r\n"
+                        f"Host: {host}:{port}\r\n"
+                        f"Upgrade: websocket\r\n"
+                        f"Connection: Upgrade\r\n"
+                        f"Sec-WebSocket-Key: {ws_key}\r\n"
+                        f"Sec-WebSocket-Version: 13\r\n"
+                        f"\r\n"
+                    )
+                    sock.sendall(handshake.encode("utf-8"))
 
-                response = b""
-                while b"\r\n\r\n" not in response:
-                    chunk = sock.recv(4096)
-                    if not chunk:
-                        raise ConnectionError("WS handshake failed")
-                    response += chunk
+                    response = b""
+                    while b"\r\n\r\n" not in response:
+                        chunk = sock.recv(4096)
+                        if not chunk:
+                            raise ConnectionError("WS handshake failed")
+                        response += chunk
+                        if len(response) > self._WS_MAX_HANDSHAKE_SIZE:
+                            raise ConnectionError("WS handshake response too large")
 
-                if b"101" not in response.split(b"\r\n")[0]:
-                    raise ConnectionError("WS upgrade rejected")
+                    if b"101" not in response.split(b"\r\n")[0]:
+                        raise ConnectionError("WS upgrade rejected")
 
-                strategy.reset()
-                with self._data_lock:
-                    self._ws_connected = True
+                    strategy.reset()
+                    with self._data_lock:
+                        self._ws_connected = True
 
-                sock.settimeout(30)
+                    sock.settimeout(30)
 
-                while self._running:
-                    frame_data = self._ws_read_frame(sock)
-                    if frame_data is None:
-                        break
-                    try:
-                        msg = json.loads(frame_data)
-                        self._on_ws_message(msg)
-                    except (ValueError, TypeError):
-                        pass
+                    while self._running:
+                        frame_data = self._ws_read_frame(sock)
+                        if frame_data is None:
+                            break
+                        try:
+                            msg = json.loads(frame_data)
+                            self._on_ws_message(msg)
+                        except (ValueError, TypeError):
+                            pass
 
             except (OSError, ConnectionError, socket.timeout) as e:
                 logger.warning("WebSocket raw connection error: %s", e)
             finally:
                 with self._data_lock:
                     self._ws_connected = False
-                if sock:
-                    try:
-                        sock.close()
-                    except Exception:
-                        pass
 
             if self._running:
                 self._stop_event.wait(strategy.next_delay())
