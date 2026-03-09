@@ -10,6 +10,7 @@ Tabs:
   [4] Propagation - HF band conditions, space weather, DX spots
   [5] Topology   - ASCII mesh topology visualization
   [6] Events     - Live WebSocket event stream
+  [7] System     - Dependency versions, Meshtastic API status, upgrade commands
 """
 
 import base64
