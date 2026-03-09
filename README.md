@@ -8,7 +8,7 @@ Visualization plugin for the [MeshForge ecosystem](https://github.com/Nursedude/
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-974-brightgreen)
+![Tests](https://img.shields.io/badge/tests-982-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
 A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
@@ -56,7 +56,7 @@ python -m src.main --tui-only   # TUI client (connect to existing server)
 
 ### Terminal Dashboard (TUI)
 
-A full curses-based terminal interface launched with `--tui` (alongside the server) or `--tui-only` (connect to an existing server). Six tabbed screens, switchable with `1`-`6` or arrow keys:
+A full curses-based terminal interface launched with `--tui` (alongside the server) or `--tui-only` (connect to an existing server). Seven tabbed screens, switchable with `1`-`7` or arrow keys:
 
 | Tab | Key | What It Shows |
 |-----|-----|--------------|
@@ -66,6 +66,7 @@ A full curses-based terminal interface launched with `--tui` (alongside the serv
 | **Propagation** | `4` | HF band predictions (VOACAP), space weather (SFI, Kp), DX spots |
 | **Topology** | `5` | ASCII mesh topology with SNR-colored links per network |
 | **Events** | `6` | Live WebSocket event stream with pause (`p`), filter (`f`), search (`/`) |
+| **System** | `7` | Dependency versions, Meshtastic API status, config info, upgrade commands |
 
 **Keyboard:** `q` quit, `r` refresh, `j`/`k` scroll, `/` search, `s` sort, `Enter` drill-down, `Esc` back.
 
