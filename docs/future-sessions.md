@@ -1,5 +1,7 @@
 # Future Implementation Sessions
 
+> **Status:** All 16 priorities below were implemented in commit 6340644 and refined in subsequent PRs. This file is retained as historical design context.
+
 Two planned enhancement sessions for meshforge-maps, building on existing
 infrastructure without introducing new external dependencies (stdlib-only for core).
 
