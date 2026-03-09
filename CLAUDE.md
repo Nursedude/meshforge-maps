@@ -36,9 +36,9 @@ src/utils/
   shared_health_state.py     Cross-process health via shared memory
   meshtastic_api_proxy.py    meshtasticd-compatible JSON proxy
   openhamclock_compat.py     Port detection (3000 first, 8080 fallback)
-src/tui/                     Curses terminal dashboard (6 tabs)
+src/tui/                     Curses terminal dashboard (7 tabs)
 web/                         Leaflet.js frontend, sw-tiles.js offline cache
-tests/                       pytest suite (863 tests)
+tests/                       pytest suite (982 tests)
 scripts/                     install.sh, verify.sh
 ```
 
@@ -84,7 +84,7 @@ scripts/                     install.sh, verify.sh
 ## Testing
 
 ```bash
-pytest tests/ -v    # 879 tests, no external deps needed
+pytest tests/ -v    # 982 tests, no external deps needed
 ```
 
 - Test files mirror source modules: `test_<module>.py`
