@@ -49,7 +49,7 @@ _SIMPLE_PORT_RE = re.compile(r"^[^:\[]+:\d+$")       # host:8080, 1.2.3.4:8080
 AREDN_CACHE_PATH = MESHFORGE_DATA_DIR / "aredn_nodes.json"
 
 # Default AREDN node discovery targets
-DEFAULT_AREDN_NODES: List[str] = []
+DEFAULT_AREDN_NODES: List[str] = ["localnode.local.mesh", "10.0.0.1", "localnode"]
 
 
 class AREDNCollector(BaseCollector):

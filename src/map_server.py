@@ -349,6 +349,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         data = aggregator.collect_source(source)
         self._send_json(data)
 
+    _REDACTED_CONFIG_KEYS = ("mqtt_password", "api_key", "rch_api_key")
+
     def _serve_config(self) -> None:
         """Serve current configuration (non-sensitive)."""
         config = self._ctx.config
@@ -356,6 +358,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({})
             return
         cfg = config.to_dict()
+        for key in self._REDACTED_CONFIG_KEYS:
+            if cfg.get(key) is not None:
+                cfg[key] = "***"
         cfg["network_colors"] = NETWORK_COLORS
         # Include WebSocket port so frontend can connect
         ws_server = self._ctx.ws_server
