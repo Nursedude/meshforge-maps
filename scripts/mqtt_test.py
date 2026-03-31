@@ -6,7 +6,7 @@ import time
 def on_connect(c, u, f, rc, p=None):
     print(f"Connected: {rc}")
     c.subscribe("msh/US/2/e/#")
-    print("Subscribed to msh/US/2/e/# — waiting 15s for messages...")
+    print("Subscribed to msh/US/2/e/# - waiting 15s for messages...")
 
 def on_disconnect(c, u, f, rc, p=None):
     print(f"Disconnected: {rc}")
