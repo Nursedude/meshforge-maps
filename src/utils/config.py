@@ -41,14 +41,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "http_host": "127.0.0.1",
     "ws_host": "127.0.0.1",
     # MQTT broker configuration
-    # Public broker defaults: meshdev/large4cats on TLS port 8883
-    # Override with private broker credentials in settings.json
+    # Public broker defaults: meshdev/large4cats on port 1883 (plaintext)
+    # Set mqtt_use_tls=True and mqtt_port=8883 for encrypted connections
     "mqtt_broker": "mqtt.meshtastic.org",
-    "mqtt_port": 8883,
+    "mqtt_port": 1883,
     "mqtt_topic": "msh/#",
     "mqtt_username": "meshdev",
     "mqtt_password": "large4cats",
-    "mqtt_use_tls": True,
+    "mqtt_use_tls": False,
     # CORS: None = same-origin (no CORS headers sent); set to "*" or a specific origin to enable
     "cors_allowed_origin": None,
     # API key for protecting /api/ endpoints (None = no auth required)
