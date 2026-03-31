@@ -561,7 +561,7 @@ OpenHamClock is an X11 application and won't run directly on a headless Pi (no d
 
 MeshForge Maps uses MQTT in two directions:
 
-**Inbound (data collection):** Subscribes to the Meshtastic public broker for real-time node tracking. Decodes `ServiceEnvelope` protobuf packets from the `msh/#` topic tree.
+**Inbound (data collection):** Subscribes to the Meshtastic public broker for real-time node tracking. Decrypts encrypted `ServiceEnvelope` protobuf packets using the default LongFast channel key, and also subscribes to JSON topics for pre-decoded packets.
 
 **Outbound (alert publishing):** When alerts fire, they publish to your configured broker on `meshforge/alerts` (all alerts) and `meshforge/alerts/{severity}` (filtered).
 
@@ -569,14 +569,21 @@ MeshForge Maps uses MQTT in two directions:
 {
   "mqtt_broker": "mqtt.meshtastic.org",
   "mqtt_port": 1883,
-  "mqtt_topic": "msh/#",
-  "mqtt_username": null,
-  "mqtt_password": null,
+  "mqtt_topic": "msh/US/2/e/#",
+  "mqtt_username": "meshdev",
+  "mqtt_password": "large4cats",
+  "mqtt_use_tls": false,
   "mqtt_alert_topic": "meshforge/alerts"
 }
 ```
 
-To use a **private MQTT broker**, set `mqtt_broker` to your broker's hostname and provide `mqtt_username`/`mqtt_password` for authentication. The subscription topic (`mqtt_topic`) can be narrowed to a specific region or channel (e.g., `msh/US/#`).
+The default credentials (`meshdev`/`large4cats`) are the Meshtastic public broker's well-known credentials. The default topic `msh/US/2/e/#` receives all US Meshtastic traffic.
+
+**Root topic auto-expansion:** You can enter just a root topic (e.g., `msh/US/HI`, `msh/US/Florida`) and the app auto-appends `/2/e/#` for encrypted packets and subscribes to the `/2/json/#` variant for pre-decoded packets.
+
+**MQTT settings UI:** Click the gear button in the web map control panel to configure MQTT settings (broker, port, credentials, topic, TLS) from the browser. Changes take effect immediately — no restart needed.
+
+To use a **private MQTT broker**, set `mqtt_broker` to your broker's hostname, provide `mqtt_username`/`mqtt_password`, and optionally enable TLS (`mqtt_use_tls: true`, `mqtt_port: 8883`).
 
 ## Configuration
 
@@ -601,10 +608,17 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `openhamclock_port` | number | `3000` | OpenHamClock port (tried first) |
 | `hamclock_port` | number | `8080` | HamClock legacy port (fallback) |
 | `mqtt_broker` | string | `mqtt.meshtastic.org` | MQTT broker hostname |
-| `mqtt_port` | number | `1883` | MQTT broker port |
-| `mqtt_topic` | string | `msh/#` | MQTT subscription topic |
-| `mqtt_username` | string | `null` | MQTT auth username (private brokers) |
-| `mqtt_password` | string | `null` | MQTT auth password (private brokers) |
+| `mqtt_port` | number | `1883` | MQTT broker port (8883 for TLS) |
+| `mqtt_topic` | string | `msh/US/2/e/#` | MQTT root topic (auto-expanded if needed) |
+| `mqtt_username` | string | `meshdev` | MQTT auth username |
+| `mqtt_password` | string | `large4cats` | MQTT auth password |
+| `mqtt_use_tls` | bool | `false` | Enable TLS encryption for MQTT |
+| `meshtasticd_host` | string | `localhost` | meshtasticd HTTP API host |
+| `meshtasticd_port` | number | `4403` | meshtasticd HTTP API port |
+| `aredn_node_targets` | list | `["localnode.local.mesh", ...]` | AREDN auto-discovery targets |
+| `rch_host` | string | `localhost` | Reticulum Community Hub API host |
+| `rch_port` | number | `8000` | RCH API port |
+| `rch_api_key` | string | `null` | RCH API authentication key |
 | `mqtt_alert_topic` | string | `meshforge/alerts` | MQTT topic for alert publishing |
 | `enable_noaa_alerts` | bool | `true` | Enable NOAA weather alerts |
 | `noaa_alerts_area` | string | `null` | State code filter (e.g. `"TX"`, `"CA"`); null = all US |
@@ -618,7 +632,7 @@ The HTTP and WebSocket servers bind to **127.0.0.1** (localhost) by default. Cha
 
 **API authentication:** Set `api_key` in settings.json to require authentication on all `/api/*` endpoints. Clients send the key via the `X-MeshForge-Key` HTTP header. When no key is configured, all API requests are allowed.
 
-**MQTT credentials:** `mqtt_username` and `mqtt_password` are stored in plaintext in `settings.json`. Ensure the file has restrictive permissions (`chmod 600`). TLS is auto-enabled when credentials are provided.
+**MQTT credentials:** `mqtt_username` and `mqtt_password` are stored in `settings.json` (protected by umask `0o077`). The default credentials are the Meshtastic public broker's well-known values. The `/api/config` endpoint redacts passwords in responses. Set `mqtt_use_tls: true` and `mqtt_port: 8883` for encrypted connections.
 
 **CORS:** Disabled by default (no CORS headers sent). Set `cors_allowed_origin` to a specific origin or `"*"` to enable cross-origin access.
 
