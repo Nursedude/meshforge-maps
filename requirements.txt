@@ -13,12 +13,12 @@ websockets>=12.0
 # Meshtastic protobuf decoding for MQTT messages
 protobuf>=4.0
 
-# Meshtastic Python library (for local daemon integration)
-# meshtastic>=2.5.0
+# Meshtastic Python library (protobuf definitions + local daemon integration)
+meshtastic>=2.5.0
 
 # TLS certificate handling for secure MQTT connections
-# pyopenssl>=25.3.0
-# cryptography>=45.0.7,<47
+pyopenssl>=25.3.0
+cryptography>=45.0.7,<47
 
 # Development / testing
 # pytest>=7.0
