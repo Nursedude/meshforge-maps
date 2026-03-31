@@ -380,8 +380,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self.send_header(
                 "Content-Security-Policy",
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline'; "
-                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com; "
+                "style-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com; "
                 "img-src 'self' https://*.basemaps.cartocdn.com "
                 "https://tile.openstreetmap.org https://tile.opentopomap.org "
                 "https://server.arcgisonline.com https://tiles.stadiamaps.com data:; "
