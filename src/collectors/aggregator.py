@@ -11,7 +11,10 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .aredn_collector import AREDNCollector
-from .base import deduplicate_features, make_feature_collection
+from .base import (
+    deduplicate_features, make_feature_collection, make_geometry_feature,
+    make_link_feature,
+)
 from .hamclock_collector import HamClockCollector
 from .meshtastic_collector import MeshtasticCollector
 from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
@@ -215,42 +218,27 @@ class DataAggregator:
             for link in aredn.get_topology_links():
                 # Include partially-resolved links as metadata-only features
                 if "source_lat" not in link or "target_lat" not in link:
-                    partial_feature = {
-                        "type": "Feature",
-                        "geometry": None,  # GeoJSON allows null geometry
-                        "properties": {
-                            "source": link.get("source", ""),
-                            "target": link.get("target", ""),
-                            "network": "aredn",
-                            "link_type": link.get("link_type", ""),
-                            "quality": link.get("quality"),
-                            "partial": True,
-                        },
-                    }
+                    partial_feature = make_geometry_feature(
+                        None,
+                        source=link.get("source", ""),
+                        target=link.get("target", ""),
+                        network="aredn",
+                        link_type=link.get("link_type", ""),
+                        quality=link.get("quality"),
+                        partial=True,
+                    )
                     result["features"].append(partial_feature)
                     continue
                 snr = link.get("snr")
                 quality_label, color = _classify_snr(snr)
-                feature = {
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "LineString",
-                        "coordinates": [
-                            [link["source_lon"], link["source_lat"]],
-                            [link["target_lon"], link["target_lat"]],
-                        ],
-                    },
-                    "properties": {
-                        "source": link.get("source", ""),
-                        "target": link.get("target", ""),
-                        "snr": snr,
-                        "quality": quality_label,
-                        "color": color,
-                        "network": "aredn",
-                        "link_type": link.get("link_type", ""),
-                        "aredn_quality": link.get("quality"),
-                    },
-                }
+                feature = make_link_feature(
+                    link.get("source", ""), link.get("target", ""),
+                    (link["source_lon"], link["source_lat"]),
+                    (link["target_lon"], link["target_lat"]),
+                    snr=snr, quality=quality_label, color=color,
+                    network="aredn", link_type=link.get("link_type", ""),
+                    aredn_quality=link.get("quality"),
+                )
                 result["features"].append(feature)
 
         result["properties"]["link_count"] = len(result["features"])

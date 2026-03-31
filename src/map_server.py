@@ -726,7 +726,11 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": "Alert engine not available"}, 503)
             return
         query = self._query
-        limit = int(_safe_query_param(query, "limit", "50") or "50")
+        try:
+            limit = int(_safe_query_param(query, "limit", "50") or "50")
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid limit parameter"}, 400)
+            return
         severity = _safe_query_param(query, "severity")
         node_id = _safe_query_param(query, "node_id")
         self._send_json({
@@ -872,6 +876,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "Content-Disposition",
             f'attachment; filename="{filename}"',
         )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
         cors_origin = self._get_cors_origin()
         if cors_origin:
             self.send_header("Access-Control-Allow-Origin", cors_origin)
@@ -886,7 +892,11 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
         query = self._query
         fmt = _safe_query_param(query, "format", "csv")
-        limit = max(1, min(int(_safe_query_param(query, "limit", "5000") or "5000"), 50000))
+        try:
+            limit = max(1, min(int(_safe_query_param(query, "limit", "5000") or "5000"), 50000))
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid limit parameter"}, 400)
+            return
 
         nodes = history.get_tracked_nodes()
         if fmt == "json":
@@ -916,7 +926,11 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
         query = self._query
         fmt = _safe_query_param(query, "format", "csv")
-        limit = max(1, min(int(_safe_query_param(query, "limit", "500") or "500"), 5000))
+        try:
+            limit = max(1, min(int(_safe_query_param(query, "limit", "500") or "500"), 5000))
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid limit parameter"}, 400)
+            return
 
         alerts = engine.get_alert_history(limit=limit)
         if fmt == "json":

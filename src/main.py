@@ -352,7 +352,8 @@ def _get_error_log_path() -> Path:
         log_dir = get_cache_dir() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir / "maps_errors.log"
-    except Exception:
+    except Exception as exc:
+        logger.debug("Could not resolve cache dir for error log: %s", exc)
         return Path("/tmp/meshforge_maps_errors.log")
 
 
@@ -458,8 +459,8 @@ def main() -> None:
                 f.write(f"[{datetime.datetime.now().isoformat()}] FATAL ERROR\n")
                 f.write(traceback.format_exc())
                 f.write(f"{'=' * 60}\n")
-        except Exception:
-            pass
+        except Exception as log_exc:
+            logger.debug("Could not write fatal error log: %s", log_exc)
 
         print(f"\nMeshForge Maps encountered a fatal error:\n")
         print(f"  {type(e).__name__}: {e}\n")
@@ -471,8 +472,8 @@ def main() -> None:
         if server:
             try:
                 server.stop()
-            except Exception:
-                pass
+            except Exception as stop_exc:
+                logger.debug("Error during server shutdown: %s", stop_exc)
         sys.exit(exit_code)
 
 
