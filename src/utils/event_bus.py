@@ -30,6 +30,7 @@ class EventType(str, Enum):
     SERVICE_DEGRADED = "service.degraded"
     DATA_REFRESHED = "data.refreshed"
     ALERT_FIRED = "alert.fired"
+    CONFIG_CHANGED = "config.changed"
 
 
 @dataclass

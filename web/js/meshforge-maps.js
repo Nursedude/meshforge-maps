@@ -593,6 +593,96 @@ async function refreshData() {
 }
 
 // =========================================================================
+// MQTT Settings Modal
+// =========================================================================
+
+async function openSettings() {
+    var modal = document.getElementById('settingsModal');
+    var overlay = document.getElementById('settingsOverlay');
+    var statusEl = document.getElementById('mqttStatus');
+    statusEl.innerHTML = 'Loading current settings...';
+
+    try {
+        var resp = await fetch(API_BASE + '/api/config');
+        if (!resp.ok) throw new Error('Failed to load config');
+        var cfg = await resp.json();
+
+        document.getElementById('cfgMqttBroker').value = cfg.mqtt_broker || '';
+        document.getElementById('cfgMqttPort').value = cfg.mqtt_port || 1883;
+        document.getElementById('cfgMqttUsername').value = cfg.mqtt_username || '';
+        document.getElementById('cfgMqttPassword').value = '';
+        document.getElementById('cfgMqttPassword').placeholder =
+            (cfg.mqtt_password === '***') ? 'Leave blank to keep current' : 'No password set';
+        document.getElementById('cfgMqttTopic').value = cfg.mqtt_topic || '';
+        document.getElementById('cfgMqttTls').checked = !!cfg.mqtt_use_tls;
+
+        // Show MQTT connection status
+        try {
+            var mqResp = await fetch(API_BASE + '/api/mqtt/stats');
+            if (mqResp.ok) {
+                var mq = await mqResp.json();
+                if (mq.connected) {
+                    statusEl.innerHTML = '<span class="status-ok">&#10003; Connected to ' +
+                        (mq.broker || cfg.mqtt_broker) + '</span>';
+                } else {
+                    statusEl.innerHTML = '<span class="status-err">&#10007; Disconnected</span>';
+                }
+            } else {
+                statusEl.innerHTML = '';
+            }
+        } catch (e) {
+            statusEl.innerHTML = '';
+        }
+    } catch (e) {
+        statusEl.innerHTML = '<span class="status-err">Failed to load settings</span>';
+    }
+
+    overlay.classList.add('visible');
+    modal.classList.add('visible');
+}
+
+function closeSettings() {
+    document.getElementById('settingsModal').classList.remove('visible');
+    document.getElementById('settingsOverlay').classList.remove('visible');
+}
+
+async function saveSettings(event) {
+    event.preventDefault();
+
+    var data = {
+        mqtt_broker: document.getElementById('cfgMqttBroker').value.trim(),
+        mqtt_port: parseInt(document.getElementById('cfgMqttPort').value, 10),
+        mqtt_topic: document.getElementById('cfgMqttTopic').value.trim(),
+        mqtt_username: document.getElementById('cfgMqttUsername').value.trim() || null,
+        mqtt_use_tls: document.getElementById('cfgMqttTls').checked
+    };
+
+    // Only send password if user typed a new one
+    var pw = document.getElementById('cfgMqttPassword').value;
+    if (pw) {
+        data.mqtt_password = pw;
+    }
+
+    try {
+        var resp = await fetch(API_BASE + '/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        var result = await resp.json();
+        if (resp.ok) {
+            showToast('MQTT settings saved — reconnecting...');
+            closeSettings();
+        } else {
+            var msg = result.details ? result.details.join(', ') : (result.error || 'Unknown error');
+            showToast('Save failed: ' + msg, true);
+        }
+    } catch (e) {
+        showToast('Save failed: ' + e.message, true);
+    }
+}
+
+// =========================================================================
 // Space Weather Display
 // =========================================================================
 

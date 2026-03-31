@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .paths import get_real_home
 
@@ -213,6 +213,51 @@ class MapsConfig:
     def to_dict(self) -> Dict[str, Any]:
         with self._lock:
             return dict(self._settings)
+
+    @staticmethod
+    def validate_update(data: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+        """Validate a config update payload. Returns (validated, errors)."""
+        validated: Dict[str, Any] = {}
+        errors: List[str] = []
+        for key, value in data.items():
+            if key not in DEFAULT_CONFIG:
+                errors.append(f"Unknown config key: {key}")
+                continue
+            # Type-specific validation
+            if key == "mqtt_port":
+                try:
+                    port = int(value)
+                except (ValueError, TypeError):
+                    errors.append("mqtt_port must be an integer")
+                    continue
+                if not (1 <= port <= 65535):
+                    errors.append("mqtt_port must be between 1 and 65535")
+                    continue
+                validated[key] = port
+            elif key == "mqtt_broker":
+                if not isinstance(value, str) or not value.strip():
+                    errors.append("mqtt_broker must be a non-empty string")
+                    continue
+                validated[key] = value.strip()
+            elif key == "mqtt_topic":
+                if not isinstance(value, str) or not value.strip():
+                    errors.append("mqtt_topic must be a non-empty string")
+                    continue
+                validated[key] = value.strip()
+            elif key == "mqtt_use_tls":
+                if not isinstance(value, bool):
+                    errors.append("mqtt_use_tls must be a boolean")
+                    continue
+                validated[key] = value
+            elif key in ("mqtt_username", "mqtt_password"):
+                # Allow string or None
+                if value is not None and not isinstance(value, str):
+                    errors.append(f"{key} must be a string or null")
+                    continue
+                validated[key] = value if value else None
+            else:
+                validated[key] = value
+        return validated, errors
 
     def get_tile_providers(self) -> Dict[str, Dict[str, str]]:
         return dict(TILE_PROVIDERS)

@@ -330,6 +330,40 @@ class DataAggregator:
         """The MQTT subscriber instance, or None if not configured."""
         return self._mqtt_subscriber
 
+    def restart_mqtt(self, config: Dict[str, Any]) -> bool:
+        """Restart the MQTT subscriber with updated config. Returns True on success."""
+        # Stop existing subscriber
+        if self._mqtt_subscriber:
+            self._mqtt_subscriber.stop()
+            self._mqtt_subscriber = None
+
+        if not config.get("enable_meshtastic", True):
+            logger.info("MQTT restart skipped: meshtastic disabled")
+            return False
+
+        self._mqtt_subscriber = MQTTSubscriber(
+            broker=config.get("mqtt_broker", "mqtt.meshtastic.org"),
+            port=config.get("mqtt_port", 1883),
+            topic=config.get("mqtt_topic", "msh/#"),
+            username=config.get("mqtt_username", "meshdev"),
+            password=config.get("mqtt_password", "large4cats"),
+            tls=config.get("mqtt_use_tls", False),
+            event_bus=self._event_bus,
+        )
+        if not self._mqtt_subscriber.available:
+            logger.warning("MQTT restart: paho-mqtt not available")
+            self._mqtt_subscriber = None
+            return False
+
+        self._mqtt_subscriber.start()
+        # Update the MeshtasticCollector's mqtt_store reference
+        meshtastic = self._collectors.get("meshtastic")
+        if meshtastic and hasattr(meshtastic, "_mqtt_store"):
+            meshtastic._mqtt_store = self._mqtt_subscriber.store
+        logger.info("MQTT subscriber restarted with broker=%s:%d",
+                     config.get("mqtt_broker"), config.get("mqtt_port"))
+        return True
+
     def clear_all_caches(self) -> None:
         for collector in self._collectors.values():
             collector.clear_cache()
