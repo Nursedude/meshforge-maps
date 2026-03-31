@@ -45,7 +45,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Set mqtt_use_tls=True and mqtt_port=8883 for encrypted connections
     "mqtt_broker": "mqtt.meshtastic.org",
     "mqtt_port": 1883,
-    "mqtt_topic": "msh/#",
+    "mqtt_topic": "msh/US/2/e/#",
     "mqtt_username": "meshdev",
     "mqtt_password": "large4cats",
     "mqtt_use_tls": False,
