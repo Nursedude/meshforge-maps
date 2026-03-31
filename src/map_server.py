@@ -260,17 +260,79 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self) -> None:
-        """Handle POST requests (backup creation)."""
+        """Handle POST requests (config update, backup creation)."""
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
         if not self._check_api_key():
             return
 
-        if path == "/api/backup/create":
+        if path == "/api/config":
+            self._handle_config_update()
+        elif path == "/api/backup/create":
             self._handle_backup_create()
         else:
             self._send_json({"error": "Not found"}, 404)
+
+    def _read_json_body(self, max_size: int = 16384) -> Optional[Any]:
+        """Read and parse a JSON request body. Returns None on error."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            self._send_json({"error": "Invalid Content-Length"}, 400)
+            return None
+        if length <= 0 or length > max_size:
+            self._send_json({"error": "Invalid request body size"}, 400)
+            return None
+        try:
+            body = self.rfile.read(length)
+            return json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            self._send_json({"error": f"Invalid JSON: {e}"}, 400)
+            return None
+
+    def _handle_config_update(self) -> None:
+        """Update configuration settings (MQTT, sources, etc.)."""
+        config = self._ctx.config
+        if not config:
+            self._send_json({"error": "Config not available"}, 503)
+            return
+
+        data = self._read_json_body()
+        if data is None:
+            return
+        if not isinstance(data, dict):
+            self._send_json({"error": "Request body must be a JSON object"}, 400)
+            return
+
+        validated, errors = config.validate_update(data)
+        if errors:
+            self._send_json({"error": "Validation failed", "details": errors}, 400)
+            return
+        if not validated:
+            self._send_json({"error": "No valid settings provided"}, 400)
+            return
+
+        # Check if MQTT settings are changing
+        mqtt_keys = {"mqtt_broker", "mqtt_port", "mqtt_topic",
+                     "mqtt_username", "mqtt_password", "mqtt_use_tls"}
+        mqtt_changed = any(k in validated for k in mqtt_keys)
+
+        config.update(validated)
+        config.save()
+
+        # Restart MQTT subscriber if broker settings changed
+        if mqtt_changed:
+            aggregator = self._ctx.aggregator
+            if aggregator:
+                aggregator.restart_mqtt(config.to_dict())
+
+        # Return updated config (redacted)
+        cfg = config.to_dict()
+        for key in self._REDACTED_CONFIG_KEYS:
+            if cfg.get(key) is not None:
+                cfg[key] = "***"
+        self._send_json({"status": "saved", "config": cfg})
 
     def _handle_backup_create(self) -> None:
         """Create a SQLite backup of the node history database."""

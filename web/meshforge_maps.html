@@ -194,8 +194,55 @@
         <button class="refresh-btn" id="refreshBtn" onclick="refreshData()">
             Refresh All Sources
         </button>
+        <button class="refresh-btn" style="margin-top:6px" onclick="openSettings()">
+            &#9881; MQTT Settings
+        </button>
         <div class="last-updated" id="lastUpdated">Not yet loaded</div>
     </div>
+</div>
+
+<div class="settings-overlay" id="settingsOverlay" onclick="closeSettings()"></div>
+<div class="settings-modal" id="settingsModal">
+    <div class="settings-header">
+        <span class="settings-title">MQTT Configuration</span>
+        <button class="settings-close" onclick="closeSettings()">&times;</button>
+    </div>
+    <form id="settingsForm" onsubmit="saveSettings(event)">
+        <div class="settings-body">
+            <div class="settings-field">
+                <label for="cfgMqttBroker">Server Address</label>
+                <input type="text" id="cfgMqttBroker" placeholder="mqtt.meshtastic.org" />
+            </div>
+            <div class="settings-field">
+                <label for="cfgMqttPort">Port</label>
+                <input type="number" id="cfgMqttPort" min="1" max="65535" placeholder="1883" />
+            </div>
+            <div class="settings-field">
+                <label for="cfgMqttUsername">Username</label>
+                <input type="text" id="cfgMqttUsername" placeholder="meshdev" />
+            </div>
+            <div class="settings-field">
+                <label for="cfgMqttPassword">Password</label>
+                <input type="password" id="cfgMqttPassword" placeholder="Leave blank to keep current" />
+            </div>
+            <div class="settings-field">
+                <label for="cfgMqttTopic">Root Topic</label>
+                <input type="text" id="cfgMqttTopic" placeholder="msh/#" />
+            </div>
+            <div class="settings-field settings-checkbox">
+                <label for="cfgMqttTls">
+                    <input type="checkbox" id="cfgMqttTls" />
+                    Encryption Enabled (TLS)
+                </label>
+                <span class="settings-hint">Use port 8883 with TLS enabled</span>
+            </div>
+            <div class="settings-status" id="mqttStatus"></div>
+        </div>
+        <div class="settings-footer">
+            <button type="button" class="settings-btn settings-btn-cancel" onclick="closeSettings()">Cancel</button>
+            <button type="submit" class="settings-btn settings-btn-save">Save &amp; Reconnect</button>
+        </div>
+    </form>
 </div>
 
 <div id="map"></div>
