@@ -59,11 +59,11 @@ class DataAggregator:
         if config.get("enable_meshtastic", True):
             self._mqtt_subscriber = MQTTSubscriber(
                 broker=config.get("mqtt_broker", "mqtt.meshtastic.org"),
-                port=config.get("mqtt_port", 8883),
+                port=config.get("mqtt_port", 1883),
                 topic=config.get("mqtt_topic", "msh/#"),
                 username=config.get("mqtt_username", "meshdev"),
                 password=config.get("mqtt_password", "large4cats"),
-                tls=config.get("mqtt_use_tls", True),
+                tls=config.get("mqtt_use_tls", False),
                 event_bus=self._event_bus,
             )
             if self._mqtt_subscriber.available:
