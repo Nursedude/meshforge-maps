@@ -596,11 +596,18 @@ class MQTTSubscriber:
         self._connected.set()
         logger.info("MQTT connected to %s (rc=%s), store has %d nodes",
                     self._broker, rc, self._store.node_count)
-        client.subscribe(self._topic)
-        # Also subscribe to JSON topic if subscribing to encrypted topic
-        # JSON packets are pre-decoded and don't need decryption
-        if "/2/e/" in self._topic:
-            json_topic = self._topic.replace("/2/e/", "/2/json/")
+
+        # Auto-expand root topics (e.g. "msh/US/HI") to full subscription path
+        topic = self._topic
+        if not topic.endswith("/#") and "/2/e/" not in topic and "/2/json/" not in topic:
+            topic = topic.rstrip("/") + "/2/e/#"
+            logger.info("MQTT topic expanded: %s -> %s", self._topic, topic)
+
+        client.subscribe(topic)
+
+        # Also subscribe to JSON topic for pre-decoded packets
+        if "/2/e/" in topic:
+            json_topic = topic.replace("/2/e/", "/2/json/")
             client.subscribe(json_topic)
             logger.info("MQTT also subscribed to JSON topic: %s", json_topic)
 
