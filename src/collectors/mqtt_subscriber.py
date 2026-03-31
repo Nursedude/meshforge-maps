@@ -68,6 +68,19 @@ except ImportError:
     _HAS_CRYPTO = False
 
 
+# Import protobuf DecodeError for silent error handling (optional)
+try:
+    from google.protobuf.message import DecodeError as _ProtobufDecodeError
+except ImportError:
+    _ProtobufDecodeError = None
+
+# Exception types that are silently counted (not logged individually)
+_SILENT_ERRORS = [ValueError, TypeError, KeyError, AttributeError]
+if _ProtobufDecodeError is not None:
+    _SILENT_ERRORS.append(_ProtobufDecodeError)
+_SILENT_ERRORS = tuple(_SILENT_ERRORS)
+
+
 def _try_import_paho():
     """Try to import paho-mqtt. Returns (Client class, CallbackAPIVersion) or (None, None)."""
     try:
@@ -642,7 +655,7 @@ class MQTTSubscriber:
             else:
                 # Fallback: try JSON (if device has JSON mode enabled)
                 self._decode_json(msg.payload, msg.topic)
-        except (ValueError, TypeError, KeyError, AttributeError):
+        except _SILENT_ERRORS:
             # Unparseable messages are common on the public broker
             with self._stats_lock:
                 self._parse_errors += 1
