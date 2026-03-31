@@ -24,6 +24,7 @@ import json
 import logging
 import math
 import socket
+import struct
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -53,6 +54,18 @@ MAX_NODES = 10000
 
 # Maximum MQTT payload size to process (bytes) -- reject oversized payloads
 MAX_PAYLOAD_SIZE = 65536  # 64 KB
+
+# Default Meshtastic LongFast channel AES key (well-known public PSK)
+# This is the expanded form of the 1-byte default PSK (AQ== / 0x01).
+# All Meshtastic devices ship with this key on the default channel.
+_DEFAULT_KEY = bytes.fromhex("d4f1bb3a20290759f0bcffabcf4e6901")
+
+# Try to import cryptography for AES-CTR decryption
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    _HAS_CRYPTO = True
+except ImportError:
+    _HAS_CRYPTO = False
 
 
 def _try_import_paho():
@@ -584,6 +597,12 @@ class MQTTSubscriber:
         logger.info("MQTT connected to %s (rc=%s), store has %d nodes",
                     self._broker, rc, self._store.node_count)
         client.subscribe(self._topic)
+        # Also subscribe to JSON topic if subscribing to encrypted topic
+        # JSON packets are pre-decoded and don't need decryption
+        if "/2/e/" in self._topic:
+            json_topic = self._topic.replace("/2/e/", "/2/json/")
+            client.subscribe(json_topic)
+            logger.info("MQTT also subscribed to JSON topic: %s", json_topic)
 
     def _on_disconnect(self, client: Any, userdata: Any, rc: Any,
                        *args: Any) -> None:
@@ -608,8 +627,10 @@ class MQTTSubscriber:
             self._messages_received += 1
 
         try:
-            # Try protobuf decoding first
-            if self._proto:
+            # Route JSON topics directly to JSON decoder
+            if "/json/" in msg.topic:
+                self._decode_json(msg.payload, msg.topic)
+            elif self._proto:
                 self._decode_protobuf(msg.payload, msg.topic)
             else:
                 # Fallback: try JSON (if device has JSON mode enabled)
@@ -672,10 +693,14 @@ class MQTTSubscriber:
         packet = env.packet
         from_node = f"!{packet.sender:08x}" if hasattr(packet, "sender") else f"!{getattr(packet, 'from', 0):08x}"
 
-        if not hasattr(packet, "decoded") or not packet.decoded:
-            return  # Encrypted packet we can't decode
-
-        decoded = packet.decoded
+        if hasattr(packet, "decoded") and packet.decoded:
+            decoded = packet.decoded
+        elif hasattr(packet, "encrypted") and packet.encrypted:
+            decoded = self._try_decrypt(packet)
+            if decoded is None:
+                return
+        else:
+            return
         portnum = decoded.portnum
 
         if portnum == PORTNUM_POSITION:
@@ -688,6 +713,36 @@ class MQTTSubscriber:
             self._handle_neighborinfo(from_node, decoded.payload)
         elif portnum == PORTNUM_MAP_REPORT:
             self._handle_map_report(from_node, decoded.payload)
+
+    def _try_decrypt(self, packet: Any) -> Any:
+        """Attempt to decrypt an encrypted Meshtastic packet using default key.
+
+        Uses AES-128-CTR with the well-known LongFast channel PSK.
+        Returns a parsed mesh_pb2.Data object, or None on failure.
+        """
+        if not _HAS_CRYPTO:
+            return None
+
+        mesh_pb2 = self._proto["mesh_pb2"]
+        try:
+            # Build 16-byte CTR nonce from packet.id and sender/from
+            packet_id = getattr(packet, "id", 0)
+            from_node = getattr(packet, "sender", 0) or getattr(packet, "from", 0)
+            nonce = struct.pack("<QQ", packet_id, from_node)
+
+            cipher = Cipher(algorithms.AES(_DEFAULT_KEY), modes.CTR(nonce))
+            decryptor = cipher.decryptor()
+            decrypted = decryptor.update(packet.encrypted) + decryptor.finalize()
+
+            data = mesh_pb2.Data()
+            data.ParseFromString(decrypted)
+
+            # Sanity check: portnum should be a known value
+            if data.portnum < 1 or data.portnum > 256:
+                return None
+            return data
+        except Exception:
+            return None
 
     def _handle_position(self, node_id: str, payload: bytes) -> None:
         from .base import validate_coordinates
