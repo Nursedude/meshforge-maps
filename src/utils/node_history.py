@@ -249,24 +249,23 @@ class NodeHistoryDB:
             coordinates.append(coord)
             timestamps.append(ts)
 
+        from ..collectors.base import make_geometry_feature
+
         if len(coordinates) == 1:
             geometry = {"type": "Point", "coordinates": coordinates[0]}
         else:
             geometry = {"type": "LineString", "coordinates": coordinates}
 
-        feature = {
-            "type": "Feature",
-            "geometry": geometry,
-            "properties": {
-                "node_id": node_id,
-                "point_count": len(coordinates),
-                "first_seen": timestamps[0] if timestamps else None,
-                "last_seen": timestamps[-1] if timestamps else None,
-                "time_span_seconds": (
-                    timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0
-                ),
-            },
-        }
+        feature = make_geometry_feature(
+            geometry,
+            node_id=node_id,
+            point_count=len(coordinates),
+            first_seen=timestamps[0] if timestamps else None,
+            last_seen=timestamps[-1] if timestamps else None,
+            time_span_seconds=(
+                timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0
+            ),
+        )
         return {"type": "FeatureCollection", "features": [feature]}
 
     def get_node_history(
@@ -346,30 +345,25 @@ class NodeHistoryDB:
                 logger.error("Snapshot query failed: %s", e)
                 return {"type": "FeatureCollection", "features": []}
 
+        from ..collectors.base import make_geometry_feature
+
         features = []
         for row in rows:
             node_id, ts, lat, lon, alt, network, snr, battery, name = row
-            props: Dict[str, Any] = {
-                "id": node_id,
-                "name": name or node_id,
-                "network": network or "unknown",
-                "last_seen": ts,
-            }
-            if snr is not None:
-                props["snr"] = snr
-            if battery is not None:
-                props["battery"] = battery
-            if alt is not None:
-                props["altitude"] = alt
-
             coord = [lon, lat]
             if alt is not None:
                 coord.append(alt)
-            features.append({
-                "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": coord},
-                "properties": props,
-            })
+            feature = make_geometry_feature(
+                {"type": "Point", "coordinates": coord},
+                id=node_id,
+                name=name or node_id,
+                network=network or "unknown",
+                last_seen=ts,
+                snr=snr,
+                battery=battery,
+                altitude=alt,
+            )
+            features.append(feature)
 
         return {
             "type": "FeatureCollection",

@@ -150,6 +150,51 @@ def make_feature(
     }
 
 
+def make_link_feature(
+    source_id: str,
+    target_id: str,
+    source_coords: Tuple[float, float],
+    target_coords: Tuple[float, float],
+    **extra_props: Any,
+) -> Dict[str, Any]:
+    """Create a GeoJSON Feature with LineString geometry for a network link.
+
+    Coordinates are (lon, lat) pairs as required by GeoJSON.
+    """
+    properties = {
+        "source": source_id,
+        "target": target_id,
+    }
+    properties.update(extra_props)
+    properties = {k: v for k, v in properties.items() if v is not None}
+
+    return {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [list(source_coords), list(target_coords)],
+        },
+        "properties": properties,
+    }
+
+
+def make_geometry_feature(
+    geometry: Optional[Dict[str, Any]],
+    **props: Any,
+) -> Dict[str, Any]:
+    """Create a GeoJSON Feature with arbitrary geometry (including None).
+
+    Use for Polygon/MultiPolygon alerts, null-geometry metadata features,
+    or trajectory LineStrings that don't fit the Point-based make_feature().
+    """
+    properties = {k: v for k, v in props.items() if v is not None}
+    return {
+        "type": "Feature",
+        "geometry": geometry,
+        "properties": properties,
+    }
+
+
 def make_feature_collection(
     features: List[Dict[str, Any]],
     source: str,

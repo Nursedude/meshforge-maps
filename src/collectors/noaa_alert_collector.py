@@ -15,7 +15,7 @@ from urllib.error import URLError
 
 from datetime import datetime, timezone
 
-from .base import BaseCollector, make_feature_collection
+from .base import BaseCollector, make_feature_collection, make_geometry_feature
 
 logger = logging.getLogger(__name__)
 
@@ -135,26 +135,23 @@ class NOAAAlertCollector(BaseCollector):
                 except (ValueError, TypeError):
                     pass  # Keep alert if we can't parse expiry
 
-            processed.append({
-                "type": "Feature",
-                "geometry": geom,
-                "properties": {
-                    "id": alert_id,
-                    "network": "noaa_alerts",
-                    "event": props.get("event", ""),
-                    "headline": props.get("headline", ""),
-                    "description": props.get("description", ""),
-                    "severity": severity,
-                    "certainty": props.get("certainty", ""),
-                    "urgency": props.get("urgency", ""),
-                    "area_desc": props.get("areaDesc", ""),
-                    "onset": props.get("onset"),
-                    "expires": expires,
-                    "sender_name": props.get("senderName", ""),
-                    "color": color,
-                    "severity_order": SEVERITY_ORDER.get(severity, 4),
-                },
-            })
+            processed.append(make_geometry_feature(
+                geom,
+                id=alert_id,
+                network="noaa_alerts",
+                event=props.get("event", ""),
+                headline=props.get("headline", ""),
+                description=props.get("description", ""),
+                severity=severity,
+                certainty=props.get("certainty", ""),
+                urgency=props.get("urgency", ""),
+                area_desc=props.get("areaDesc", ""),
+                onset=props.get("onset"),
+                expires=expires,
+                sender_name=props.get("senderName", ""),
+                color=color,
+                severity_order=SEVERITY_ORDER.get(severity, 4),
+            ))
 
         # Sort by severity (most severe first)
         processed.sort(key=lambda f: f["properties"]["severity_order"])

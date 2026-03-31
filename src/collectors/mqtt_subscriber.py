@@ -312,28 +312,19 @@ class MQTTNodeStore:
           - Bad (SNR < -10):        #f44336 (red)
           - Unknown (no SNR):       #9e9e9e (grey)
         """
+        from .base import make_link_feature
+
         links = self.get_topology_links()
         features = []
         for link in links:
             snr = link.get("snr")
             quality, color = _classify_snr(snr)
-            feature = {
-                "type": "Feature",
-                "geometry": {
-                    "type": "LineString",
-                    "coordinates": [
-                        [link["source_lon"], link["source_lat"]],
-                        [link["target_lon"], link["target_lat"]],
-                    ],
-                },
-                "properties": {
-                    "source": link["source"],
-                    "target": link["target"],
-                    "snr": snr,
-                    "quality": quality,
-                    "color": color,
-                },
-            }
+            feature = make_link_feature(
+                link["source"], link["target"],
+                (link["source_lon"], link["source_lat"]),
+                (link["target_lon"], link["target_lat"]),
+                snr=snr, quality=quality, color=color,
+            )
             features.append(feature)
         return {
             "type": "FeatureCollection",

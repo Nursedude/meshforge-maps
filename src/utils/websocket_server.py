@@ -42,7 +42,11 @@ class MapWebSocketServer:
     """
 
     # Allowed WebSocket origin prefixes (localhost only by default)
-    _ALLOWED_ORIGINS = ["http://localhost", "https://localhost"]
+    _ALLOWED_ORIGINS = [
+        "http://localhost", "https://localhost",
+        "http://127.0.0.1", "https://127.0.0.1",
+        None,  # Allow connections without Origin header (non-browser clients)
+    ]
 
     # Allowed client message types
     _ALLOWED_MSG_TYPES = frozenset({"ping", "get_history", "get_stats"})
