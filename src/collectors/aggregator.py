@@ -59,10 +59,11 @@ class DataAggregator:
         if config.get("enable_meshtastic", True):
             self._mqtt_subscriber = MQTTSubscriber(
                 broker=config.get("mqtt_broker", "mqtt.meshtastic.org"),
-                port=config.get("mqtt_port", 1883),
+                port=config.get("mqtt_port", 8883),
                 topic=config.get("mqtt_topic", "msh/#"),
-                username=config.get("mqtt_username"),
-                password=config.get("mqtt_password"),
+                username=config.get("mqtt_username", "meshdev"),
+                password=config.get("mqtt_password", "large4cats"),
+                tls=config.get("mqtt_use_tls", True),
                 event_bus=self._event_bus,
             )
             if self._mqtt_subscriber.available:
@@ -73,6 +74,8 @@ class DataAggregator:
 
         if config.get("enable_meshtastic", True):
             self._collectors["meshtastic"] = MeshtasticCollector(
+                meshtasticd_host=config.get("meshtasticd_host", "localhost"),
+                meshtasticd_port=config.get("meshtasticd_port", 4403),
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
                 mqtt_store=mqtt_store,
@@ -81,6 +84,9 @@ class DataAggregator:
 
         if config.get("enable_reticulum", True):
             self._collectors["reticulum"] = ReticulumCollector(
+                rch_host=config.get("rch_host", "localhost"),
+                rch_port=config.get("rch_port", 8000),
+                rch_api_key=config.get("rch_api_key"),
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
             )
@@ -96,6 +102,7 @@ class DataAggregator:
 
         if config.get("enable_aredn", True):
             self._collectors["aredn"] = AREDNCollector(
+                node_targets=config.get("aredn_node_targets"),
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
             )
@@ -128,6 +135,11 @@ class DataAggregator:
         per_source_features: List[List[Dict[str, Any]]] = []
         source_counts: Dict[str, int] = {}
         overlay_data: Dict[str, Any] = {}
+
+        # Pre-populate so all enabled sources appear in output even on failure
+        for name in self._collectors:
+            if name not in self._OVERLAY_ONLY_COLLECTORS:
+                source_counts[name] = 0
 
         with self._perf_monitor.time_cycle() as cycle_ctx:
             for name, collector in self._collectors.items():

@@ -40,18 +40,30 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "http_port": 8808,
     "http_host": "127.0.0.1",
     "ws_host": "127.0.0.1",
-    # MQTT broker configuration (upstream: private broker support)
+    # MQTT broker configuration
+    # Public broker defaults: meshdev/large4cats on TLS port 8883
+    # Override with private broker credentials in settings.json
     "mqtt_broker": "mqtt.meshtastic.org",
-    "mqtt_port": 1883,
+    "mqtt_port": 8883,
     "mqtt_topic": "msh/#",
-    "mqtt_username": None,
-    "mqtt_password": None,
+    "mqtt_username": "meshdev",
+    "mqtt_password": "large4cats",
+    "mqtt_use_tls": True,
     # CORS: None = same-origin (no CORS headers sent); set to "*" or a specific origin to enable
     "cors_allowed_origin": None,
     # API key for protecting /api/ endpoints (None = no auth required)
     "api_key": None,
     # Meshtastic API proxy port (meshtasticd-compatible JSON proxy)
     "meshtastic_proxy_port": 4404,
+    # meshtasticd HTTP API connection
+    "meshtasticd_host": "localhost",
+    "meshtasticd_port": 4403,
+    # AREDN auto-discovery targets (queried on port 8080 for sysinfo.json)
+    "aredn_node_targets": ["localnode.local.mesh", "10.0.0.1", "localnode"],
+    # Reticulum Community Hub (RCH) API
+    "rch_host": "localhost",
+    "rch_port": 8000,
+    "rch_api_key": None,
 }
 
 # Tile provider definitions for Leaflet.js
@@ -131,8 +143,13 @@ class MapsConfig:
                     saved = json.load(f)
                 with self._lock:
                     for key, value in saved.items():
-                        if key in DEFAULT_CONFIG:
-                            self._settings[key] = value
+                        if key not in DEFAULT_CONFIG:
+                            continue
+                        # Don't let saved None values suppress upgraded non-None defaults
+                        # (e.g. old settings.json with "mqtt_username": null)
+                        if value is None and DEFAULT_CONFIG[key] is not None:
+                            continue
+                        self._settings[key] = value
                 logger.info("Loaded settings from %s", self._config_path)
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Failed to load settings: %s, using defaults", e)
