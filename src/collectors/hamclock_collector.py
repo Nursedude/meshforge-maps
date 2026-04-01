@@ -453,13 +453,15 @@ class HamClockCollector(BaseCollector):
 
         # Planetary K-index
         kp = self._fetch_json(SWPC_KP_INDEX)
-        if kp and isinstance(kp, list) and len(kp) > 1:
+        if kp and isinstance(kp, list) and len(kp) > 0:
             latest = kp[-1]
-            if isinstance(latest, list) and len(latest) >= 2:
-                try:
+            try:
+                if isinstance(latest, dict):
+                    weather["kp_index"] = float(latest.get("Kp", 0))
+                elif isinstance(latest, list) and len(latest) >= 2:
                     weather["kp_index"] = float(latest[1])
-                except (ValueError, TypeError):
-                    pass
+            except (ValueError, TypeError):
+                pass
 
         # Solar wind speed
         sw = self._fetch_json(SWPC_SOLAR_WIND)
