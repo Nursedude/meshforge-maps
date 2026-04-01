@@ -87,6 +87,7 @@ class DataAggregator:
                 rch_host=config.get("rch_host", "localhost"),
                 rch_port=config.get("rch_port", 8000),
                 rch_api_key=config.get("rch_api_key"),
+                enable_rmap_public=config.get("enable_rmap_public", True),
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
             )
@@ -103,6 +104,7 @@ class DataAggregator:
         if config.get("enable_aredn", True):
             self._collectors["aredn"] = AREDNCollector(
                 node_targets=config.get("aredn_node_targets"),
+                enable_worldmap=config.get("enable_aredn_worldmap", True),
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
             )

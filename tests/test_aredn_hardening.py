@@ -262,7 +262,7 @@ class TestFetchDeduplication:
 
     @pytest.fixture
     def collector(self):
-        return AREDNCollector(cache_ttl_seconds=0)
+        return AREDNCollector(cache_ttl_seconds=0, enable_worldmap=False)
 
     @patch.object(AREDNCollector, "_fetch_from_node")
     @patch.object(AREDNCollector, "_fetch_from_cache")
