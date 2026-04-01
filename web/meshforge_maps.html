@@ -194,11 +194,32 @@
         <button class="refresh-btn" id="refreshBtn" onclick="refreshData()">
             Refresh All Sources
         </button>
-        <button class="refresh-btn" style="margin-top:6px" onclick="openSettings()">
-            &#9881; MQTT Settings
+        <button class="refresh-btn" style="margin-top:6px" id="settingsBtn" onclick="openSettings()">
+            &#9881; Settings
         </button>
         <div class="last-updated" id="lastUpdated">Not yet loaded</div>
     </div>
+</div>
+
+<div class="settings-overlay" id="loginOverlay" onclick="closeLogin()"></div>
+<div class="settings-modal" id="loginModal" style="width:300px">
+    <div class="settings-header">
+        <span class="settings-title">Admin Login</span>
+        <button class="settings-close" onclick="closeLogin()">&times;</button>
+    </div>
+    <form onsubmit="submitLogin(event)">
+        <div class="settings-body">
+            <div class="settings-field">
+                <label for="loginApiKey">API Key</label>
+                <input type="password" id="loginApiKey" placeholder="Enter admin API key" />
+            </div>
+            <div class="settings-status" id="loginStatus"></div>
+        </div>
+        <div class="settings-footer">
+            <button type="button" class="settings-btn settings-btn-cancel" onclick="closeLogin()">Cancel</button>
+            <button type="submit" class="settings-btn settings-btn-save">Login</button>
+        </div>
+    </form>
 </div>
 
 <div class="settings-overlay" id="settingsOverlay" onclick="closeSettings()"></div>

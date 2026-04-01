@@ -374,6 +374,10 @@ def _parse_args() -> "argparse.Namespace":
         help="Launch TUI client only (connect to an already-running server)",
     )
     parser.add_argument(
+        "--setup", action="store_true",
+        help="Run the interactive setup wizard to configure settings",
+    )
+    parser.add_argument(
         "--host", default="127.0.0.1",
         help="Server host (default: 127.0.0.1)",
     )
@@ -390,6 +394,12 @@ def main() -> None:
     import threading
 
     args = _parse_args()
+
+    # Setup wizard mode
+    if args.setup:
+        from .tui.setup_wizard import run_setup
+        run_setup()
+        return
 
     # TUI-only mode: just launch the curses UI against an existing server
     if args.tui_only:
