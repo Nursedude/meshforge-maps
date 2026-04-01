@@ -24,6 +24,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_reticulum": True,
     "enable_hamclock": True,
     "enable_aredn": True,
+    "enable_meshcore": True,
     "enable_noaa_alerts": True,
     # Meshtastic data source mode: "auto" (API → MQTT → cache), "mqtt_only", "local_only"
     "meshtastic_source": "auto",
@@ -67,6 +68,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Public map data sources
     "enable_rmap_public": True,       # Fetch RMAP.world Reticulum node data
     "enable_aredn_worldmap": True,    # Fetch AREDN worldmap node data
+    "enable_meshcore_map": True,      # Fetch MeshCore map node data
 }
 
 # Tile provider definitions for Leaflet.js
@@ -114,6 +116,7 @@ NETWORK_COLORS: Dict[str, str] = {
     "meshtastic": "#66bb6a",
     "reticulum": "#ab47bc",
     "aredn": "#ff7043",
+    "meshcore": "#26c6da",
     "hamclock": "#42a5f5",
     "noaa_alerts": "#f44336",
 }
@@ -277,6 +280,8 @@ class MapsConfig:
             sources.append("hamclock")
         if settings.get("enable_aredn"):
             sources.append("aredn")
+        if settings.get("enable_meshcore"):
+            sources.append("meshcore")
         if settings.get("enable_noaa_alerts"):
             sources.append("noaa_alerts")
         return sources

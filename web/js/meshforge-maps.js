@@ -25,10 +25,12 @@ async function fetchWithRetry(url, retries, baseDelay) {
 }
 
 // Network colors (matches meshforge core palette)
+// NOTE: Keep in sync with NETWORK_COLORS in src/utils/config.py
 const NETWORK_COLORS = {
     meshtastic: '#66bb6a',
     reticulum: '#ab47bc',
     aredn:     '#ff7043',
+    meshcore:  '#26c6da',
     hamclock:  '#42a5f5',
 };
 
@@ -110,11 +112,13 @@ const networkLayers = {
     meshtastic: [],
     reticulum: [],
     aredn: [],
+    meshcore: [],
 };
 const networkVisible = {
     meshtastic: true,
     reticulum: true,
     aredn: true,
+    meshcore: true,
 };
 
 // --- Overlay preference persistence (localStorage) ---
@@ -125,6 +129,7 @@ function saveOverlayPrefs() {
         layerMeshtastic: networkVisible.meshtastic,
         layerReticulum: networkVisible.reticulum,
         layerAredn: networkVisible.aredn,
+        layerMeshcore: networkVisible.meshcore,
         overlayClustering: useClustering,
         overlayTerminator: !!document.getElementById('overlayTerminator').checked,
         overlayTopology: showTopology,
@@ -144,6 +149,7 @@ function restoreOverlayPrefs() {
         if (prefs.layerMeshtastic !== undefined) { networkVisible.meshtastic = prefs.layerMeshtastic; document.getElementById('layerMeshtastic').checked = prefs.layerMeshtastic; }
         if (prefs.layerReticulum !== undefined) { networkVisible.reticulum = prefs.layerReticulum; document.getElementById('layerReticulum').checked = prefs.layerReticulum; }
         if (prefs.layerAredn !== undefined) { networkVisible.aredn = prefs.layerAredn; document.getElementById('layerAredn').checked = prefs.layerAredn; }
+        if (prefs.layerMeshcore !== undefined) { networkVisible.meshcore = prefs.layerMeshcore; document.getElementById('layerMeshcore').checked = prefs.layerMeshcore; }
         // Overlays
         if (prefs.overlayClustering !== undefined) { useClustering = prefs.overlayClustering; document.getElementById('overlayClustering').checked = prefs.overlayClustering; }
         if (prefs.overlayTerminator !== undefined) { document.getElementById('overlayTerminator').checked = prefs.overlayTerminator; }
@@ -368,10 +374,11 @@ function renderMarkers() {
     directGroup.clearLayers();
     markerRegistry.clear();
 
-    const counts = { meshtastic: 0, reticulum: 0, aredn: 0 };
+    const counts = { meshtastic: 0, reticulum: 0, aredn: 0, meshcore: 0 };
     networkLayers.meshtastic = [];
     networkLayers.reticulum = [];
     networkLayers.aredn = [];
+    networkLayers.meshcore = [];
 
     for (const feature of allFeatures) {
         const props = feature.properties || {};
@@ -425,9 +432,11 @@ function renderMarkers() {
     document.getElementById('countMeshtastic').textContent = counts.meshtastic;
     document.getElementById('countReticulum').textContent = counts.reticulum;
     document.getElementById('countAredn').textContent = counts.aredn;
+    document.getElementById('countMeshcore').textContent = counts.meshcore;
     document.getElementById('statMeshtastic').textContent = counts.meshtastic;
     document.getElementById('statReticulum').textContent = counts.reticulum;
     document.getElementById('statAredn').textContent = counts.aredn;
+    document.getElementById('statMeshcore').textContent = counts.meshcore;
 }
 
 function processGeoJSON(data) {
@@ -767,6 +776,7 @@ async function openSettings() {
         document.getElementById('cfgEnableMeshtastic').checked = cfg.enable_meshtastic !== false;
         document.getElementById('cfgEnableReticulum').checked = cfg.enable_reticulum !== false;
         document.getElementById('cfgEnableAredn').checked = cfg.enable_aredn !== false;
+        document.getElementById('cfgEnableMeshcore').checked = cfg.enable_meshcore !== false;
         document.getElementById('cfgEnableHamclock').checked = cfg.enable_hamclock !== false;
         document.getElementById('cfgEnableNoaa').checked = cfg.enable_noaa_alerts !== false;
 
@@ -812,6 +822,7 @@ async function saveSettings(event) {
         enable_meshtastic: document.getElementById('cfgEnableMeshtastic').checked,
         enable_reticulum: document.getElementById('cfgEnableReticulum').checked,
         enable_aredn: document.getElementById('cfgEnableAredn').checked,
+        enable_meshcore: document.getElementById('cfgEnableMeshcore').checked,
         enable_hamclock: document.getElementById('cfgEnableHamclock').checked,
         enable_noaa_alerts: document.getElementById('cfgEnableNoaa').checked
     };

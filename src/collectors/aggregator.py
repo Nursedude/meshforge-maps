@@ -17,6 +17,7 @@ from .base import (
 )
 from .hamclock_collector import HamClockCollector
 from .meshtastic_collector import MeshtasticCollector
+from .meshcore_collector import MeshCoreCollector
 from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
 from .noaa_alert_collector import NOAAAlertCollector
 from .reticulum_collector import ReticulumCollector
@@ -106,6 +107,13 @@ class DataAggregator:
                 node_targets=config.get("aredn_node_targets"),
                 enable_worldmap=config.get("enable_aredn_worldmap", True),
                 cache_ttl_seconds=cache_ttl,
+                max_retries=retries,
+            )
+
+        if config.get("enable_meshcore", True):
+            self._collectors["meshcore"] = MeshCoreCollector(
+                enable_map=config.get("enable_meshcore_map", True),
+                cache_ttl_seconds=max(cache_ttl, 1800),  # 30min min for large API
                 max_retries=retries,
             )
 
