@@ -35,13 +35,15 @@ Real-time updates flow through an **event bus**: as new positions, telemetry, or
 python -m src.main              # web map only → http://127.0.0.1:8808
 python -m src.main --tui        # web map + terminal dashboard
 python -m src.main --tui-only   # TUI client (connect to existing server)
+python -m src.main --setup      # interactive setup wizard
 ```
 
 ## Features
 
 ### Data Collection
 - **Multi-source aggregation** -- Meshtastic, Reticulum/RMAP, AREDN, and OpenHamClock/NOAA (see [Data Sources](#data-sources) for protocol details)
-- **Live MQTT subscription** -- real-time Meshtastic node tracking with protobuf decoding
+- **Live MQTT subscription** -- real-time Meshtastic node tracking with AES-CTR decryption and protobuf decoding
+- **Public map sources** -- RMAP.world (~160 Reticulum nodes) and AREDN Worldmap (~2500 nodes) fetched automatically
 - **Circuit breakers** -- per-source failure isolation with automatic recovery
 
 ### Visualization
@@ -94,6 +96,9 @@ A full curses-based terminal interface launched with `--tui` (alongside the serv
 - **OpenHamClock auto-detection** -- tries port 3000 first (OpenHamClock), falls back to port 8080 (HamClock legacy)
 - **Dark theme** -- matches MeshForge core UI (dark CartoDB + cyan accents)
 - **Zero required dependencies** -- stdlib only; paho-mqtt and meshtastic are optional for live MQTT
+- **Docker support** -- single-container deployment with env var configuration
+- **Admin authentication** -- API key protects settings; public read-only map access
+- **Interactive setup wizard** -- `--setup` flag for first-run terminal configuration
 
 ## System Architecture
 
@@ -522,10 +527,11 @@ bash scripts/verify.sh
 ```
 
 The `--no-radio` flag configures:
-- **Meshtastic**: enabled (pulls data from public MQTT broker -- no local hardware needed)
-- **HamClock/NOAA**: enabled (pure software -- space weather and propagation data)
-- **Reticulum**: disabled (requires local RNS stack)
-- **AREDN**: disabled (requires on-mesh network access)
+- **Meshtastic**: enabled via MQTT (public broker, no local hardware needed)
+- **Reticulum**: enabled via RMAP.world public API (~160 nodes globally)
+- **AREDN**: enabled via AREDN Worldmap (~2500 nodes globally)
+- **HamClock/NOAA**: enabled (space weather and propagation data)
+- **Meshtastic source**: `mqtt_only` (skips local meshtasticd API)
 - **Bind address**: `0.0.0.0` (web map accessible from other devices on the network)
 
 Access the web map from any browser on the same network: `http://<pi-ip>:8808`
@@ -556,6 +562,49 @@ OpenHamClock is an X11 application and won't run directly on a headless Pi (no d
    When OpenHamClock is unreachable, the HamClockCollector automatically falls back to NOAA SWPC public APIs for space weather data (solar flux, Kp index, solar wind, band conditions). VOACAP predictions and DX spots require HamClock but space weather overlays work without it.
 
 > The no-radio install (`--no-radio`) enables HamClock/NOAA by default. If no HamClock instance is reachable, NOAA fallback activates automatically — no configuration needed.
+
+### Docker Deployment
+
+```bash
+# Build and run
+docker build -t meshforge-maps .
+docker run -p 8808:8808 -p 8809:8809 meshforge-maps
+
+# With configuration via environment variables
+docker run -p 8808:8808 -p 8809:8809 \
+  -e MQTT_TOPIC=msh/US/HI \
+  -e API_KEY=your-secret-key \
+  -e MAP_CENTER_LAT=20.0 \
+  -e MAP_CENTER_LON=-155.5 \
+  meshforge-maps
+```
+
+**Environment variables:** `MQTT_BROKER`, `MQTT_PORT`, `MQTT_TOPIC`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TLS`, `API_KEY`, `HTTP_HOST`, `HTTP_PORT`, `MAP_CENTER_LAT`, `MAP_CENTER_LON`, `MAP_ZOOM`, `ENABLE_MESHTASTIC`, `ENABLE_RETICULUM`, `ENABLE_AREDN`, `ENABLE_HAMCLOCK`, `ENABLE_NOAA_ALERTS`, `MESHTASTIC_SOURCE`, `NOAA_AREA`, `CORS_ORIGIN`.
+
+For persistent settings, mount a `settings.json` volume:
+```bash
+docker run -p 8808:8808 -p 8809:8809 \
+  -v ./settings.json:/home/meshforge/.config/meshforge/plugins/org.meshforge.extension.maps/settings.json \
+  meshforge-maps
+```
+
+### Setup Wizard
+
+Interactive terminal configuration for first-run or reconfiguration:
+
+```bash
+python -m src.main --setup
+```
+
+Prompts for: network binding, MQTT broker/credentials/topic, data source toggles, map center/zoom, admin API key, and Meshtastic source mode. Writes `settings.json` and can be re-run anytime.
+
+### Uninstall
+
+```bash
+sudo bash scripts/uninstall.sh
+```
+
+Removes the systemd service, optionally removes the installation directory and user data.
 
 ## MQTT Configuration
 
