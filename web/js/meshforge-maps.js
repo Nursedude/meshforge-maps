@@ -256,9 +256,11 @@ async function loadConfig() {
             }
             // Fetch version from status endpoint (upstream: version badge)
             fetchVersion();
+            checkAdminStatus();
         }
     } catch (e) {
         console.debug('Using default config');
+        checkAdminStatus();
     }
 }
 
@@ -643,8 +645,103 @@ async function refreshData() {
 }
 
 // =========================================================================
-// MQTT Settings Modal
+// Admin Auth + Settings Modal
 // =========================================================================
+
+var _adminKey = null;  // Stored in memory for this session
+var _adminRequired = false;
+
+function _getAdminHeaders() {
+    var headers = {'Content-Type': 'application/json'};
+    var key = _adminKey || sessionStorage.getItem('meshforge_admin_key');
+    if (key) headers['X-MeshForge-Key'] = key;
+    return headers;
+}
+
+async function checkAdminStatus() {
+    try {
+        var resp = await fetch(API_BASE + '/api/auth/check');
+        if (!resp.ok) return;
+        var auth = await resp.json();
+        _adminRequired = auth.admin_required;
+        var btn = document.getElementById('settingsBtn');
+        if (!btn) return;
+        if (!auth.admin_required) {
+            // No API key configured — settings open to all
+            btn.style.display = '';
+        } else {
+            // API key configured — check if we have a stored key
+            var storedKey = sessionStorage.getItem('meshforge_admin_key');
+            if (storedKey) {
+                // Verify stored key still works
+                var verifyResp = await fetch(API_BASE + '/api/auth/check', {
+                    headers: {'X-MeshForge-Key': storedKey}
+                });
+                if (verifyResp.ok) {
+                    var v = await verifyResp.json();
+                    if (v.authenticated) {
+                        _adminKey = storedKey;
+                        btn.style.display = '';
+                        btn.textContent = '\u2699 Settings (Admin)';
+                        return;
+                    }
+                }
+                sessionStorage.removeItem('meshforge_admin_key');
+            }
+            // Show lock icon to prompt login
+            btn.style.display = '';
+            btn.textContent = '\uD83D\uDD12 Admin Login';
+            btn.onclick = function() { openLogin(); };
+        }
+    } catch (e) {
+        // If auth check fails, show settings button anyway (offline/error)
+        var btn = document.getElementById('settingsBtn');
+        if (btn) btn.style.display = '';
+    }
+}
+
+function openLogin() {
+    document.getElementById('loginApiKey').value = '';
+    document.getElementById('loginStatus').innerHTML = '';
+    document.getElementById('loginOverlay').classList.add('visible');
+    document.getElementById('loginModal').classList.add('visible');
+    document.getElementById('loginApiKey').focus();
+}
+
+function closeLogin() {
+    document.getElementById('loginModal').classList.remove('visible');
+    document.getElementById('loginOverlay').classList.remove('visible');
+}
+
+async function submitLogin(event) {
+    event.preventDefault();
+    var key = document.getElementById('loginApiKey').value.trim();
+    if (!key) return;
+
+    var statusEl = document.getElementById('loginStatus');
+    statusEl.innerHTML = 'Checking...';
+
+    try {
+        var resp = await fetch(API_BASE + '/api/auth/check', {
+            headers: {'X-MeshForge-Key': key}
+        });
+        var auth = await resp.json();
+        if (auth.authenticated) {
+            _adminKey = key;
+            sessionStorage.setItem('meshforge_admin_key', key);
+            closeLogin();
+            showToast('Admin access granted');
+            // Update button to show settings
+            var btn = document.getElementById('settingsBtn');
+            btn.textContent = '\u2699 Settings (Admin)';
+            btn.onclick = function() { openSettings(); };
+        } else {
+            statusEl.innerHTML = '<span class="status-err">Invalid API key</span>';
+        }
+    } catch (e) {
+        statusEl.innerHTML = '<span class="status-err">Connection error</span>';
+    }
+}
 
 async function openSettings() {
     var modal = document.getElementById('settingsModal');
@@ -728,7 +825,7 @@ async function saveSettings(event) {
     try {
         var resp = await fetch(API_BASE + '/api/config', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: _getAdminHeaders(),
             body: JSON.stringify(data)
         });
         var result = await resp.json();

@@ -138,6 +138,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/export/analytics/activity": "_serve_export_analytics_activity",
         "/api/export/analytics/ranking": "_serve_export_analytics_ranking",
         "/api/weather/alerts": "_serve_weather_alerts",
+        "/api/auth/check": "_serve_auth_check",
         "/api/heatmap": "_serve_heatmap",
         "/api/dependencies": "_serve_dependencies",
     }
@@ -156,6 +157,23 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"error": "Unauthorized"}, 401)
         return False
 
+    def _is_admin(self) -> bool:
+        """Check if request has valid admin credentials (no error response)."""
+        api_key = self._ctx.api_key
+        if not api_key:
+            return True
+        provided = self.headers.get("X-MeshForge-Key", "")
+        return hmac.compare_digest(provided, api_key)
+
+    def _serve_auth_check(self) -> None:
+        """Check whether admin auth is required and if the caller is authenticated."""
+        has_key = bool(self._ctx.api_key)
+        is_admin = self._is_admin()
+        self._send_json({
+            "admin_required": has_key,
+            "authenticated": is_admin,
+        })
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
@@ -164,9 +182,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         # so handlers don't need to re-parse self.path
         self._query = query
 
-        # API key authentication (skip for static files and map page)
-        if path.startswith("/api/") and not self._check_api_key():
-            return
+        # API key authentication: GET requests are read-only and always allowed.
+        # Write operations (POST/PUT) are checked in do_POST().
+        # This allows public map access while protecting admin settings.
 
         method_name = self._ROUTE_TABLE.get(path)
         handler = getattr(self, method_name) if method_name else None
