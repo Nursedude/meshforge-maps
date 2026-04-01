@@ -716,7 +716,8 @@ class TestDataAggregator:
 
     def test_collect_source_unknown(self):
         agg = DataAggregator({"enable_meshtastic": False, "enable_reticulum": False,
-                              "enable_hamclock": False, "enable_aredn": False})
+                              "enable_hamclock": False, "enable_aredn": False,
+                              "enable_meshcore": False})
         result = agg.collect_source("nonexistent")
         assert result["type"] == "FeatureCollection"
         assert result["features"] == []
@@ -798,14 +799,14 @@ class TestDataAggregator:
     def test_get_cached_overlay_empty_initially(self):
         agg = DataAggregator({
             "enable_meshtastic": False, "enable_reticulum": False,
-            "enable_hamclock": False, "enable_aredn": False,
+            "enable_hamclock": False, "enable_aredn": False, "enable_meshcore": False,
         })
         assert agg.get_cached_overlay() == {}
 
     def test_shutdown_is_safe(self):
         agg = DataAggregator({
             "enable_meshtastic": False, "enable_reticulum": False,
-            "enable_hamclock": False, "enable_aredn": False,
+            "enable_hamclock": False, "enable_aredn": False, "enable_meshcore": False,
         })
         agg.shutdown()  # Should not raise
         assert agg._mqtt_subscriber is None
@@ -813,7 +814,7 @@ class TestDataAggregator:
     def test_clear_all_caches_resets_overlay(self):
         agg = DataAggregator({
             "enable_meshtastic": False, "enable_reticulum": False,
-            "enable_hamclock": False, "enable_aredn": False,
+            "enable_hamclock": False, "enable_aredn": False, "enable_meshcore": False,
         })
         agg._cached_overlay = {"test": True}
         agg.clear_all_caches()
@@ -836,7 +837,7 @@ class TestDataAggregator:
         agg = DataAggregator({
             "enable_meshtastic": False, "enable_reticulum": False,
             "enable_hamclock": False, "enable_aredn": False,
-            "enable_noaa_alerts": False,
+            "enable_meshcore": False, "enable_noaa_alerts": False,
         })
         assert agg.get_source_health() == {}
 
@@ -852,7 +853,9 @@ class TestDataAggregator:
         mock_ham.return_value = make_feature_collection([], "hamclock")
         mock_aredn.return_value = make_feature_collection([], "aredn")
 
-        agg = DataAggregator(dict(DEFAULT_CONFIG_SUBSET))
+        config = dict(DEFAULT_CONFIG_SUBSET)
+        config["enable_meshcore"] = False
+        agg = DataAggregator(config)
         result = agg.collect_all()
         assert result["properties"]["sources"]["meshtastic"] == 0
         assert result["properties"]["sources"]["reticulum"] == 1
@@ -861,7 +864,7 @@ class TestDataAggregator:
     def test_last_collect_age_none_before_collect(self):
         agg = DataAggregator({
             "enable_meshtastic": False, "enable_reticulum": False,
-            "enable_hamclock": False, "enable_aredn": False,
+            "enable_hamclock": False, "enable_aredn": False, "enable_meshcore": False,
         })
         assert agg.last_collect_age_seconds is None
 
@@ -924,5 +927,6 @@ DEFAULT_CONFIG_SUBSET = {
     "enable_reticulum": True,
     "enable_hamclock": True,
     "enable_aredn": True,
+    "enable_meshcore": False,  # Disabled in tests to avoid 23MB HTTP fetch
     "cache_ttl_minutes": 15,
 }

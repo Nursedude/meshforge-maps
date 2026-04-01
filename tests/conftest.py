@@ -3,7 +3,17 @@
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+
+@pytest.fixture(autouse=True)
+def _disable_meshcore_http():
+    """Prevent MeshCore collector from making real HTTP calls (23MB) in tests."""
+    with patch(
+        "src.collectors.meshcore_collector.MeshCoreCollector._fetch_from_meshcore_map",
+        return_value=[],
+    ):
+        yield
 
 
 @pytest.fixture

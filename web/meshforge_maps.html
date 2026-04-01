@@ -46,6 +46,10 @@
             <span class="stat-dot" style="background:#ff7043"></span>
             <span id="statAredn">0</span> AREDN
         </span>
+        <span class="stat-badge">
+            <span class="stat-dot" style="background:#26c6da"></span>
+            <span id="statMeshcore">0</span> MeshCore
+        </span>
         <span class="stat-badge" id="mqttBadge" style="display:none">
             <span class="stat-dot" style="background:#42a5f5"></span>
             MQTT <span id="statMqtt">0</span>
@@ -86,6 +90,12 @@
             <span class="layer-color" style="background:#ff7043"></span>
             <span class="layer-label">AREDN</span>
             <span class="layer-count" id="countAredn">0</span>
+        </label>
+        <label class="layer-toggle">
+            <input type="checkbox" id="layerMeshcore" checked onchange="toggleLayer('meshcore')">
+            <span class="layer-color" style="background:#26c6da"></span>
+            <span class="layer-label">MeshCore</span>
+            <span class="layer-count" id="countMeshcore">0</span>
         </label>
     </div>
 
@@ -272,6 +282,9 @@
             </div>
             <div class="settings-field settings-checkbox">
                 <label><input type="checkbox" id="cfgEnableAredn" /> AREDN (Worldmap)</label>
+            </div>
+            <div class="settings-field settings-checkbox">
+                <label><input type="checkbox" id="cfgEnableMeshcore" /> MeshCore (map.meshcore.dev)</label>
             </div>
             <div class="settings-field settings-checkbox">
                 <label><input type="checkbox" id="cfgEnableHamclock" /> HamClock / Space Weather</label>

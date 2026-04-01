@@ -101,6 +101,7 @@ class TestMapServerHTTPEndpoints:
         config.set("enable_reticulum", False)
         config.set("enable_hamclock", False)
         config.set("enable_aredn", False)
+        config.set("enable_meshcore", False)
         self.server = MapServer(config)
         assert self.server.start() is True
         self.base = f"http://127.0.0.1:{self.server.port}"

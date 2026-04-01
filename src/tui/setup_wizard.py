@@ -123,6 +123,8 @@ def run_setup() -> None:
                                                  settings.get("enable_reticulum", True))
     settings["enable_aredn"] = _prompt_bool("Enable AREDN (Worldmap)?",
                                              settings.get("enable_aredn", True))
+    settings["enable_meshcore"] = _prompt_bool("Enable MeshCore (map.meshcore.dev)?",
+                                                settings.get("enable_meshcore", True))
     settings["enable_hamclock"] = _prompt_bool("Enable HamClock / Space Weather?",
                                                 settings.get("enable_hamclock", True))
     settings["enable_noaa_alerts"] = _prompt_bool("Enable NOAA Weather Alerts?",
