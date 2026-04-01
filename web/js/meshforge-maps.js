@@ -116,6 +116,43 @@ const networkVisible = {
     reticulum: true,
     aredn: true,
 };
+
+// --- Overlay preference persistence (localStorage) ---
+var _OVERLAY_STORAGE_KEY = 'meshforge_overlay_prefs';
+
+function saveOverlayPrefs() {
+    var prefs = {
+        layerMeshtastic: networkVisible.meshtastic,
+        layerReticulum: networkVisible.reticulum,
+        layerAredn: networkVisible.aredn,
+        overlayClustering: useClustering,
+        overlayTerminator: !!document.getElementById('overlayTerminator').checked,
+        overlayTopology: showTopology,
+        overlayHealth: healthOverlayActive,
+        overlayWeatherAlerts: showWeatherAlerts,
+        overlayHeatmap: showHeatmap,
+    };
+    try { localStorage.setItem(_OVERLAY_STORAGE_KEY, JSON.stringify(prefs)); } catch (e) {}
+}
+
+function restoreOverlayPrefs() {
+    try {
+        var raw = localStorage.getItem(_OVERLAY_STORAGE_KEY);
+        if (!raw) return;
+        var prefs = JSON.parse(raw);
+        // Network layers
+        if (prefs.layerMeshtastic !== undefined) { networkVisible.meshtastic = prefs.layerMeshtastic; document.getElementById('layerMeshtastic').checked = prefs.layerMeshtastic; }
+        if (prefs.layerReticulum !== undefined) { networkVisible.reticulum = prefs.layerReticulum; document.getElementById('layerReticulum').checked = prefs.layerReticulum; }
+        if (prefs.layerAredn !== undefined) { networkVisible.aredn = prefs.layerAredn; document.getElementById('layerAredn').checked = prefs.layerAredn; }
+        // Overlays
+        if (prefs.overlayClustering !== undefined) { useClustering = prefs.overlayClustering; document.getElementById('overlayClustering').checked = prefs.overlayClustering; }
+        if (prefs.overlayTerminator !== undefined) { document.getElementById('overlayTerminator').checked = prefs.overlayTerminator; }
+        if (prefs.overlayTopology !== undefined) { showTopology = prefs.overlayTopology; document.getElementById('overlayTopology').checked = prefs.overlayTopology; }
+        if (prefs.overlayHealth !== undefined) { healthOverlayActive = prefs.overlayHealth; document.getElementById('overlayHealth').checked = prefs.overlayHealth; }
+        if (prefs.overlayWeatherAlerts !== undefined) { showWeatherAlerts = prefs.overlayWeatherAlerts; document.getElementById('overlayWeatherAlerts').checked = prefs.overlayWeatherAlerts; }
+        if (prefs.overlayHeatmap !== undefined) { showHeatmap = prefs.overlayHeatmap; document.getElementById('overlayHeatmap').checked = prefs.overlayHeatmap; }
+    } catch (e) {}
+}
 let allFeatures = [];
 
 // =========================================================================
@@ -157,6 +194,9 @@ function initMap() {
 
     directGroup = L.layerGroup();
 
+    // Restore saved overlay preferences before loading data
+    restoreOverlayPrefs();
+
     // Populate tile selector
     populateTileSelector();
 
@@ -165,6 +205,13 @@ function initMap() {
 
     // Load node data
     loadNodeData();
+
+    // Activate saved overlays after initial load
+    if (document.getElementById('overlayTerminator').checked) toggleTerminator();
+    if (showTopology) loadTopologyData();
+    if (showWeatherAlerts) loadWeatherAlerts();
+    if (showHeatmap) loadCoverageHeatmap();
+    if (healthOverlayActive) loadNodeHealthData();
 
     // Load initial active alerts from API
     loadInitialAlerts();
@@ -521,11 +568,13 @@ function toggleLayer(network) {
     const checkbox = document.getElementById('layer' + network.charAt(0).toUpperCase() + network.slice(1));
     networkVisible[network] = checkbox.checked;
     rebuildMarkers();
+    saveOverlayPrefs();
 }
 
 function toggleClustering() {
     useClustering = document.getElementById('overlayClustering').checked;
     rebuildMarkers();
+    saveOverlayPrefs();
 }
 
 function rebuildMarkers() {
@@ -574,6 +623,7 @@ async function toggleTerminator() {
         map.removeLayer(terminatorLayer);
         terminatorLayer = null;
     }
+    saveOverlayPrefs();
 }
 
 function togglePanel() {
@@ -914,6 +964,7 @@ async function toggleHealthOverlay() {
     }
     // Re-render markers with health coloring
     rebuildMarkersFromFeatures();
+    saveOverlayPrefs();
 }
 
 async function loadNodeHealthData() {
@@ -956,6 +1007,7 @@ function toggleTopology() {
         topologyLayer = null;
         document.getElementById('countLinks').textContent = '0';
     }
+    saveOverlayPrefs();
 }
 
 async function loadTopologyData() {
@@ -1741,6 +1793,7 @@ function toggleWeatherAlerts() {
         weatherAlertCount = 0;
         updateWeatherAlertCount();
     }
+    saveOverlayPrefs();
 }
 
 async function loadWeatherAlerts() {
@@ -1840,6 +1893,7 @@ function toggleCoverageHeatmap() {
         heatmapLayer = null;
         document.getElementById('countHeatmapCells').textContent = '0';
     }
+    saveOverlayPrefs();
 }
 
 async function loadCoverageHeatmap() {
