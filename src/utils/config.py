@@ -274,26 +274,21 @@ class MapsConfig:
         return self.get("deployment_profile") == "lite"
 
     def get_effective(self, key: str, default: Any = None) -> Any:
-        """Get config value with lite-mode overrides applied.
+        """Get config value with lite-mode performance tuning applied.
 
-        Lite mode overrides for resource-constrained devices:
-        - MeshCore disabled (30K nodes, 23MB fetch)
-        - AREDN worldmap disabled (2.5K nodes, large CSV)
-        - Cache TTL increased to 60 minutes
-        - Max MQTT nodes reduced to 1000
+        Lite mode tunes performance for resource-constrained devices:
+        - Cache TTL minimum 60 minutes (reduces fetch frequency)
+        - Max MQTT nodes capped at 1000 (vs 10K default)
+
+        Source enable/disable is NOT overridden — users control which
+        collectors run via the source toggles in settings UI.
         """
         value = self.get(key, default)
         if not self.is_lite:
             return value
 
-        lite_overrides = {
-            "enable_meshcore": False,
-            "enable_meshcore_map": False,
-            "enable_aredn_worldmap": False,
-            "cache_ttl_minutes": max(value if key == "cache_ttl_minutes" else 0, 60),
-        }
-        if key in lite_overrides:
-            return lite_overrides[key]
+        if key == "cache_ttl_minutes":
+            return max(value if isinstance(value, (int, float)) else 60, 60)
         return value
 
     def get_tile_providers(self) -> Dict[str, Dict[str, str]]:
