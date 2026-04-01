@@ -616,6 +616,13 @@ async function openSettings() {
         document.getElementById('cfgMqttTopic').value = cfg.mqtt_topic || '';
         document.getElementById('cfgMqttTls').checked = !!cfg.mqtt_use_tls;
 
+        // Source toggles
+        document.getElementById('cfgEnableMeshtastic').checked = cfg.enable_meshtastic !== false;
+        document.getElementById('cfgEnableReticulum').checked = cfg.enable_reticulum !== false;
+        document.getElementById('cfgEnableAredn').checked = cfg.enable_aredn !== false;
+        document.getElementById('cfgEnableHamclock').checked = cfg.enable_hamclock !== false;
+        document.getElementById('cfgEnableNoaa').checked = cfg.enable_noaa_alerts !== false;
+
         // Show MQTT connection status
         try {
             var mqResp = await fetch(API_BASE + '/api/mqtt/stats');
@@ -654,7 +661,12 @@ async function saveSettings(event) {
         mqtt_port: parseInt(document.getElementById('cfgMqttPort').value, 10),
         mqtt_topic: document.getElementById('cfgMqttTopic').value.trim(),
         mqtt_username: document.getElementById('cfgMqttUsername').value.trim() || null,
-        mqtt_use_tls: document.getElementById('cfgMqttTls').checked
+        mqtt_use_tls: document.getElementById('cfgMqttTls').checked,
+        enable_meshtastic: document.getElementById('cfgEnableMeshtastic').checked,
+        enable_reticulum: document.getElementById('cfgEnableReticulum').checked,
+        enable_aredn: document.getElementById('cfgEnableAredn').checked,
+        enable_hamclock: document.getElementById('cfgEnableHamclock').checked,
+        enable_noaa_alerts: document.getElementById('cfgEnableNoaa').checked
     };
 
     // Only send password if user typed a new one
@@ -671,7 +683,7 @@ async function saveSettings(event) {
         });
         var result = await resp.json();
         if (resp.ok) {
-            showToast('MQTT settings saved — reconnecting...');
+            showToast('Settings saved. Restart service for source changes to take effect.');
             closeSettings();
         } else {
             var msg = result.details ? result.details.join(', ') : (result.error || 'Unknown error');
