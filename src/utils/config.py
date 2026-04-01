@@ -19,6 +19,9 @@ from .paths import get_real_home
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG: Dict[str, Any] = {
+    # Deployment profile: "full" (all sources, default) or "lite" (Pi 2W / low-power)
+    # Lite mode disables heavy collectors and increases cache TTL
+    "deployment_profile": "full",
     "default_tile_provider": "carto_dark",
     "enable_meshtastic": True,
     "enable_reticulum": True,
@@ -264,6 +267,34 @@ class MapsConfig:
             else:
                 validated[key] = value
         return validated, errors
+
+    @property
+    def is_lite(self) -> bool:
+        """True if running in lite deployment profile (Pi 2W / low-power)."""
+        return self.get("deployment_profile") == "lite"
+
+    def get_effective(self, key: str, default: Any = None) -> Any:
+        """Get config value with lite-mode overrides applied.
+
+        Lite mode overrides for resource-constrained devices:
+        - MeshCore disabled (30K nodes, 23MB fetch)
+        - AREDN worldmap disabled (2.5K nodes, large CSV)
+        - Cache TTL increased to 60 minutes
+        - Max MQTT nodes reduced to 1000
+        """
+        value = self.get(key, default)
+        if not self.is_lite:
+            return value
+
+        lite_overrides = {
+            "enable_meshcore": False,
+            "enable_meshcore_map": False,
+            "enable_aredn_worldmap": False,
+            "cache_ttl_minutes": max(value if key == "cache_ttl_minutes" else 0, 60),
+        }
+        if key in lite_overrides:
+            return lite_overrides[key]
+        return value
 
     def get_tile_providers(self) -> Dict[str, Dict[str, str]]:
         return dict(TILE_PROVIDERS)
