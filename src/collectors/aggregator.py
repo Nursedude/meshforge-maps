@@ -33,9 +33,11 @@ DEFAULT_COLLECTOR_RETRIES = 2
 class DataAggregator:
     """Aggregates data from all enabled collectors into unified GeoJSON."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config):
         self._config = config
-        cache_ttl = config.get("cache_ttl_minutes", 15) * 60
+        # Use get_effective() for lite-mode-aware values when config is MapsConfig
+        _get = getattr(config, "get_effective", None) or config.get
+        cache_ttl = _get("cache_ttl_minutes", 15) * 60
         self._collectors = {}
         self._data_lock = threading.Lock()
         self._cached_overlay: Dict[str, Any] = {}
@@ -53,11 +55,17 @@ class DataAggregator:
 
         retries = DEFAULT_COLLECTOR_RETRIES
 
+        # Log deployment profile
+        is_lite = getattr(config, "is_lite", False)
+        if is_lite:
+            logger.info("Lite deployment profile active (reduced collectors, longer cache)")
+
         # Initialize live MQTT subscriber for Meshtastic
-        # Supports private broker configuration (upstream: private MQTT support)
         self._mqtt_subscriber: Optional[MQTTSubscriber] = None
         mqtt_store: Optional[MQTTNodeStore] = None
         if config.get("enable_meshtastic", True):
+            # Lite mode: cap MQTT store at 1000 nodes (vs 10K default)
+            node_store = MQTTNodeStore(max_nodes=1000) if is_lite else None
             self._mqtt_subscriber = MQTTSubscriber(
                 broker=config.get("mqtt_broker", "mqtt.meshtastic.org"),
                 port=config.get("mqtt_port", 1883),
@@ -65,6 +73,7 @@ class DataAggregator:
                 username=config.get("mqtt_username", "meshdev"),
                 password=config.get("mqtt_password", "large4cats"),
                 tls=config.get("mqtt_use_tls", False),
+                node_store=node_store,
                 event_bus=self._event_bus,
             )
             if self._mqtt_subscriber.available:
@@ -105,14 +114,14 @@ class DataAggregator:
         if config.get("enable_aredn", True):
             self._collectors["aredn"] = AREDNCollector(
                 node_targets=config.get("aredn_node_targets"),
-                enable_worldmap=config.get("enable_aredn_worldmap", True),
+                enable_worldmap=_get("enable_aredn_worldmap", True),
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
             )
 
-        if config.get("enable_meshcore", True):
+        if _get("enable_meshcore", True):
             self._collectors["meshcore"] = MeshCoreCollector(
-                enable_map=config.get("enable_meshcore_map", True),
+                enable_map=_get("enable_meshcore_map", True),
                 cache_ttl_seconds=max(cache_ttl, 1800),  # 30min min for large API
                 max_retries=retries,
             )

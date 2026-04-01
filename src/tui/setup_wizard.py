@@ -77,6 +77,21 @@ def run_setup() -> None:
     config = MapsConfig()
     settings: Dict[str, Any] = config.to_dict()
 
+    # --- Deployment profile ---
+    print("[Deployment Profile]")
+    print("  Full: all data sources enabled (Pi 4, cloud, desktop)")
+    print("  Lite: reduced sources for low-power devices (Pi 2W, solar nodes)")
+    profile = _prompt_choice(
+        "Select profile",
+        ["full", "lite"],
+        settings.get("deployment_profile", "full"),
+    )
+    settings["deployment_profile"] = profile
+    if profile == "lite":
+        print("  Lite mode: MeshCore (30K nodes) and AREDN Worldmap (2.5K) disabled")
+        print("  Cache TTL increased to 60 minutes. MQTT store capped at 1000 nodes.")
+    print()
+
     # --- Network binding ---
     print("[Network]")
     host = _prompt("Bind address (0.0.0.0 for all interfaces)",

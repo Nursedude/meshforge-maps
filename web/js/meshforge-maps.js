@@ -772,6 +772,10 @@ async function openSettings() {
         document.getElementById('cfgMqttTopic').value = cfg.mqtt_topic || '';
         document.getElementById('cfgMqttTls').checked = !!cfg.mqtt_use_tls;
 
+        // Deployment profile
+        var profileEl = document.getElementById('cfgDeployProfile');
+        if (profileEl) profileEl.value = cfg.deployment_profile || 'full';
+
         // Source toggles
         document.getElementById('cfgEnableMeshtastic').checked = cfg.enable_meshtastic !== false;
         document.getElementById('cfgEnableReticulum').checked = cfg.enable_reticulum !== false;
@@ -819,6 +823,7 @@ async function saveSettings(event) {
         mqtt_topic: document.getElementById('cfgMqttTopic').value.trim(),
         mqtt_username: document.getElementById('cfgMqttUsername').value.trim() || null,
         mqtt_use_tls: document.getElementById('cfgMqttTls').checked,
+        deployment_profile: document.getElementById('cfgDeployProfile').value,
         enable_meshtastic: document.getElementById('cfgEnableMeshtastic').checked,
         enable_reticulum: document.getElementById('cfgEnableReticulum').checked,
         enable_aredn: document.getElementById('cfgEnableAredn').checked,

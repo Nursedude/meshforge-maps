@@ -149,10 +149,12 @@ if [[ "$NO_RADIO" == true ]]; then
     if [[ ! -f "$CONFIG_DIR/settings.json" ]]; then
         cat > "$CONFIG_DIR/settings.json" <<'SETTINGS'
 {
+  "deployment_profile": "lite",
   "enable_meshtastic": true,
   "enable_reticulum": true,
   "enable_hamclock": true,
   "enable_aredn": true,
+  "enable_meshcore": true,
   "meshtastic_source": "mqtt_only",
   "http_host": "0.0.0.0",
   "ws_host": "0.0.0.0"
@@ -160,7 +162,7 @@ if [[ "$NO_RADIO" == true ]]; then
 SETTINGS
         chmod 600 "$CONFIG_DIR/settings.json"
         chown "$REAL_USER:$REAL_USER" "$CONFIG_DIR/settings.json"
-        ok "No-radio config written (MQTT + public map sources)"
+        ok "No-radio config written (lite profile — MQTT + public sources)"
     else
         warn "Existing settings.json found, not overwriting"
     fi

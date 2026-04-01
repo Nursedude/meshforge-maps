@@ -271,6 +271,15 @@
             <div class="settings-status" id="mqttStatus"></div>
             <div class="settings-section-divider"></div>
             <div class="settings-field">
+                <label for="cfgDeployProfile">Deployment Profile</label>
+                <select id="cfgDeployProfile" class="map-style-select">
+                    <option value="full">Full (all sources)</option>
+                    <option value="lite">Lite (Pi 2W / low-power)</option>
+                </select>
+                <span class="settings-hint">Lite disables heavy collectors (MeshCore 30K, AREDN 2.5K) and increases cache TTL</span>
+            </div>
+            <div class="settings-section-divider"></div>
+            <div class="settings-field">
                 <label>Data Sources</label>
                 <span class="settings-hint">Changes require service restart</span>
             </div>
