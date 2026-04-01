@@ -953,6 +953,17 @@ class MQTTSubscriber:
         modem_preset = str(report.modem_preset) if getattr(report, "modem_preset", None) else ""
         num_online = _safe_int(getattr(report, "num_online_local_nodes", None), 0, 100000)
 
+        # Extract position from MapReport (latitude_i/longitude_i integer format)
+        lat_i = getattr(report, "latitude_i", 0)
+        lon_i = getattr(report, "longitude_i", 0)
+        if lat_i and lon_i:
+            from .base import validate_coordinates
+            coords = validate_coordinates(lat_i, lon_i, convert_int=True)
+            if coords:
+                lat, lon = coords
+                alt = getattr(report, "altitude", None)
+                self._store.update_position(node_id, lat, lon, altitude=alt)
+
         self._store.update_nodeinfo(
             node_id,
             long_name=long_name,

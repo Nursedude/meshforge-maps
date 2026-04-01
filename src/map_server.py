@@ -240,6 +240,13 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+    def end_headers(self) -> None:
+        """Inject Cache-Control for static JS/CSS to prevent stale browser cache."""
+        path = getattr(self, "path", "")
+        if path.endswith((".js", ".css")):
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
+        super().end_headers()
+
     def _get_cors_origin(self) -> Optional[str]:
         """Get configured CORS origin, or None for same-origin (no CORS headers)."""
         config = self._ctx.config
