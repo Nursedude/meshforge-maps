@@ -238,6 +238,26 @@
                 <span class="settings-hint">Use port 8883 with TLS enabled</span>
             </div>
             <div class="settings-status" id="mqttStatus"></div>
+            <div class="settings-section-divider"></div>
+            <div class="settings-field">
+                <label>Data Sources</label>
+                <span class="settings-hint">Changes require service restart</span>
+            </div>
+            <div class="settings-field settings-checkbox">
+                <label><input type="checkbox" id="cfgEnableMeshtastic" /> Meshtastic (MQTT)</label>
+            </div>
+            <div class="settings-field settings-checkbox">
+                <label><input type="checkbox" id="cfgEnableReticulum" /> Reticulum (RMAP.world)</label>
+            </div>
+            <div class="settings-field settings-checkbox">
+                <label><input type="checkbox" id="cfgEnableAredn" /> AREDN (Worldmap)</label>
+            </div>
+            <div class="settings-field settings-checkbox">
+                <label><input type="checkbox" id="cfgEnableHamclock" /> HamClock / Space Weather</label>
+            </div>
+            <div class="settings-field settings-checkbox">
+                <label><input type="checkbox" id="cfgEnableNoaa" /> NOAA Weather Alerts</label>
+            </div>
         </div>
         <div class="settings-footer">
             <button type="button" class="settings-btn settings-btn-cancel" onclick="closeSettings()">Cancel</button>

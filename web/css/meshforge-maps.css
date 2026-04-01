@@ -681,6 +681,10 @@ body {
     margin-top: 3px;
     margin-left: 24px;
 }
+.settings-section-divider {
+    border-top: 1px solid rgba(79, 195, 247, 0.12);
+    margin: 14px 0;
+}
 .settings-status {
     font-size: 11px;
     color: #78909c;
