@@ -443,8 +443,13 @@ class HamClockCollector(BaseCollector):
 
         # Solar flux (10.7cm / 2800 MHz)
         sfi = self._fetch_json(SWPC_SOLAR_FLUX)
-        if sfi:
-            weather["solar_flux"] = sfi.get("Flux")
+        if sfi and isinstance(sfi, list) and len(sfi) > 0:
+            latest = sfi[-1]
+            if isinstance(latest, dict):
+                try:
+                    weather["solar_flux"] = float(latest.get("flux", 0))
+                except (ValueError, TypeError):
+                    pass
 
         # Planetary K-index
         kp = self._fetch_json(SWPC_KP_INDEX)
@@ -458,8 +463,13 @@ class HamClockCollector(BaseCollector):
 
         # Solar wind speed
         sw = self._fetch_json(SWPC_SOLAR_WIND)
-        if sw:
-            weather["solar_wind_speed"] = sw.get("WindSpeed")
+        if sw and isinstance(sw, list) and len(sw) > 0:
+            latest = sw[-1]
+            if isinstance(latest, dict):
+                try:
+                    weather["solar_wind_speed"] = float(latest.get("proton_speed", 0))
+                except (ValueError, TypeError):
+                    pass
 
         # Derive band conditions
         weather["band_conditions"] = self._assess_band_conditions(
