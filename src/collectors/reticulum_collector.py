@@ -50,6 +50,9 @@ RNS_CACHE_PATH = MESHFORGE_DATA_DIR / "rns_nodes.json"
 RCH_DEFAULT_HOST = "localhost"
 RCH_DEFAULT_PORT = 8000
 
+# RMAP.world public API
+RMAP_WORLD_URL = "https://rmap.world/?json=1"
+
 # RNS node type mapping for display
 RNS_NODE_TYPES = {
     "rnode": "RNode (LoRa)",
@@ -76,21 +79,28 @@ class ReticulumCollector(BaseCollector):
         rch_host: str = RCH_DEFAULT_HOST,
         rch_port: int = RCH_DEFAULT_PORT,
         rch_api_key: Optional[str] = None,
+        enable_rmap_public: bool = True,
         cache_ttl_seconds: int = 900,
         max_retries: int = 0,
     ):
         super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._rch_base = f"http://{rch_host}:{rch_port}"
         self._rch_api_key = rch_api_key
+        self._enable_rmap_public = enable_rmap_public
 
     def _fetch(self) -> Dict[str, Any]:
         # Collect from all sources in priority order, then deduplicate
-        features = deduplicate_features([
-            self._fetch_from_rnstatus(),    # Source 1: local rnstatus
-            self._fetch_from_rch(),          # Source 2: RCH API
-            self._fetch_from_cache(),        # Source 3: RNS node cache
-            self._fetch_from_unified_cache(),  # Source 4: unified cache
-        ], allow_no_id=False)
+        sources = [
+            self._fetch_from_rnstatus(),       # Source 1: local rnstatus
+            self._fetch_from_rch(),             # Source 2: RCH API
+        ]
+        if self._enable_rmap_public:
+            sources.append(self._fetch_from_rmap_world())  # Source 3: RMAP.world
+        sources.extend([
+            self._fetch_from_cache(),           # Source 4: RNS node cache
+            self._fetch_from_unified_cache(),   # Source 5: unified cache
+        ])
+        features = deduplicate_features(sources, allow_no_id=False)
 
         return make_feature_collection(features, self.source_name)
 
@@ -99,7 +109,7 @@ class ReticulumCollector(BaseCollector):
         features = []
         try:
             result = subprocess.run(
-                ["rnstatus", "-d", "--json"],
+                ["rnstatus", "--json"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -227,6 +237,69 @@ class ReticulumCollector(BaseCollector):
             description=node.get("description", ""),
             altitude=node.get("altitude") or node.get("height"),
             source="rch",
+        )
+
+    def _fetch_from_rmap_world(self) -> List[Dict[str, Any]]:
+        """Fetch Reticulum node data from RMAP.world public API."""
+        import ssl
+        features = []
+        try:
+            req = Request(
+                RMAP_WORLD_URL,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "MeshForge/1.0",
+                },
+            )
+            # RMAP.world may have self-signed cert; use unverified context
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with urlopen(req, timeout=15, context=ctx) as resp:
+                data = json.loads(resp.read().decode())
+
+            nodes = data.get("nodes", []) if isinstance(data, dict) else []
+            for node in nodes:
+                feature = self._parse_rmap_node(node)
+                if feature:
+                    features.append(feature)
+            if features:
+                logger.debug("RMAP.world returned %d nodes", len(features))
+        except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
+            logger.debug("RMAP.world unavailable: %s", e)
+        return features
+
+    def _parse_rmap_node(self, node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Parse a node from RMAP.world API response into a GeoJSON feature."""
+        coords = validate_coordinates(node.get("lat"), node.get("lon"))
+        if coords is None:
+            return None
+        lat, lon = coords
+
+        node_id = node.get("hash") or node.get("identity_hash") or ""
+        if not node_id:
+            return None
+        name = node.get("display_name") or str(node_id)[:16]
+        node_type = (node.get("node_type") or "unknown").lower()
+        display_type = RNS_NODE_TYPES.get(node_type, node_type)
+
+        return make_feature(
+            node_id=str(node_id),
+            lat=lat,
+            lon=lon,
+            network="reticulum",
+            name=name,
+            node_type=display_type,
+            rns_interface_type=node_type,
+            last_seen=node.get("last_seen_ts"),
+            altitude=node.get("altitude"),
+            description=node.get("country") or "",
+            frequency=node.get("frequency"),
+            bandwidth=node.get("bandwidth"),
+            spreading_factor=node.get("spreading_factor"),
+            tx_power=node.get("tx_power"),
+            antenna_gain=node.get("antenna_gain"),
+            source="rmap_world",
         )
 
     def _fetch_from_cache(self) -> List[Dict[str, Any]]:

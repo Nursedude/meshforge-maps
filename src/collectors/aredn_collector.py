@@ -51,6 +51,9 @@ AREDN_CACHE_PATH = MESHFORGE_DATA_DIR / "aredn_nodes.json"
 # Default AREDN node discovery targets
 DEFAULT_AREDN_NODES: List[str] = ["localnode.local.mesh", "10.0.0.1", "localnode"]
 
+# AREDN Worldmap public data URL
+AREDN_WORLDMAP_URL = "https://worldmap.arednmesh.org/data/out.csv"
+
 
 class AREDNCollector(BaseCollector):
     """Collects AREDN mesh node data via sysinfo.json API."""
@@ -60,11 +63,13 @@ class AREDNCollector(BaseCollector):
     def __init__(
         self,
         node_targets: Optional[List[str]] = None,
+        enable_worldmap: bool = True,
         cache_ttl_seconds: int = 900,
         max_retries: int = 0,
     ):
         super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._node_targets = node_targets or list(DEFAULT_AREDN_NODES)
+        self._enable_worldmap = enable_worldmap
         self._topo_lock = threading.Lock()
         # Topology links from LQM data (source_name -> [{neighbor, snr, quality, ...}])
         self._lqm_links: List[Dict[str, Any]] = []
@@ -88,7 +93,15 @@ class AREDNCollector(BaseCollector):
                     seen_ids.add(fid)
                     features.append(f)
 
-        # Source 2: MeshForge AREDN cache
+        # Source 2: AREDN worldmap (public data)
+        if self._enable_worldmap:
+            for f in self._fetch_from_worldmap():
+                fid = f["properties"].get("id")
+                if fid and fid not in seen_ids:
+                    seen_ids.add(fid)
+                    features.append(f)
+
+        # Source 3: MeshForge AREDN cache
         cache_features = self._fetch_from_cache()
         for f in cache_features:
             fid = f["properties"].get("id")
@@ -319,6 +332,62 @@ class AREDNCollector(BaseCollector):
                 # Include unresolved links without coordinates
                 resolved.append(link)
         return resolved
+
+    def _fetch_from_worldmap(self) -> List[Dict[str, Any]]:
+        """Fetch AREDN node data from the public AREDN worldmap."""
+        import csv
+        import io
+        features = []
+        try:
+            req = Request(
+                AREDN_WORLDMAP_URL,
+                headers={
+                    "Accept": "text/csv",
+                    "User-Agent": "MeshForge/1.0",
+                },
+            )
+            with urlopen(req, timeout=20) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+
+            reader = csv.DictReader(io.StringIO(text))
+            for row in reader:
+                feature = self._parse_worldmap_row(row)
+                if feature:
+                    features.append(feature)
+            if features:
+                logger.debug("AREDN worldmap returned %d nodes", len(features))
+        except (URLError, OSError, ValueError) as e:
+            logger.debug("AREDN worldmap unavailable: %s", e)
+        return features
+
+    def _parse_worldmap_row(self, row: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """Parse a row from the AREDN worldmap CSV into a GeoJSON feature."""
+        node_name = (row.get("node") or "").strip()
+        if not node_name:
+            return None
+
+        coords = validate_coordinates(row.get("lat"), row.get("lon"))
+        if coords is None:
+            return None
+        lat, lon = coords
+
+        model = row.get("model", "")
+        firmware = row.get("firmware_version", "")
+
+        return make_feature(
+            node_id=node_name,
+            lat=lat,
+            lon=lon,
+            network="aredn",
+            name=node_name,
+            node_type="aredn_node",
+            hardware=model,
+            firmware=firmware,
+            grid_square=row.get("grid_square", ""),
+            channel=row.get("channel", ""),
+            last_seen=row.get("last_seen") or None,
+            source="aredn_worldmap",
+        )
 
     def _fetch_from_cache(self) -> List[Dict[str, Any]]:
         """Read MeshForge's AREDN node cache."""

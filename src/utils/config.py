@@ -64,6 +64,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rch_host": "localhost",
     "rch_port": 8000,
     "rch_api_key": None,
+    # Public map data sources
+    "enable_rmap_public": True,       # Fetch RMAP.world Reticulum node data
+    "enable_aredn_worldmap": True,    # Fetch AREDN worldmap node data
 }
 
 # Tile provider definitions for Leaflet.js
