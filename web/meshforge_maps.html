@@ -257,9 +257,20 @@
                 <input type="password" id="cfgMqttPassword" placeholder="Leave blank to keep current" />
             </div>
             <div class="settings-field">
-                <label for="cfgMqttTopic">Root Topic</label>
-                <input type="text" id="cfgMqttTopic" placeholder="msh/US" />
-                <span class="settings-hint">e.g. msh/US, msh/US/HI, msh/US/Florida</span>
+                <label for="cfgMqttTopicPreset">Root Topic</label>
+                <select id="cfgMqttTopicPreset" class="map-style-select" onchange="onTopicPresetChange()">
+                    <option value="msh/US">US — All States (msh/US)</option>
+                    <option value="msh/US/HI">Hawaii (msh/US/HI)</option>
+                    <option value="msh/US/CA">California (msh/US/CA)</option>
+                    <option value="msh/US/FL">Florida (msh/US/FL)</option>
+                    <option value="msh/US/TX">Texas (msh/US/TX)</option>
+                    <option value="msh/EU_868">Europe 868 MHz (msh/EU_868)</option>
+                    <option value="msh/ANZ">Australia / NZ (msh/ANZ)</option>
+                    <option value="msh/#">Global — All Regions (msh/#)</option>
+                    <option value="custom">Custom...</option>
+                </select>
+                <input type="text" id="cfgMqttTopic" placeholder="msh/US/HI" style="display:none;margin-top:4px" />
+                <span class="settings-hint">Auto-expanded to include /2/e/# and /2/json/#</span>
             </div>
             <div class="settings-field settings-checkbox">
                 <label for="cfgMqttTls">
