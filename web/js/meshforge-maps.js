@@ -419,7 +419,7 @@ function renderMarkers() {
             fillOpacity: isStale ? 0.2 : 0.7,
         });
 
-        marker.bindPopup(buildPopup(props, color));
+        marker.bindPopup(function() { return buildPopup(props, color); });
 
         if (props.id) {
             markerRegistry.set(props.id, marker);
