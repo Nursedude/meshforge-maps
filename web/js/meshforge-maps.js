@@ -785,7 +785,24 @@ async function openSettings() {
         document.getElementById('cfgMqttPassword').value = '';
         document.getElementById('cfgMqttPassword').placeholder =
             (cfg.mqtt_password === '***') ? 'Leave blank to keep current' : 'No password set';
-        document.getElementById('cfgMqttTopic').value = cfg.mqtt_topic || '';
+        // MQTT topic: match to preset or show custom input
+        var topicVal = cfg.mqtt_topic || '';
+        var presetEl = document.getElementById('cfgMqttTopicPreset');
+        var topicInput = document.getElementById('cfgMqttTopic');
+        var matched = false;
+        for (var i = 0; i < presetEl.options.length; i++) {
+            if (presetEl.options[i].value === topicVal) {
+                presetEl.value = topicVal;
+                topicInput.style.display = 'none';
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            presetEl.value = 'custom';
+            topicInput.value = topicVal;
+            topicInput.style.display = '';
+        }
         document.getElementById('cfgMqttTls').checked = !!cfg.mqtt_use_tls;
 
         // Deployment profile
@@ -830,13 +847,26 @@ function closeSettings() {
     document.getElementById('settingsOverlay').classList.remove('visible');
 }
 
+function onTopicPresetChange() {
+    var preset = document.getElementById('cfgMqttTopicPreset');
+    var input = document.getElementById('cfgMqttTopic');
+    if (preset.value === 'custom') {
+        input.style.display = '';
+        input.focus();
+    } else {
+        input.style.display = 'none';
+    }
+}
+
 async function saveSettings(event) {
     event.preventDefault();
 
     var data = {
         mqtt_broker: document.getElementById('cfgMqttBroker').value.trim(),
         mqtt_port: parseInt(document.getElementById('cfgMqttPort').value, 10),
-        mqtt_topic: document.getElementById('cfgMqttTopic').value.trim(),
+        mqtt_topic: (document.getElementById('cfgMqttTopicPreset').value === 'custom'
+            ? document.getElementById('cfgMqttTopic').value.trim()
+            : document.getElementById('cfgMqttTopicPreset').value),
         mqtt_username: document.getElementById('cfgMqttUsername').value.trim() || null,
         mqtt_use_tls: document.getElementById('cfgMqttTls').checked,
         deployment_profile: document.getElementById('cfgDeployProfile').value,
