@@ -19,20 +19,18 @@ Description=MeshForge Maps - Mesh Network Visualization
 Documentation=https://github.com/Nursedude/meshforge-maps
 After=network-online.target
 Wants=network-online.target
+# Crash-loop protection: max 5 restarts within 5 minutes
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=pi
 Group=pi
 WorkingDirectory=/opt/meshforge-maps
-ExecStartPre=/usr/bin/find /opt/meshforge-maps -type d -name __pycache__ -exec rm -rf {} +
 ExecStart=/opt/meshforge-maps/venv/bin/python -m src.main --host 0.0.0.0
 Restart=on-failure
 RestartSec=10
-
-# Crash-loop protection: max 5 restarts within 5 minutes
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Environment
 Environment=PYTHONUNBUFFERED=1
