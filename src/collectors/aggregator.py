@@ -46,6 +46,7 @@ class DataAggregator:
         self._cached_result: Optional[Dict[str, Any]] = None
         self._cached_result_time: float = 0
         self._RESULT_CACHE_TTL = 2.0  # seconds — dedup rapid requests
+        self._node_history = None  # Optional NodeHistoryDB for analytics recording
 
         # Event bus for decoupled real-time communication
         self._event_bus = EventBus()
@@ -139,6 +140,42 @@ class DataAggregator:
     # because their features are not mesh node points.
     _OVERLAY_ONLY_COLLECTORS = {"noaa_alerts"}
 
+    def set_node_history(self, db) -> None:
+        """Set optional NodeHistoryDB for recording observations from all sources."""
+        self._node_history = db
+
+    def _record_observations(self, features: List[Dict[str, Any]]) -> None:
+        """Batch-record observations from deduplicated features into node history."""
+        if not self._node_history:
+            return
+        obs_list = []
+        for f in features:
+            geom = f.get("geometry", {})
+            coords = geom.get("coordinates")
+            if not coords or len(coords) < 2:
+                continue
+            props = f.get("properties", {})
+            node_id = props.get("id")
+            if not node_id:
+                continue
+            obs_list.append({
+                "node_id": node_id,
+                "lat": coords[1],
+                "lon": coords[0],
+                "network": props.get("network", ""),
+                "snr": props.get("snr"),
+                "battery": props.get("battery"),
+                "altitude": props.get("altitude"),
+                "name": props.get("name", ""),
+            })
+        if obs_list:
+            try:
+                count = self._node_history.record_observations_batch(obs_list)
+                if count:
+                    logger.debug("Recorded %d/%d observations to history", count, len(obs_list))
+            except Exception as e:
+                logger.debug("Observation recording failed: %s", e)
+
     def collect_all(self) -> Dict[str, Any]:
         """Collect from all enabled sources and merge into one FeatureCollection.
 
@@ -186,6 +223,9 @@ class DataAggregator:
 
             all_features = deduplicate_features(per_source_features, allow_no_id=True)
             cycle_ctx.node_count = len(all_features)
+
+            # Record observations for ALL sources (not just MQTT events)
+            self._record_observations(all_features)
 
         # Cache overlay data so /api/overlay doesn't trigger a full re-collect
         with self._data_lock:

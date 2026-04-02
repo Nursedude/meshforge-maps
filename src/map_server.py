@@ -1346,6 +1346,7 @@ class MapServer:
         self._node_history: Optional[NodeHistoryDB] = None
         try:
             self._node_history = NodeHistoryDB()
+            self._aggregator.set_node_history(self._node_history)
         except Exception as e:
             logger.warning("Node history DB not available: %s", e)
 

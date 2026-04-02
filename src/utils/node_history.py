@@ -198,6 +198,57 @@ class NodeHistoryDB:
                 logger.debug("Failed to record observation for %s: %s", node_id, e)
                 return False
 
+    def record_observations_batch(
+        self, observations: List[Dict[str, Any]]
+    ) -> int:
+        """Batch-record observations with a single lock acquisition and commit.
+
+        Each observation dict should have: node_id, lat, lon, network.
+        Optional keys: altitude, snr, battery, name.
+        Returns the number of observations actually recorded (non-throttled).
+        """
+        if not self._conn or not observations:
+            return 0
+
+        now = int(time.time())
+        rows = []
+        recorded_ids = []
+
+        with self._lock:
+            for obs in observations:
+                node_id = obs.get("node_id")
+                if not node_id:
+                    continue
+                last = self._last_recorded.get(node_id, 0)
+                if (now - last) < self._throttle_seconds:
+                    continue
+                rows.append((
+                    node_id, now,
+                    obs.get("lat"), obs.get("lon"), obs.get("altitude"),
+                    obs.get("network", ""), obs.get("snr"), obs.get("battery"),
+                    obs.get("name", ""),
+                ))
+                recorded_ids.append(node_id)
+
+            if not rows:
+                return 0
+
+            try:
+                self._conn.executemany(
+                    """INSERT INTO observations
+                       (node_id, timestamp, latitude, longitude, altitude,
+                        network, snr, battery, name)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    rows,
+                )
+                self._conn.commit()
+                for nid in recorded_ids:
+                    self._last_recorded[nid] = now
+                return len(rows)
+            except Exception as e:
+                logger.debug("Batch recording failed: %s", e)
+                return 0
+
     def get_trajectory_geojson(
         self,
         node_id: str,
