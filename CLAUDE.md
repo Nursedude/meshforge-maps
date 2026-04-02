@@ -1,6 +1,6 @@
 # CLAUDE.md — Project Memory for meshforge-maps
 
-Unified multi-source mesh network map (Meshtastic, Reticulum/RMAP, AREDN, OpenHamClock/NOAA).
+Unified multi-source mesh network map (Meshtastic, Reticulum/RMAP, AREDN, MeshCore, OpenHamClock/NOAA).
 Runs standalone (`python -m src.main`) or as a MeshForge extension via `manifest.json` auto-discovery.
 HTTP server on `:8808`, WebSocket on `:8809`. Python 3.9+, stdlib only for core.
 
@@ -12,7 +12,7 @@ src/map_server.py            HTTP server, REST API routes, MapServerContext
 src/collectors/
   base.py                    BaseCollector ABC, validate_coordinates(), make_feature()
   aggregator.py              DataAggregator — merges all sources, dedup, timing
-  meshtastic_collector.py    Meshtastic via API + MQTT + cache fallback
+  meshtastic_collector.py    Meshtastic via API + MQTT + meshmap.net + cache
   reticulum_collector.py     Reticulum/RMAP via rnstatus + RCH REST API
   hamclock_collector.py      OpenHamClock + NOAA SWPC space weather
   aredn_collector.py         AREDN mesh nodes via sysinfo.json
@@ -38,7 +38,7 @@ src/utils/
   openhamclock_compat.py     Port detection (3000 first, 8080 fallback)
 src/tui/                     Curses terminal dashboard (7 tabs)
 web/                         Leaflet.js frontend, sw-tiles.js offline cache
-tests/                       pytest suite (982 tests)
+tests/                       pytest suite (994 tests)
 scripts/                     install.sh, verify.sh
 ```
 
@@ -84,7 +84,7 @@ scripts/                     install.sh, verify.sh
 ## Testing
 
 ```bash
-pytest tests/ -v    # 982 tests, no external deps needed
+pytest tests/ -v    # 994 tests, no external deps needed
 ```
 
 - Test files mirror source modules: `test_<module>.py`

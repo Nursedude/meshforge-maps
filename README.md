@@ -8,10 +8,10 @@ Visualization plugin for the [MeshForge ecosystem](https://github.com/Nursedude/
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-982-brightgreen)
+![Tests](https://img.shields.io/badge/tests-994-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
-A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, and AREDN into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
+A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, AREDN, and MeshCore into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
 
 **Runs standalone** or as a [MeshForge](https://github.com/Nursedude/meshforge) extension via plugin auto-discovery.
 
@@ -41,9 +41,9 @@ python -m src.main --setup      # interactive setup wizard
 ## Features
 
 ### Data Collection
-- **Multi-source aggregation** -- Meshtastic, Reticulum/RMAP, AREDN, and OpenHamClock/NOAA (see [Data Sources](#data-sources) for protocol details)
+- **Multi-source aggregation** -- Meshtastic, Reticulum/RMAP, AREDN, MeshCore, and OpenHamClock/NOAA (see [Data Sources](#data-sources) for protocol details)
 - **Live MQTT subscription** -- real-time Meshtastic node tracking with AES-CTR decryption and protobuf decoding
-- **Public map sources** -- RMAP.world (~160 Reticulum nodes) and AREDN Worldmap (~2500 nodes) fetched automatically
+- **Public map sources** -- meshmap.net (~300+ Meshtastic nodes), RMAP.world (~160 Reticulum nodes), AREDN Worldmap (~2500 nodes), MeshCore (~30K nodes) fetched automatically
 - **Circuit breakers** -- per-source failure isolation with automatic recovery
 
 ### Visualization
@@ -107,11 +107,13 @@ graph TB
     subgraph External["External Data Sources"]
         MQTT["mqtt.meshtastic.org<br/>msh/# topics"]
         MESHTD["meshtasticd<br/>:4403 HTTP API"]
+        MESHMAP["meshmap.net<br/>nodes.json API"]
         RNS["rnstatus<br/>local RNS instance"]
         RCH["Reticulum Community Hub<br/>FastAPI :8000"]
         NOAA["NOAA SWPC<br/>Space Weather APIs"]
         HAMCLK["OpenHamClock :3000<br/>HamClock :8080 (legacy)"]
         AREDN_NODES["AREDN Mesh Nodes<br/>sysinfo.json API"]
+        MESHCORE["map.meshcore.dev<br/>~30K nodes API"]
     end
 
     subgraph Core["meshforge-maps Core"]
@@ -121,6 +123,7 @@ graph TB
         RC["ReticulumCollector"]
         HC["HamClockCollector"]
         AC["AREDNCollector"]
+        MCC["MeshCoreCollector"]
         AGG["DataAggregator<br/>merge + dedup + timing"]
         CFG["MapsConfig<br/>settings.json"]
         CB["CircuitBreakerRegistry"]
@@ -325,18 +328,23 @@ Alert payloads are JSON:
 
 | Source | Protocol | Data | Status |
 |--------|----------|------|--------|
-| **Meshtastic** | HTTP API (meshtasticd :4403) + Live MQTT + cache | Node positions, telemetry, battery, SNR, neighbors | Active |
+| **Meshtastic** | HTTP API (meshtasticd :4403) + Live MQTT + meshmap.net + cache | Node positions, telemetry, battery, SNR, neighbors | Active |
 | **Reticulum/RMAP** | rnstatus --json + RCH REST API + node cache | RNS interfaces, node types, transport info | Active |
 | **OpenHamClock/NOAA** | OpenHamClock REST API (:3000) + NOAA SWPC APIs | VOACAP predictions, solar flux, Kp, band conditions, DX spots | Active |
-| **AREDN** | sysinfo.json per-node API + LQM + cache | Node locations, firmware, link quality metrics | Active |
+| **AREDN** | sysinfo.json per-node API + Worldmap CSV + LQM + cache | Node locations, firmware, link quality metrics | Active |
+| **MeshCore** | map.meshcore.dev REST API | Node positions (~30K nodes globally) | Active |
 
 ### Meshtastic (Live MQTT)
 
-Real-time node tracking via the public Meshtastic MQTT broker at `mqtt.meshtastic.org`. Subscribes to `msh/#` topic tree and decodes `ServiceEnvelope` protobuf packets. Processes POSITION_APP, NODEINFO_APP, TELEMETRY_APP, and NEIGHBORINFO_APP for live map updates and topology links.
+Real-time node tracking via the public Meshtastic MQTT broker at `mqtt.meshtastic.org`. Subscribes to configurable topic (default `msh/US/#`, selectable presets for regional filtering). Decodes `ServiceEnvelope` protobuf packets — POSITION_APP, NODEINFO_APP, TELEMETRY_APP, NEIGHBORINFO_APP for live map updates and topology links.
+
+Also fetches pre-aggregated node data from [meshmap.net](https://meshmap.net/) as a fallback data source, providing Meshtastic coverage even when MQTT is unreachable. Deduplication ensures no overlap.
+
+**Data sources (priority order):** meshtasticd HTTP API → live MQTT → meshmap.net → MQTT cache file.
 
 **Optional dependencies:** `paho-mqtt`, `meshtastic` (for protobuf). Falls back to JSON mode or cache file without them.
 
-Reference: [meshtastic.org/docs/software/integrations/mqtt](https://meshtastic.org/docs/software/integrations/mqtt/) | [liamcottle/meshtastic-map](https://github.com/liamcottle/meshtastic-map)
+Reference: [meshtastic.org/docs/software/integrations/mqtt](https://meshtastic.org/docs/software/integrations/mqtt/) | [meshmap.net](https://meshmap.net/) | [liamcottle/meshtastic-map](https://github.com/liamcottle/meshtastic-map)
 
 ### Reticulum / RMAP / RCH
 
@@ -348,7 +356,11 @@ Space weather from [NOAA SWPC](https://services.swpc.noaa.gov/) public JSON APIs
 
 ### AREDN
 
-Per-node sysinfo API at `http://<node>.local.mesh/a/sysinfo?lqm=1`. Requires mesh network access. LQM (Link Quality Manager) data provides topology links with SNR and quality metrics between nodes. Reference: [AREDN World Map](https://worldmap.arednmesh.org/) | [AREDN docs](https://docs.arednmesh.org/en/latest/arednHow-toGuides/devtools.html)
+Per-node sysinfo API at `http://<node>.local.mesh/a/sysinfo?lqm=1`. Requires mesh network access. Also fetches the [AREDN World Map](https://worldmap.arednmesh.org/) CSV (~2,500 nodes globally) for coverage without direct mesh access. LQM (Link Quality Manager) data provides topology links with SNR and quality metrics between nodes. Reference: [AREDN World Map](https://worldmap.arednmesh.org/) | [AREDN docs](https://docs.arednmesh.org/en/latest/arednHow-toGuides/devtools.html)
+
+### MeshCore
+
+Public node data from [map.meshcore.dev](https://map.meshcore.dev/) REST API (~30,000 nodes globally). Fetched with 30-minute cache TTL. Disabled by default in lite deployment profile (Pi 2W). Reference: [MeshCore](https://meshcore.dev/)
 
 ## Installation
 
