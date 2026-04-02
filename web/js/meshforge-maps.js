@@ -370,6 +370,16 @@ async function loadNodeData() {
 function renderMarkers() {
     // Core marker rendering from allFeatures — single source of truth
     // for both initial load (processGeoJSON) and re-render (health overlay toggle)
+
+    // Preserve open popup across re-render
+    let openPopupNodeId = null;
+    for (const [nodeId, marker] of markerRegistry) {
+        if (marker.isPopupOpen()) {
+            openPopupNodeId = nodeId;
+            break;
+        }
+    }
+
     clusterGroup.clearLayers();
     directGroup.clearLayers();
     markerRegistry.clear();
@@ -437,6 +447,12 @@ function renderMarkers() {
     document.getElementById('statReticulum').textContent = counts.reticulum;
     document.getElementById('statAredn').textContent = counts.aredn;
     document.getElementById('statMeshcore').textContent = counts.meshcore;
+
+    // Re-open popup if one was visible before re-render
+    if (openPopupNodeId) {
+        const restored = markerRegistry.get(openPopupNodeId);
+        if (restored) restored.openPopup();
+    }
 }
 
 function processGeoJSON(data) {

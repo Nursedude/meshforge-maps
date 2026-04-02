@@ -302,6 +302,20 @@ class TestCompositeScoring:
         assert result.available_weight == 0
         assert result.components == {}
 
+    def test_online_node_no_telemetry_scores_good(self, scorer):
+        """AREDN-style node with is_online=True but no telemetry gets 'good'."""
+        result = scorer.score_node("aredn1", {"is_online": True, "network": "aredn"}, now=1000.0)
+        assert result.score == 70
+        assert result.status == "good"
+        assert result.available_weight == 0
+
+    def test_offline_node_no_telemetry_scores_critical(self, scorer):
+        """Offline node with no telemetry gets 'critical'."""
+        result = scorer.score_node("aredn2", {"is_online": False, "network": "aredn"}, now=1000.0)
+        assert result.score == 15
+        assert result.status == "critical"
+        assert result.available_weight == 0
+
     def test_score_clamped_to_100(self, scorer):
         result = scorer.score_node("n1", {"battery": 200}, now=1000.0)
         assert result.score <= 100

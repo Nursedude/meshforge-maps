@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
 from .collectors.aggregator import DataAggregator
@@ -195,7 +195,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 # /api/nodes/<node_id>/trajectory
                 parts = path.split("/")
                 if len(parts) >= 4:
-                    node_id = parts[3]
+                    node_id = unquote(parts[3])
                     if not validate_node_id(node_id):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
@@ -206,7 +206,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 # /api/nodes/<node_id>/health
                 parts = path.split("/")
                 if len(parts) >= 4:
-                    node_id = parts[3]
+                    node_id = unquote(parts[3])
                     if not validate_node_id(node_id):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
@@ -217,7 +217,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 # /api/nodes/<node_id>/history
                 parts = path.split("/")
                 if len(parts) >= 4:
-                    node_id = parts[3]
+                    node_id = unquote(parts[3])
                     if not validate_node_id(node_id):
                         self._send_json({"error": "Invalid node ID format"}, 400)
                     else:
