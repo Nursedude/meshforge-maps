@@ -1195,6 +1195,15 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if aggregator:
             source_health = aggregator.get_source_health()
 
+        # Node history DB health
+        nh = self._ctx.node_history
+        node_history_status = {
+            "available": bool(nh and nh._conn),
+            "observation_count": nh.observation_count if nh else 0,
+            "node_count": nh.node_count if nh else 0,
+            "db_path": str(nh._db_path) if nh else None,
+        }
+
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
@@ -1207,6 +1216,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "uptime_seconds": uptime,
             "data_age_seconds": data_age,
             "data_stale": data_stale,
+            "node_history": node_history_status,
             "websocket": websocket_stats,
             "event_bus": event_bus_stats,
             "alerts": self._ctx.alert_engine.get_summary() if self._ctx.alert_engine else None,

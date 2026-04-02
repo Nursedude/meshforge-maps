@@ -1656,10 +1656,27 @@ async function loadAnalyticsTab(tab) {
     }
 }
 
+async function showAnalyticsDiagnostic(container, label) {
+    try {
+        var resp = await fetch(API_BASE + '/api/status');
+        var status = await resp.json();
+        var nh = status.node_history || {};
+        if (!nh.available) {
+            container.innerHTML = '<div style="color:#ef5350;font-size:11px;text-align:center;padding:24px">Node history database unavailable &mdash; check server logs for ownership or permission errors.</div>';
+        } else if (nh.observation_count === 0) {
+            container.innerHTML = '<div style="color:#ffa726;font-size:11px;text-align:center;padding:24px">Recording started &mdash; analytics data will appear after a few collection cycles.</div>';
+        } else {
+            container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No ' + esc(label) + ' in the selected time range (' + nh.observation_count + ' observations in database).</div>';
+        }
+    } catch (e) {
+        container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No ' + esc(label) + ' available</div>';
+    }
+}
+
 function renderGrowthChart(data, container) {
     var buckets = data.buckets || [];
     if (buckets.length === 0) {
-        container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No growth data available</div>';
+        showAnalyticsDiagnostic(container, 'growth data');
         return;
     }
 
@@ -1717,7 +1734,7 @@ function renderGrowthChart(data, container) {
 function renderActivityHeatmap(data, container) {
     var hours = data.hours || [];
     if (hours.length === 0) {
-        container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No activity data available</div>';
+        showAnalyticsDiagnostic(container, 'activity data');
         return;
     }
 
@@ -1769,7 +1786,7 @@ function renderActivityHeatmap(data, container) {
 function renderRankingTable(data, container) {
     var nodes = data.nodes || [];
     if (nodes.length === 0) {
-        container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No ranking data available</div>';
+        showAnalyticsDiagnostic(container, 'ranking data');
         return;
     }
 
