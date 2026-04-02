@@ -79,6 +79,59 @@ class TestNodeHistoryDB:
             db.close()
 
 
+class TestBatchRecording:
+    """Tests for record_observations_batch()."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
+        self.db = NodeHistoryDB(
+            db_path=tmp_path / "batch_test.db",
+            throttle_seconds=0,
+        )
+        yield
+        self.db.close()
+
+    def test_batch_records_multiple_nodes(self):
+        obs = [
+            {"node_id": "!a1", "lat": 35.0, "lon": 139.0, "network": "aredn"},
+            {"node_id": "!b2", "lat": 40.0, "lon": -74.0, "network": "meshcore"},
+            {"node_id": "!c3", "lat": 51.0, "lon": -0.1, "network": "reticulum"},
+        ]
+        count = self.db.record_observations_batch(obs)
+        assert count == 3
+        assert self.db.observation_count == 3
+        assert self.db.node_count == 3
+
+    def test_batch_empty_list(self):
+        assert self.db.record_observations_batch([]) == 0
+
+    def test_batch_skips_missing_node_id(self):
+        obs = [
+            {"lat": 35.0, "lon": 139.0, "network": "aredn"},
+            {"node_id": "!ok", "lat": 40.0, "lon": -74.0, "network": "meshcore"},
+        ]
+        count = self.db.record_observations_batch(obs)
+        assert count == 1
+
+    def test_batch_throttle_filters(self, tmp_path):
+        db = NodeHistoryDB(db_path=tmp_path / "batch_throttle.db", throttle_seconds=60)
+        try:
+            db.record_observation("!existing", 35.0, 139.0, network="mqtt")
+            obs = [
+                {"node_id": "!existing", "lat": 35.1, "lon": 139.1, "network": "aredn"},
+                {"node_id": "!new", "lat": 40.0, "lon": -74.0, "network": "meshcore"},
+            ]
+            count = db.record_observations_batch(obs)
+            assert count == 1  # !existing throttled, !new recorded
+            assert db.observation_count == 2
+        finally:
+            db.close()
+
+    def test_batch_returns_count(self):
+        obs = [{"node_id": f"!n{i}", "lat": 35.0 + i, "lon": 139.0, "network": "aredn"} for i in range(10)]
+        assert self.db.record_observations_batch(obs) == 10
+
+
 class TestTrajectoryGeoJSON:
     """Tests for get_trajectory_geojson()."""
 

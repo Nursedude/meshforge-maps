@@ -796,6 +796,34 @@ class TestDataAggregator:
         assert cached["space_weather"]["solar_flux"] == 150
         assert cached["solar_terminator"]["subsolar_lat"] == 10
 
+    @patch.object(MeshtasticCollector, "collect")
+    @patch.object(ReticulumCollector, "collect")
+    @patch.object(HamClockCollector, "collect")
+    @patch.object(AREDNCollector, "collect")
+    def test_collect_all_records_observations(self, mock_aredn, mock_ham, mock_ret, mock_mesh, tmp_path):
+        """collect_all() should record observations to node_history for all sources."""
+        from src.utils.node_history import NodeHistoryDB
+        mock_mesh.return_value = make_feature_collection(
+            [make_feature("m1", 35.0, 139.0, "meshtastic")], "meshtastic",
+        )
+        mock_ret.return_value = make_feature_collection(
+            [make_feature("r1", 40.0, -74.0, "reticulum")], "reticulum",
+        )
+        mock_ham.return_value = make_feature_collection([], "hamclock")
+        mock_aredn.return_value = make_feature_collection(
+            [make_feature("a1", 51.0, -0.1, "aredn")], "aredn",
+        )
+
+        db = NodeHistoryDB(db_path=tmp_path / "obs_test.db", throttle_seconds=0)
+        try:
+            agg = DataAggregator(dict(DEFAULT_CONFIG_SUBSET))
+            agg.set_node_history(db)
+            agg.collect_all()
+            assert db.observation_count == 3
+            assert db.node_count == 3
+        finally:
+            db.close()
+
     def test_get_cached_overlay_empty_initially(self):
         agg = DataAggregator({
             "enable_meshtastic": False, "enable_reticulum": False,
