@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 MESHTASTICD_API = "http://localhost:4403"
 NODES_ENDPOINT = "/api/v1/nodes"
 
+# External map data source (aggregated from public MQTT)
+MESHMAP_URL = "https://meshmap.net/nodes.json"
+
 # Meshforge MQTT cache location
 MQTT_CACHE_PATH = MESHFORGE_DATA_DIR / "mqtt_nodes.json"
 
@@ -85,6 +88,15 @@ class MeshtasticCollector(BaseCollector):
         if self._source_mode != "local_only":
             mqtt_nodes = self._fetch_from_mqtt_cache()
             for f in mqtt_nodes:
+                fid = f["properties"].get("id")
+                if fid and fid not in seen_ids:
+                    seen_ids.add(fid)
+                    features.append(f)
+
+        # Source 4: meshmap.net public API (skipped in local_only mode)
+        if self._source_mode != "local_only":
+            meshmap_nodes = self._fetch_from_meshmap()
+            for f in meshmap_nodes:
                 fid = f["properties"].get("id")
                 if fid and fid not in seen_ids:
                     seen_ids.add(fid)
@@ -316,4 +328,69 @@ class MeshtasticCollector(BaseCollector):
             firmware_version=node.get("firmware_version"),
             region=node.get("region"),
             modem_preset=node.get("modem_preset"),
+        )
+
+    def _fetch_from_meshmap(self) -> List[Dict[str, Any]]:
+        """Fetch aggregated Meshtastic nodes from meshmap.net public API."""
+        features = []
+        try:
+            req = Request(
+                MESHMAP_URL,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "MeshForge/1.0",
+                },
+            )
+            with urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+
+            for num_id, node in data.items():
+                feature = self._parse_meshmap_node(num_id, node)
+                if feature:
+                    features.append(feature)
+            if features:
+                logger.debug("meshmap.net returned %d meshtastic nodes", len(features))
+        except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
+            logger.debug("meshmap.net unavailable: %s", e)
+        return features
+
+    def _parse_meshmap_node(
+        self, num_id: str, node: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Parse a node from meshmap.net nodes.json format."""
+        coords = validate_coordinates(
+            node.get("latitude"), node.get("longitude"), convert_int=True,
+        )
+        if coords is None:
+            return None
+        lat, lon = coords
+
+        # Convert numeric ID to Meshtastic hex format: !3d2a114e
+        try:
+            hex_id = f"!{int(num_id):08x}"
+        except (ValueError, TypeError):
+            return None
+
+        last_seen = node.get("lastMapReport")
+        return make_feature(
+            node_id=hex_id,
+            lat=lat,
+            lon=lon,
+            network="meshtastic",
+            name=node.get("longName", node.get("shortName", hex_id)),
+            node_type="meshtastic_node",
+            hardware=node.get("hwModel", ""),
+            role=node.get("role", ""),
+            battery=node.get("batteryLevel"),
+            voltage=node.get("voltage"),
+            channel_util=node.get("chUtil"),
+            air_util_tx=node.get("airUtilTx"),
+            altitude=node.get("altitude"),
+            is_online=is_node_online(last_seen, "meshtastic"),
+            last_seen=last_seen,
+            firmware=node.get("fwVersion", ""),
+            region=node.get("region", ""),
+            modem_preset=node.get("modemPreset", ""),
+            num_online_nodes=node.get("onlineLocalNodes"),
+            source="meshmap.net",
         )
