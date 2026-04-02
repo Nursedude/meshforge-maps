@@ -214,7 +214,15 @@ class NodeHealthScorer:
         if available > 0:
             normalized = int(round((earned / available) * 100))
         else:
-            normalized = 0
+            # No scorable telemetry — use is_online as fallback.
+            # Avoids penalizing networks (e.g. AREDN) that don't
+            # report Meshtastic-style metrics.
+            if props.get("is_online") is True:
+                normalized = 70  # "good"
+            elif props.get("is_online") is False:
+                normalized = 15  # "critical" (actually offline)
+            else:
+                normalized = 0   # no data at all
 
         normalized = max(0, min(100, normalized))
         status = _score_label(normalized)

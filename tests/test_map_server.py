@@ -236,6 +236,24 @@ class TestMapServerHTTPEndpoints:
         data = self._get_json("/api/nodes/!a1b2c3d4/trajectory?since=1000&until=2000")
         assert data["type"] == "FeatureCollection"
 
+    def test_trajectory_url_encoded_node_id(self):
+        """Node ID with ! prefix should work when URL-encoded as %21."""
+        data = self._get_json("/api/nodes/%21a1b2c3d4/trajectory")
+        assert data["type"] == "FeatureCollection"
+
+    def test_health_url_encoded_node_id(self):
+        """URL-encoded ! must not be rejected as invalid format (400)."""
+        from urllib.error import HTTPError
+        try:
+            self._get_json("/api/nodes/%21a1b2c3d4/health")
+        except HTTPError as e:
+            # 404 (node not in data) is fine; 400 (bad format) means decoding failed
+            assert e.code != 400, "URL-encoded node ID rejected as invalid format"
+
+    def test_history_url_encoded_node_id(self):
+        data = self._get_json("/api/nodes/%21a1b2c3d4/history")
+        assert "observations" in data
+
     def test_node_history_with_limit(self):
         data = self._get_json("/api/nodes/!a1b2c3d4/history?limit=10")
         assert "observations" in data
