@@ -373,6 +373,8 @@ class AREDNCollector(BaseCollector):
 
         model = row.get("model", "")
         firmware = row.get("firmware_version", "")
+        last_seen_val = row.get("last_seen") or None
+        is_online_val = is_node_online(last_seen_val, "aredn") if last_seen_val else None
 
         return make_feature(
             node_id=node_name,
@@ -385,7 +387,8 @@ class AREDNCollector(BaseCollector):
             firmware=firmware,
             grid_square=row.get("grid_square", ""),
             channel=row.get("channel", ""),
-            last_seen=row.get("last_seen") or None,
+            last_seen=last_seen_val,
+            is_online=is_online_val,
             source="aredn_worldmap",
         )
 

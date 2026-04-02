@@ -316,6 +316,18 @@ class TestCompositeScoring:
         assert result.status == "critical"
         assert result.available_weight == 0
 
+    def test_online_node_stale_freshness_floors_to_good(self, scorer):
+        """Online node with only stale last_seen should floor at 60 ('good')."""
+        # last_seen 50 min ago — stale enough for low freshness, but online
+        now = 10000.0
+        result = scorer.score_node(
+            "aredn3",
+            {"is_online": True, "last_seen": now - 3000, "network": "aredn"},
+            now=now,
+        )
+        assert result.score >= 60
+        assert result.status == "good"
+
     def test_score_clamped_to_100(self, scorer):
         result = scorer.score_node("n1", {"battery": 200}, now=1000.0)
         assert result.score <= 100
