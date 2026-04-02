@@ -65,6 +65,20 @@ class NodeHistoryDB:
         conn = None
         try:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Check directory ownership — warn if owned by different user
+            import os as _os
+            if self._db_path.parent.exists():
+                dir_stat = self._db_path.parent.stat()
+                uid = _os.getuid()
+                if dir_stat.st_uid != uid and uid != 0:
+                    logger.warning(
+                        "Data directory %s owned by uid %d but running as uid %d. "
+                        "Fix with: sudo chown -R %d:%d %s",
+                        self._db_path.parent, dir_stat.st_uid, uid,
+                        uid, _os.getgid(), self._db_path.parent,
+                    )
+
             conn = self._open_connection()
 
             # Integrity check — rotate corrupt databases
