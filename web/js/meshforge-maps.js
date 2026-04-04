@@ -96,7 +96,7 @@ let lastWsMessage = 0;       // Timestamp of last WebSocket message (staleness d
 let regionPresets = {          // Defaults, overwritten by server config if available
     hawaii:     { map_center_lat: 20.5, map_center_lon: -157.0, map_default_zoom: 7, bbox: [18.5, -161.0, 22.5, -154.0] },
     west_coast: { map_center_lat: 37.5, map_center_lon: -122.0, map_default_zoom: 6, bbox: [32.0, -125.0, 49.0, -114.0] },
-    us:         { map_center_lat: 39.0, map_center_lon: -98.0,  map_default_zoom: 4, bbox: [24.0, -125.0, 50.0, -66.0] },
+    us:         { map_center_lat: 39.0, map_center_lon: -98.0,  map_default_zoom: 4, bbox: null },
     world:      { map_center_lat: 20.0, map_center_lon: 0.0,    map_default_zoom: 3, bbox: null },
 };
 let trajectoryLayers = {};   // Active trajectory polylines keyed by node_id
@@ -1043,10 +1043,11 @@ async function saveSettings(event) {
         try { localStorage.setItem('meshforge_region_preset', data.region_preset); } catch (e) {}
     }
 
-    // Show saving indicator and use timeout (Pi can be slow under load)
-    var saveBtn = document.querySelector('.settings-btn-save');
-    if (saveBtn) saveBtn.textContent = 'Saving...';
+    // Close immediately and save in background (Pi server can be slow)
+    closeSettings();
+    showToast('Saving settings...');
 
+    // Fire-and-forget save with timeout
     try {
         var controller = new AbortController();
         var timeout = setTimeout(function() { controller.abort(); }, 15000);
@@ -1060,22 +1061,20 @@ async function saveSettings(event) {
         var result = await resp.json();
         if (resp.ok) {
             if (result.config) _cacheConfig(result.config);
-            showToast('Settings saved. Restart service for source changes to take effect.');
-            closeSettings();
+            showToast('Settings saved');
         } else {
             var msg = result.details ? result.details.join(', ') : (result.error || 'Unknown error');
             showToast('Save failed: ' + msg, true);
         }
     } catch (e) {
         if (e.name === 'AbortError') {
-            showToast('Save timed out — server busy. Settings may still apply on restart.', true);
-            closeSettings();
+            showToast('Save timed out — server busy. Settings saved locally.', true);
         } else {
             showToast('Save failed: ' + e.message, true);
         }
-    } finally {
-        if (saveBtn) saveBtn.textContent = 'Save & Reconnect';
     }
+    // Refresh data with new region bbox
+    loadNodeData();
 }
 
 // =========================================================================
