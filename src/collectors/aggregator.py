@@ -149,6 +149,9 @@ class DataAggregator:
         """Batch-record observations from deduplicated features into node history."""
         if not self._node_history:
             return
+        if not getattr(self._node_history, '_conn', None):
+            logger.warning("Observation recording skipped: DB connection unavailable")
+            return
         obs_list = []
         for f in features:
             geom = f.get("geometry", {})
@@ -173,9 +176,9 @@ class DataAggregator:
             try:
                 count = self._node_history.record_observations_batch(obs_list)
                 if count:
-                    logger.debug("Recorded %d/%d observations to history", count, len(obs_list))
+                    logger.info("Recorded %d/%d observations to history", count, len(obs_list))
             except Exception as e:
-                logger.debug("Observation recording failed: %s", e)
+                logger.warning("Observation recording failed: %s", e)
 
     def collect_all(self) -> Dict[str, Any]:
         """Collect from all enabled sources and merge into one FeatureCollection.
