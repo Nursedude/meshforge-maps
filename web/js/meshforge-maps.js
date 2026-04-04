@@ -130,6 +130,24 @@ const networkVisible = {
 
 // --- Overlay preference persistence (localStorage) ---
 var _OVERLAY_STORAGE_KEY = 'meshforge_overlay_prefs';
+var _CONFIG_CACHE_KEY = 'meshforge_config_cache';
+
+function _cacheConfig(cfg) {
+    try {
+        var safe = Object.assign({}, cfg);
+        delete safe.mqtt_password;
+        delete safe.api_key;
+        delete safe.rch_api_key;
+        localStorage.setItem(_CONFIG_CACHE_KEY, JSON.stringify(safe));
+    } catch (e) {}
+}
+
+function _getCachedConfig() {
+    try {
+        var raw = localStorage.getItem(_CONFIG_CACHE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+}
 
 function saveOverlayPrefs() {
     var prefs = {
@@ -300,6 +318,7 @@ async function loadConfig() {
         const resp = await fetch(API_BASE + '/api/config');
         if (resp.ok) {
             const config = await resp.json();
+            _cacheConfig(config);
             // Cache region presets from server
             if (config.region_presets) {
                 regionPresets = config.region_presets;
@@ -340,7 +359,12 @@ async function loadConfig() {
             }
         }
     } catch (e) {
-        console.debug('Using default config');
+        console.debug('Config fetch failed, trying cache');
+        var cached = _getCachedConfig();
+        if (cached) {
+            if (cached.region_presets) regionPresets = cached.region_presets;
+            if (cached.ws_port) connectWebSocket(cached.ws_port);
+        }
         checkAdminStatus();
     }
 
@@ -846,6 +870,45 @@ async function submitLogin(event) {
     }
 }
 
+function _populateSettingsForm(cfg) {
+    var regionEl = document.getElementById('cfgRegionPreset');
+    if (regionEl) {
+        regionEl.value = cfg.region_preset || 'custom';
+    }
+    document.getElementById('cfgMqttBroker').value = cfg.mqtt_broker || '';
+    document.getElementById('cfgMqttPort').value = cfg.mqtt_port || 1883;
+    document.getElementById('cfgMqttUsername').value = cfg.mqtt_username || '';
+    document.getElementById('cfgMqttPassword').value = '';
+    document.getElementById('cfgMqttPassword').placeholder =
+        (cfg.mqtt_password === '***') ? 'Leave blank to keep current' : 'No password set';
+    var topicVal = cfg.mqtt_topic || '';
+    var presetEl = document.getElementById('cfgMqttTopicPreset');
+    var topicInput = document.getElementById('cfgMqttTopic');
+    var matched = false;
+    for (var i = 0; i < presetEl.options.length; i++) {
+        if (presetEl.options[i].value === topicVal) {
+            presetEl.value = topicVal;
+            topicInput.style.display = 'none';
+            matched = true;
+            break;
+        }
+    }
+    if (!matched) {
+        presetEl.value = 'custom';
+        topicInput.value = topicVal;
+        topicInput.style.display = '';
+    }
+    document.getElementById('cfgMqttTls').checked = !!cfg.mqtt_use_tls;
+    var profileEl = document.getElementById('cfgDeployProfile');
+    if (profileEl) profileEl.value = cfg.deployment_profile || 'full';
+    document.getElementById('cfgEnableMeshtastic').checked = cfg.enable_meshtastic !== false;
+    document.getElementById('cfgEnableReticulum').checked = cfg.enable_reticulum !== false;
+    document.getElementById('cfgEnableAredn').checked = cfg.enable_aredn !== false;
+    document.getElementById('cfgEnableMeshcore').checked = cfg.enable_meshcore !== false;
+    document.getElementById('cfgEnableHamclock').checked = cfg.enable_hamclock !== false;
+    document.getElementById('cfgEnableNoaa').checked = cfg.enable_noaa_alerts !== false;
+}
+
 async function openSettings() {
     var modal = document.getElementById('settingsModal');
     var overlay = document.getElementById('settingsOverlay');
@@ -856,6 +919,13 @@ async function openSettings() {
     overlay.classList.add('visible');
     modal.classList.add('visible');
 
+    // Pre-fill from cache so form is usable immediately
+    var cachedCfg = _getCachedConfig();
+    if (cachedCfg) {
+        _populateSettingsForm(cachedCfg);
+        statusEl.innerHTML = 'Refreshing from server...';
+    }
+
     try {
         var cfgController = new AbortController();
         var cfgTimeout = setTimeout(function() { cfgController.abort(); }, 10000);
@@ -863,50 +933,8 @@ async function openSettings() {
         clearTimeout(cfgTimeout);
         if (!resp.ok) throw new Error('Failed to load config');
         var cfg = await resp.json();
-
-        // Region preset
-        var regionEl = document.getElementById('cfgRegionPreset');
-        if (regionEl) {
-            regionEl.value = cfg.region_preset || 'custom';
-        }
-
-        document.getElementById('cfgMqttBroker').value = cfg.mqtt_broker || '';
-        document.getElementById('cfgMqttPort').value = cfg.mqtt_port || 1883;
-        document.getElementById('cfgMqttUsername').value = cfg.mqtt_username || '';
-        document.getElementById('cfgMqttPassword').value = '';
-        document.getElementById('cfgMqttPassword').placeholder =
-            (cfg.mqtt_password === '***') ? 'Leave blank to keep current' : 'No password set';
-        // MQTT topic: match to preset or show custom input
-        var topicVal = cfg.mqtt_topic || '';
-        var presetEl = document.getElementById('cfgMqttTopicPreset');
-        var topicInput = document.getElementById('cfgMqttTopic');
-        var matched = false;
-        for (var i = 0; i < presetEl.options.length; i++) {
-            if (presetEl.options[i].value === topicVal) {
-                presetEl.value = topicVal;
-                topicInput.style.display = 'none';
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) {
-            presetEl.value = 'custom';
-            topicInput.value = topicVal;
-            topicInput.style.display = '';
-        }
-        document.getElementById('cfgMqttTls').checked = !!cfg.mqtt_use_tls;
-
-        // Deployment profile
-        var profileEl = document.getElementById('cfgDeployProfile');
-        if (profileEl) profileEl.value = cfg.deployment_profile || 'full';
-
-        // Source toggles
-        document.getElementById('cfgEnableMeshtastic').checked = cfg.enable_meshtastic !== false;
-        document.getElementById('cfgEnableReticulum').checked = cfg.enable_reticulum !== false;
-        document.getElementById('cfgEnableAredn').checked = cfg.enable_aredn !== false;
-        document.getElementById('cfgEnableMeshcore').checked = cfg.enable_meshcore !== false;
-        document.getElementById('cfgEnableHamclock').checked = cfg.enable_hamclock !== false;
-        document.getElementById('cfgEnableNoaa').checked = cfg.enable_noaa_alerts !== false;
+        _cacheConfig(cfg);
+        _populateSettingsForm(cfg);
 
         // Show MQTT connection status
         try {
@@ -1018,6 +1046,7 @@ async function saveSettings(event) {
         clearTimeout(timeout);
         var result = await resp.json();
         if (resp.ok) {
+            if (result.config) _cacheConfig(result.config);
             showToast('Settings saved. Restart service for source changes to take effect.');
             closeSettings();
         } else {
