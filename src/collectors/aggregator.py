@@ -47,6 +47,7 @@ class DataAggregator:
         self._cached_result_time: float = 0
         self._RESULT_CACHE_TTL = 2.0  # seconds — dedup rapid requests
         self._node_history = None  # Optional NodeHistoryDB for analytics recording
+        self._obs_thread: Optional[threading.Thread] = None
 
         # Event bus for decoupled real-time communication
         self._event_bus = EventBus()
@@ -224,8 +225,15 @@ class DataAggregator:
             all_features = deduplicate_features(per_source_features, allow_no_id=True)
             cycle_ctx.node_count = len(all_features)
 
-            # Record observations for ALL sources (not just MQTT events)
-            self._record_observations(all_features)
+        # Record observations in background thread (non-blocking)
+        # SQLite writes on Pi SD card take ~80s for 42K nodes — don't block result caching
+        if self._node_history and all_features:
+            self._obs_thread = threading.Thread(
+                target=self._record_observations,
+                args=(list(all_features),),
+                daemon=True,
+            )
+            self._obs_thread.start()
 
         # Cache overlay data so /api/overlay doesn't trigger a full re-collect
         with self._data_lock:
@@ -440,6 +448,8 @@ class DataAggregator:
         if self._mqtt_subscriber:
             self._mqtt_subscriber.stop()
             self._mqtt_subscriber = None
+        if self._obs_thread and self._obs_thread.is_alive():
+            self._obs_thread.join(timeout=10)
         self._event_bus.reset()
         self._cached_overlay = {}
         logger.info("DataAggregator shut down")
