@@ -72,6 +72,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_rmap_public": True,       # Fetch RMAP.world Reticulum node data
     "enable_aredn_worldmap": True,    # Fetch AREDN worldmap node data
     "enable_meshcore_map": True,      # Fetch MeshCore map node data
+    # Region preset: bundles map center, zoom, and MQTT topic
+    "region_preset": None,            # None = first-run (show picker), or key from REGION_PRESETS
 }
 
 # Tile provider definitions for Leaflet.js
@@ -122,6 +124,38 @@ NETWORK_COLORS: Dict[str, str] = {
     "meshcore": "#26c6da",
     "hamclock": "#42a5f5",
     "noaa_alerts": "#f44336",
+}
+
+# Region presets — bundles map center, zoom, and MQTT topic into one-click templates
+REGION_PRESETS: Dict[str, Dict[str, Any]] = {
+    "hawaii": {
+        "label": "Hawaii",
+        "map_center_lat": 20.5,
+        "map_center_lon": -157.0,
+        "map_default_zoom": 7,
+        "mqtt_topic": "msh/US/HI",
+    },
+    "west_coast": {
+        "label": "West Coast",
+        "map_center_lat": 37.5,
+        "map_center_lon": -122.0,
+        "map_default_zoom": 6,
+        "mqtt_topic": "msh/US",
+    },
+    "us": {
+        "label": "United States",
+        "map_center_lat": 39.0,
+        "map_center_lon": -98.0,
+        "map_default_zoom": 4,
+        "mqtt_topic": "msh/US",
+    },
+    "world": {
+        "label": "World",
+        "map_center_lat": 20.0,
+        "map_center_lon": 0.0,
+        "map_default_zoom": 3,
+        "mqtt_topic": "msh/#",
+    },
 }
 
 
@@ -264,6 +298,11 @@ class MapsConfig:
                     errors.append(f"{key} must be a string or null")
                     continue
                 validated[key] = value if value else None
+            elif key == "region_preset":
+                if value is not None and value not in REGION_PRESETS and value != "custom":
+                    errors.append(f"region_preset must be one of: {', '.join(REGION_PRESETS)}, custom, or null")
+                    continue
+                validated[key] = value
             else:
                 validated[key] = value
         return validated, errors

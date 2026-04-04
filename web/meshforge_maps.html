@@ -58,6 +58,9 @@
             <span class="alert-sev-critical" style="width:6px;height:6px;border-radius:50;display:inline-block"></span>
             <span id="headerAlertCount">0</span> Alerts
         </span>
+        <span class="stat-badge" id="lastUpdatedBadge" style="font-size:10px;color:#546e7a">
+            Updated: <span id="lastUpdatedTime">--</span>
+        </span>
     </div>
 </div>
 
@@ -232,14 +235,47 @@
     </form>
 </div>
 
+<div class="settings-overlay" id="regionPickerOverlay"></div>
+<div class="settings-modal" id="regionPickerModal">
+    <div class="settings-header">
+        <span class="settings-title">Select Your Region</span>
+    </div>
+    <div class="settings-body">
+        <div class="settings-field">
+            <label>Choose a region to configure your map view and data sources</label>
+            <select id="regionPickerSelect" class="map-style-select">
+                <option value="hawaii">Hawaii</option>
+                <option value="west_coast">West Coast</option>
+                <option value="us">United States</option>
+                <option value="world">World</option>
+            </select>
+        </div>
+    </div>
+    <div class="settings-footer">
+        <button class="settings-btn settings-btn-save" onclick="applyRegionPreset()">Apply</button>
+    </div>
+</div>
+
 <div class="settings-overlay" id="settingsOverlay" onclick="closeSettings()"></div>
 <div class="settings-modal" id="settingsModal">
     <div class="settings-header">
-        <span class="settings-title">MQTT Configuration</span>
+        <span class="settings-title">Settings</span>
         <button class="settings-close" onclick="closeSettings()">&times;</button>
     </div>
     <form id="settingsForm" onsubmit="saveSettings(event)">
         <div class="settings-body">
+            <div class="settings-field">
+                <label for="cfgRegionPreset">Region Preset</label>
+                <select id="cfgRegionPreset" class="map-style-select" onchange="onRegionPresetChange()">
+                    <option value="hawaii">Hawaii</option>
+                    <option value="west_coast">West Coast</option>
+                    <option value="us">United States</option>
+                    <option value="world">World</option>
+                    <option value="custom">Custom...</option>
+                </select>
+                <span class="settings-hint">Sets map center, zoom, and MQTT topic</span>
+            </div>
+            <div class="settings-section-divider"></div>
             <div class="settings-field">
                 <label for="cfgMqttBroker">Server Address</label>
                 <input type="text" id="cfgMqttBroker" placeholder="mqtt.meshtastic.org" />

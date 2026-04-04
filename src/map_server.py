@@ -27,7 +27,7 @@ from .collectors.aggregator import DataAggregator
 from .collectors.base import validate_node_id
 from .utils.alert_engine import Alert, AlertEngine
 from .utils.analytics import HistoricalAnalytics
-from .utils.config import NETWORK_COLORS, TILE_PROVIDERS, MapsConfig
+from .utils.config import NETWORK_COLORS, REGION_PRESETS, TILE_PROVIDERS, MapsConfig
 from .utils.config_drift import ConfigDriftDetector
 from .utils.event_bus import Event, EventBus, EventType, NodeEvent
 from .utils.health_scoring import NodeHealthScorer
@@ -141,6 +141,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         "/api/auth/check": "_serve_auth_check",
         "/api/heatmap": "_serve_heatmap",
         "/api/dependencies": "_serve_dependencies",
+        "/api/region-presets": "_serve_region_presets",
     }
 
     # Valid source names for /api/nodes/<source> endpoint
@@ -338,6 +339,14 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": "No valid settings provided"}, 400)
             return
 
+        # Cascade region preset values into config
+        preset_key = validated.get("region_preset")
+        if preset_key and preset_key in REGION_PRESETS:
+            preset = REGION_PRESETS[preset_key]
+            for k in ("map_center_lat", "map_center_lon", "map_default_zoom", "mqtt_topic"):
+                if k not in validated:
+                    validated[k] = preset[k]
+
         # Check if MQTT settings are changing
         mqtt_keys = {"mqtt_broker", "mqtt_port", "mqtt_topic",
                      "mqtt_username", "mqtt_password", "mqtt_use_tls"}
@@ -449,6 +458,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             if cfg.get(key) is not None:
                 cfg[key] = "***"
         cfg["network_colors"] = NETWORK_COLORS
+        cfg["region_presets"] = REGION_PRESETS
         # Include WebSocket port so frontend can connect
         ws_server = self._ctx.ws_server
         if ws_server:
@@ -469,6 +479,10 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "sources": config.get_enabled_sources(),
             "network_colors": NETWORK_COLORS,
         })
+
+    def _serve_region_presets(self) -> None:
+        """Serve available region preset definitions."""
+        self._send_json(REGION_PRESETS)
 
     def _serve_overlay(self) -> None:
         """Serve overlay data (space weather, terminator).
