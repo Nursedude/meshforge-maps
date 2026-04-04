@@ -252,6 +252,11 @@ class DataAggregator:
         )
         return result
 
+    def get_cached_result(self) -> Optional[Dict[str, Any]]:
+        """Return cached collect_all() result without triggering collection."""
+        with self._data_lock:
+            return self._cached_result
+
     def collect_source(self, source_name: str) -> Dict[str, Any]:
         """Collect from a single named source."""
         collector = self._collectors.get(source_name)

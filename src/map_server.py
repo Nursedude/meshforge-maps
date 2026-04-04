@@ -17,7 +17,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
@@ -76,8 +76,8 @@ class MapServerContext:
     api_key: Optional[str] = None
 
 
-class MeshForgeHTTPServer(HTTPServer):
-    """HTTPServer subclass with a typed context for dependency injection."""
+class MeshForgeHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTPServer subclass with a typed context for dependency injection."""
 
     def __init__(self, server_address: tuple, handler_class: type,
                  context: Optional[MapServerContext] = None) -> None:
@@ -433,7 +433,11 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         if not aggregator:
             self._send_json({"error": "Aggregator not initialized"}, 503)
             return
-        data = aggregator.collect_all()
+        data = aggregator.get_cached_result()
+        if data is None:
+            data = {"type": "FeatureCollection", "features": [],
+                    "properties": {"source": "aggregated", "total_nodes": 0,
+                                   "collecting": True}}
         self._send_json(data)
 
     def _serve_source_geojson(self, source: str) -> None:
@@ -749,13 +753,16 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(cached)
             return
 
-        # Score on demand from current GeoJSON data
+        # Score on demand from cached GeoJSON data
         aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "No data available"}, 503)
             return
 
-        data = aggregator.collect_all()
+        data = aggregator.get_cached_result()
+        if not data:
+            self._send_json({"error": "Data not yet available"}, 503)
+            return
         features = data.get("features", [])
         for f in features:
             props = f.get("properties", {})
@@ -778,13 +785,16 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": "Health scoring not available"}, 503)
             return
 
-        # Score all current nodes
+        # Score all current nodes from cached data
         aggregator = self._ctx.aggregator
         if not aggregator:
             self._send_json({"error": "No data available"}, 503)
             return
 
-        data = aggregator.collect_all()
+        data = aggregator.get_cached_result()
+        if not data:
+            self._send_json({"error": "Data not yet available"}, 503)
+            return
         features = data.get("features", [])
         tracker = self._ctx.node_state
 
@@ -1397,6 +1407,10 @@ class MapServer:
         self._offline_check_timer: Optional[threading.Timer] = None
         self._offline_check_stop = threading.Event()
 
+        # Background data collection timer (keeps cache warm)
+        self._bg_collect_timer: Optional[threading.Timer] = None
+        self._bg_collect_stop = threading.Event()
+
         # Historical analytics (read-only aggregation over history + alerts)
         self._analytics = HistoricalAnalytics(
             node_history=self._node_history,
@@ -1495,6 +1509,9 @@ class MapServer:
                 # Start periodic offline node detection
                 self._schedule_offline_check()
 
+                # Start background data collection (5s delay for MQTT to connect)
+                self._schedule_bg_collect()
+
                 # Start Meshtastic API proxy (non-fatal if it fails)
                 if self._proxy:
                     if not self._proxy.start():
@@ -1586,6 +1603,23 @@ class MapServer:
             # Reschedule for the next cycle
             self._schedule_offline_check()
 
+    def _schedule_bg_collect(self, delay: float = 5.0) -> None:
+        """Schedule the next background data collection cycle."""
+        if self._bg_collect_stop.is_set():
+            return
+        self._bg_collect_timer = threading.Timer(delay, self._bg_collect)
+        self._bg_collect_timer.daemon = True
+        self._bg_collect_timer.start()
+
+    def _bg_collect(self) -> None:
+        """Run collect_all() in the background, then reschedule."""
+        try:
+            self._aggregator.collect_all()
+        except Exception as e:
+            logger.warning("Background collection failed: %s", e)
+        finally:
+            self._schedule_bg_collect(delay=120.0)
+
     def _publish_alert_event(self, alert: "Alert") -> None:
         """Publish an alert as an ALERT_FIRED event on the EventBus."""
         try:
@@ -1672,6 +1706,11 @@ class MapServer:
         if self._offline_check_timer:
             self._offline_check_timer.cancel()
             self._offline_check_timer = None
+        # Cancel background collection timer
+        self._bg_collect_stop.set()
+        if self._bg_collect_timer:
+            self._bg_collect_timer.cancel()
+            self._bg_collect_timer = None
         if self._proxy:
             self._proxy.stop()
             self._proxy = None
