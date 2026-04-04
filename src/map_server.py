@@ -1666,6 +1666,14 @@ class MapServer:
             result = self._aggregator.collect_all()
             count = len(result.get("features", [])) if result else 0
             logger.info("Background collection complete: %d nodes", count)
+            # Wait for observation recording thread, then log DB status
+            obs = self._aggregator._obs_thread
+            if obs:
+                obs.join(timeout=30)
+            nh = self._node_history
+            if nh:
+                logger.info("Node history: %d observations, %d nodes",
+                            nh.observation_count, nh.node_count)
         except Exception as e:
             logger.warning("Background collection failed: %s", e)
         finally:
