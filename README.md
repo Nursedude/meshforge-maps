@@ -47,14 +47,16 @@ python -m src.main --setup      # interactive setup wizard
 - **Circuit breakers** -- per-source failure isolation with automatic recovery
 
 ### Visualization
+- **Region presets** -- one-click templates (Hawaii, West Coast, US, World) that bundle map center, zoom, and MQTT topic. First-run picker appears before map loads; persists as default
 - **Topology/link visualization** -- D3.js-powered mesh link overlay showing node-to-node connections with SNR-based coloring
-- **Network-specific layer toggles** -- show/hide Meshtastic (green), Reticulum (purple), AREDN (orange) independently
+- **Network-specific layer toggles** -- show/hide Meshtastic (green), Reticulum (purple), AREDN (orange), MeshCore (cyan) independently
 - **Node health overlay** -- color-codes markers by composite health score (excellent/good/fair/poor/critical)
 - **Space weather overlay** -- solar flux index, Kp index, solar wind speed, HF band condition assessment from NOAA SWPC
 - **Propagation panel** -- VOACAP band predictions with reliability bars and SNR values, DE/DX station info, DX spots (from OpenHamClock)
 - **Solar terminator** -- real-time day/night boundary overlay
 - **Marker clustering** -- toggleable clustering for dense node areas
 - **Node history** -- trajectory tracking and historical position playback
+- **Auto-refresh on tab return** -- visibility change handler forces full data refresh when returning to the map tab after background/sleep, preventing stale display
 
 ### Terminal Dashboard (TUI)
 
@@ -87,7 +89,8 @@ A full curses-based terminal interface launched with `--tui` (alongside the serv
 - **Performance profiling** -- collection cycle timing with per-source latency percentiles (p50/p90/p99), cache hit ratios
 - **Node connectivity state machine** -- classifies nodes as new/stable/intermittent/offline based on heartbeat patterns
 - **Config drift detection** -- tracks firmware and hardware changes across nodes
-- **WebSocket real-time updates** -- event bus pushes position, telemetry, topology, and alert events to connected clients
+- **WebSocket real-time updates** -- event bus pushes position, telemetry, topology, and alert events to connected clients with staleness detection and automatic reconnect
+- **Last-updated timestamp** -- header badge shows time of last successful data refresh
 - **Meshtastic API proxy** -- serves meshtasticd-compatible JSON endpoints for tool interoperability
 
 ### Infrastructure
@@ -642,7 +645,7 @@ The default credentials (`meshdev`/`large4cats`) are the Meshtastic public broke
 
 **Root topic auto-expansion:** You can enter just a root topic (e.g., `msh/US/HI`, `msh/US/Florida`) and the app auto-appends `/2/e/#` for encrypted packets and subscribes to the `/2/json/#` variant for pre-decoded packets.
 
-**MQTT settings UI:** Click the gear button in the web map control panel to configure MQTT settings (broker, port, credentials, topic, TLS) from the browser. Changes take effect immediately — no restart needed.
+**Settings UI:** Click the gear button in the web map control panel to configure region presets (Hawaii, West Coast, US, World), MQTT settings (broker, port, credentials, topic, TLS), deployment profile, and data source toggles from the browser. Region presets auto-fill map center, zoom, and MQTT topic. MQTT changes take effect immediately — no restart needed.
 
 To use a **private MQTT broker**, set `mqtt_broker` to your broker's hostname, provide `mqtt_username`/`mqtt_password`, and optionally enable TLS (`mqtt_use_tls: true`, `mqtt_port: 8883`).
 
@@ -652,6 +655,7 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
+| `region_preset` | choice | `null` | Region template: `hawaii`, `west_coast`, `us`, `world`, or `null` (custom). Sets map center, zoom, MQTT topic |
 | `default_tile_provider` | choice | `carto_dark` | Map tile style |
 | `enable_meshtastic` | bool | `true` | Enable Meshtastic data source |
 | `meshtastic_source` | choice | `auto` | Data fetch mode: `auto` (API→MQTT→cache), `mqtt_only`, `local_only` |
@@ -758,7 +762,9 @@ See [SECURITY.md](SECURITY.md) for the full security audit report, findings, and
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/config` | GET | Current configuration |
+| `/api/config` | GET | Current configuration (includes region presets) |
+| `/api/config` | POST | Update settings (region preset, MQTT, sources) |
+| `/api/region-presets` | GET | Available region preset definitions |
 | `/api/tile-providers` | GET | Available tile layers |
 | `/api/sources` | GET | Enabled data sources |
 | `/api/core-health` | GET | Cross-process health state (shared memory) |
@@ -798,14 +804,14 @@ flowchart LR
 
 ```bash
 pip install pytest
-pytest tests/ -v    # ~974 tests, no network access needed
+pytest tests/ -v    # ~994 tests, no network access needed
 ```
 
 All tests use mocked HTTP/MQTT responses — no live radio, broker, or network required.
 
 ### Testing Status
 
-This project is in **beta**. The unit test suite (~974 tests) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
+This project is in **beta**. The unit test suite (~994 tests) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
 
 | Area | Unit Tested | Live Tested | Notes |
 |------|:-----------:|:-----------:|-------|
