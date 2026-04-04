@@ -134,6 +134,7 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "map_center_lon": -157.0,
         "map_default_zoom": 7,
         "mqtt_topic": "msh/US/HI",
+        "bbox": [18.5, -161.0, 22.5, -154.0],  # [south, west, north, east]
     },
     "west_coast": {
         "label": "West Coast",
@@ -141,6 +142,7 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "map_center_lon": -122.0,
         "map_default_zoom": 6,
         "mqtt_topic": "msh/US",
+        "bbox": [32.0, -125.0, 49.0, -114.0],
     },
     "us": {
         "label": "United States",
@@ -148,6 +150,7 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "map_center_lon": -98.0,
         "map_default_zoom": 4,
         "mqtt_topic": "msh/US",
+        "bbox": [24.0, -125.0, 50.0, -66.0],
     },
     "world": {
         "label": "World",
@@ -155,6 +158,7 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "map_center_lon": 0.0,
         "map_default_zoom": 3,
         "mqtt_topic": "msh/#",
+        "bbox": None,
     },
 }
 
