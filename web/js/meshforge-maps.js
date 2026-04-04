@@ -292,12 +292,14 @@ async function loadConfig() {
             if (config.region_presets) {
                 regionPresets = config.region_presets;
             }
-            if (config.map_center_lat && config.map_center_lon) {
-                map.setView(
-                    [config.map_center_lat, config.map_center_lon],
-                    config.map_default_zoom || 4
-                );
+
+            // Check region preset BEFORE setting map view — first-run picker
+            // should control the initial view, not the default config center
+            var savedPreset = config.region_preset;
+            if (!savedPreset) {
+                try { savedPreset = localStorage.getItem('meshforge_region_preset'); } catch (e) {}
             }
+
             if (config.default_tile_provider && TILE_PROVIDERS[config.default_tile_provider]) {
                 document.getElementById('tileSelect').value = config.default_tile_provider;
                 changeTileLayer();
@@ -306,24 +308,23 @@ async function loadConfig() {
             if (config.ws_port) {
                 connectWebSocket(config.ws_port);
             }
-            // Fetch version from status endpoint (upstream: version badge)
             fetchVersion();
             checkAdminStatus();
 
-            // First-run: show region picker if no preset configured
-            // Check localStorage fallback (handles case where server POST failed due to auth)
-            var savedPreset = config.region_preset;
-            if (!savedPreset) {
-                try { savedPreset = localStorage.getItem('meshforge_region_preset'); } catch (e) {}
-            }
             if (!savedPreset) {
                 showRegionPicker();
                 return;  // Data loading deferred until preset is selected
             }
-            // Apply saved preset from localStorage if server didn't have it
+
+            // Preset exists — apply map center from server config or localStorage
             if (!config.region_preset && savedPreset && regionPresets[savedPreset]) {
                 var rp = regionPresets[savedPreset];
                 map.setView([rp.map_center_lat, rp.map_center_lon], rp.map_default_zoom);
+            } else if (config.map_center_lat && config.map_center_lon) {
+                map.setView(
+                    [config.map_center_lat, config.map_center_lon],
+                    config.map_default_zoom || 4
+                );
             }
         }
     } catch (e) {
