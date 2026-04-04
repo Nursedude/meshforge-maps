@@ -93,7 +93,12 @@ let ws = null;               // WebSocket connection (real-time updates)
 let wsReconnectTimer = null; // Timer for WebSocket reconnect attempts
 let wsReconnectDelay = 2000; // Current reconnect delay (exponential backoff)
 let lastWsMessage = 0;       // Timestamp of last WebSocket message (staleness detection)
-let regionPresets = {};       // Cached REGION_PRESETS from server config
+let regionPresets = {          // Defaults, overwritten by server config if available
+    hawaii:     { map_center_lat: 20.5, map_center_lon: -157.0, map_default_zoom: 7 },
+    west_coast: { map_center_lat: 37.5, map_center_lon: -122.0, map_default_zoom: 6 },
+    us:         { map_center_lat: 39.0, map_center_lon: -98.0,  map_default_zoom: 4 },
+    world:      { map_center_lat: 20.0, map_center_lon: 0.0,    map_default_zoom: 3 },
+};
 let trajectoryLayers = {};   // Active trajectory polylines keyed by node_id
 const MAX_TRAJECTORIES = 20; // Cap to prevent unbounded memory growth
 let historyPanelOpen = false;
@@ -238,6 +243,17 @@ function showRegionPicker() {
 async function applyRegionPreset() {
     var select = document.getElementById('regionPickerSelect');
     var preset = select.value;
+
+    // Apply preset values to map immediately (before POST, so view always updates)
+    var p = regionPresets[preset];
+    if (p) {
+        map.setView([p.map_center_lat, p.map_center_lon], p.map_default_zoom);
+    }
+
+    // Persist to localStorage as fallback (works even if server POST fails due to auth)
+    try { localStorage.setItem('meshforge_region_preset', preset); } catch (e) {}
+
+    // Try to save to server config (may fail if API key is required)
     try {
         await fetch(API_BASE + '/api/config', {
             method: 'POST',
@@ -245,13 +261,9 @@ async function applyRegionPreset() {
             body: JSON.stringify({ region_preset: preset })
         });
     } catch (e) {
-        console.debug('Failed to save region preset:', e);
+        console.debug('Failed to save region preset to server:', e);
     }
-    // Apply preset values to map immediately
-    var p = regionPresets[preset];
-    if (p) {
-        map.setView([p.map_center_lat, p.map_center_lon], p.map_default_zoom);
-    }
+
     // Close picker and start loading data
     document.getElementById('regionPickerOverlay').classList.remove('visible');
     document.getElementById('regionPickerModal').classList.remove('visible');
@@ -299,9 +311,19 @@ async function loadConfig() {
             checkAdminStatus();
 
             // First-run: show region picker if no preset configured
-            if (!config.region_preset) {
+            // Check localStorage fallback (handles case where server POST failed due to auth)
+            var savedPreset = config.region_preset;
+            if (!savedPreset) {
+                try { savedPreset = localStorage.getItem('meshforge_region_preset'); } catch (e) {}
+            }
+            if (!savedPreset) {
                 showRegionPicker();
                 return;  // Data loading deferred until preset is selected
+            }
+            // Apply saved preset from localStorage if server didn't have it
+            if (!config.region_preset && savedPreset && regionPresets[savedPreset]) {
+                var rp = regionPresets[savedPreset];
+                map.setView([rp.map_center_lat, rp.map_center_lon], rp.map_default_zoom);
             }
         }
     } catch (e) {
