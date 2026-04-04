@@ -150,7 +150,12 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "map_center_lon": -98.0,
         "map_default_zoom": 4,
         "mqtt_topic": "msh/US",
-        "bbox": [18.0, -180.0, 72.0, -64.0],  # HI, AK, CONUS, PR, USVI
+        "bbox": [  # Multi-bbox: CONUS, Alaska, Hawaii, PR/USVI
+            [24.5, -125.0, 49.5, -66.0],   # CONUS (Key West to Canadian border)
+            [51.0, -180.0, 72.0, -130.0],   # Alaska (Aleutians to North Slope)
+            [18.5, -161.0, 22.5, -154.0],   # Hawaii
+            [17.5, -68.0, 18.6, -64.0],     # PR + USVI
+        ],
     },
     "world": {
         "label": "World",
