@@ -819,6 +819,8 @@ class TestDataAggregator:
             agg = DataAggregator(dict(DEFAULT_CONFIG_SUBSET))
             agg.set_node_history(db)
             agg.collect_all()
+            if agg._obs_thread:
+                agg._obs_thread.join(timeout=5)
             assert db.observation_count == 3
             assert db.node_count == 3
         finally:
