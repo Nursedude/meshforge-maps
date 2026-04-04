@@ -96,7 +96,7 @@ let lastWsMessage = 0;       // Timestamp of last WebSocket message (staleness d
 let regionPresets = {          // Defaults, overwritten by server config if available
     hawaii:     { map_center_lat: 20.5, map_center_lon: -157.0, map_default_zoom: 7, bbox: [18.5, -161.0, 22.5, -154.0] },
     west_coast: { map_center_lat: 37.5, map_center_lon: -122.0, map_default_zoom: 6, bbox: [32.0, -125.0, 49.0, -114.0] },
-    us:         { map_center_lat: 39.0, map_center_lon: -98.0,  map_default_zoom: 4, bbox: [17.0, -180.0, 72.0, -64.0] },
+    us:         { map_center_lat: 39.0, map_center_lon: -98.0,  map_default_zoom: 4, bbox: [18.0, -180.0, 72.0, -64.0] },
     world:      { map_center_lat: 20.0, map_center_lon: 0.0,    map_default_zoom: 3, bbox: null },
 };
 let trajectoryLayers = {};   // Active trajectory polylines keyed by node_id
