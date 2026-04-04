@@ -150,7 +150,7 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "map_center_lon": -98.0,
         "map_default_zoom": 4,
         "mqtt_topic": "msh/US",
-        "bbox": None,  # No filter — includes HI, AK, Guam, PR, USVI
+        "bbox": [17.0, -180.0, 72.0, -64.0],  # HI, AK, CONUS, PR, USVI
     },
     "world": {
         "label": "World",
