@@ -317,10 +317,10 @@ class TestOriginValidation:
     """Test WebSocket origin restriction."""
 
     def test_allowed_origins_attribute(self):
-        """Server has allowed origins configured."""
+        """Server has allowed origins configured for localhost binding."""
         server = MapWebSocketServer(host="127.0.0.1", port=_free_port())
-        assert "http://localhost" in server._ALLOWED_ORIGINS
-        assert "https://localhost" in server._ALLOWED_ORIGINS
+        assert "http://localhost" in server._LOCALHOST_ORIGINS
+        assert "https://localhost" in server._LOCALHOST_ORIGINS
 
     def test_allowed_msg_types_attribute(self):
         """Server has a finite set of allowed message types."""

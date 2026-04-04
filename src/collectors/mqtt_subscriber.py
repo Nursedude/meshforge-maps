@@ -582,8 +582,12 @@ class MQTTSubscriber:
                     self._client.connect(self._broker, self._port, keepalive=60)
                 finally:
                     socket.setdefaulttimeout(old_timeout)
-                strategy.reset()  # Reset backoff on successful connection
+                connect_time = time.time()
                 self._client.loop_forever()
+                # Only reset backoff if connection was stable (>30s)
+                # Prevents rapid reconnect loops that trigger broker rate-limiting
+                if time.time() - connect_time > 30:
+                    strategy.reset()
             except Exception as e:
                 if not self._running.is_set():
                     break
