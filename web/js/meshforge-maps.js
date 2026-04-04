@@ -173,9 +173,21 @@ let allFeatures = [];
 // =========================================================================
 
 function initMap() {
+    // Apply saved region preset immediately (no async wait)
+    var initialCenter = [20, -100];
+    var initialZoom = 4;
+    try {
+        var savedRegion = localStorage.getItem('meshforge_region_preset');
+        if (savedRegion && regionPresets[savedRegion]) {
+            var rp = regionPresets[savedRegion];
+            initialCenter = [rp.map_center_lat, rp.map_center_lon];
+            initialZoom = rp.map_default_zoom;
+        }
+    } catch (e) {}
+
     map = L.map('map', {
-        center: [20, -100],
-        zoom: 4,
+        center: initialCenter,
+        zoom: initialZoom,
         zoomControl: true,
         attributionControl: true,
     });
@@ -845,7 +857,10 @@ async function openSettings() {
     modal.classList.add('visible');
 
     try {
-        var resp = await fetch(API_BASE + '/api/config');
+        var cfgController = new AbortController();
+        var cfgTimeout = setTimeout(function() { cfgController.abort(); }, 10000);
+        var resp = await fetch(API_BASE + '/api/config', { signal: cfgController.signal });
+        clearTimeout(cfgTimeout);
         if (!resp.ok) throw new Error('Failed to load config');
         var cfg = await resp.json();
 
@@ -982,12 +997,25 @@ async function saveSettings(event) {
         data.mqtt_password = pw;
     }
 
+    // Save region preset to localStorage immediately (fast, no server wait)
+    if (data.region_preset) {
+        try { localStorage.setItem('meshforge_region_preset', data.region_preset); } catch (e) {}
+    }
+
+    // Show saving indicator and use timeout (Pi can be slow under load)
+    var saveBtn = document.querySelector('.settings-btn-save');
+    if (saveBtn) saveBtn.textContent = 'Saving...';
+
     try {
+        var controller = new AbortController();
+        var timeout = setTimeout(function() { controller.abort(); }, 15000);
         var resp = await fetch(API_BASE + '/api/config', {
             method: 'POST',
             headers: _getAdminHeaders(),
-            body: JSON.stringify(data)
+            body: JSON.stringify(data),
+            signal: controller.signal
         });
+        clearTimeout(timeout);
         var result = await resp.json();
         if (resp.ok) {
             showToast('Settings saved. Restart service for source changes to take effect.');
@@ -997,7 +1025,14 @@ async function saveSettings(event) {
             showToast('Save failed: ' + msg, true);
         }
     } catch (e) {
-        showToast('Save failed: ' + e.message, true);
+        if (e.name === 'AbortError') {
+            showToast('Save timed out — server busy. Settings may still apply on restart.', true);
+            closeSettings();
+        } else {
+            showToast('Save failed: ' + e.message, true);
+        }
+    } finally {
+        if (saveBtn) saveBtn.textContent = 'Save & Reconnect';
     }
 }
 
