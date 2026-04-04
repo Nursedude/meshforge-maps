@@ -438,6 +438,31 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             data = {"type": "FeatureCollection", "features": [],
                     "properties": {"source": "aggregated", "total_nodes": 0,
                                    "collecting": True}}
+            self._send_json(data)
+            return
+
+        # Apply bbox filter if provided: ?bbox=south,west,north,east
+        bbox_str = _safe_query_param(self._query, "bbox")
+        if bbox_str:
+            try:
+                parts = [float(x) for x in bbox_str.split(",")]
+                if len(parts) == 4:
+                    south, west, north, east = parts
+                    filtered = [
+                        f for f in data.get("features", [])
+                        if len(f.get("geometry", {}).get("coordinates", [])) >= 2
+                        and south <= f["geometry"]["coordinates"][1] <= north
+                        and west <= f["geometry"]["coordinates"][0] <= east
+                    ]
+                    data = dict(data)
+                    data["features"] = filtered
+                    props = dict(data.get("properties", {}))
+                    props["total_nodes"] = len(filtered)
+                    props["bbox_filtered"] = True
+                    data["properties"] = props
+            except (ValueError, TypeError):
+                pass
+
         self._send_json(data)
 
     def _serve_source_geojson(self, source: str) -> None:

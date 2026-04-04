@@ -94,10 +94,10 @@ let wsReconnectTimer = null; // Timer for WebSocket reconnect attempts
 let wsReconnectDelay = 2000; // Current reconnect delay (exponential backoff)
 let lastWsMessage = 0;       // Timestamp of last WebSocket message (staleness detection)
 let regionPresets = {          // Defaults, overwritten by server config if available
-    hawaii:     { map_center_lat: 20.5, map_center_lon: -157.0, map_default_zoom: 7 },
-    west_coast: { map_center_lat: 37.5, map_center_lon: -122.0, map_default_zoom: 6 },
-    us:         { map_center_lat: 39.0, map_center_lon: -98.0,  map_default_zoom: 4 },
-    world:      { map_center_lat: 20.0, map_center_lon: 0.0,    map_default_zoom: 3 },
+    hawaii:     { map_center_lat: 20.5, map_center_lon: -157.0, map_default_zoom: 7, bbox: [18.5, -161.0, 22.5, -154.0] },
+    west_coast: { map_center_lat: 37.5, map_center_lon: -122.0, map_default_zoom: 6, bbox: [32.0, -125.0, 49.0, -114.0] },
+    us:         { map_center_lat: 39.0, map_center_lon: -98.0,  map_default_zoom: 4, bbox: [24.0, -125.0, 50.0, -66.0] },
+    world:      { map_center_lat: 20.0, map_center_lon: 0.0,    map_default_zoom: 3, bbox: null },
 };
 let trajectoryLayers = {};   // Active trajectory polylines keyed by node_id
 const MAX_TRAJECTORIES = 20; // Cap to prevent unbounded memory growth
@@ -147,6 +147,16 @@ function _getCachedConfig() {
         var raw = localStorage.getItem(_CONFIG_CACHE_KEY);
         return raw ? JSON.parse(raw) : null;
     } catch (e) { return null; }
+}
+
+function _getActiveBbox() {
+    try {
+        var preset = localStorage.getItem('meshforge_region_preset');
+        if (preset && regionPresets[preset] && regionPresets[preset].bbox) {
+            return regionPresets[preset].bbox.join(',');
+        }
+    } catch (e) {}
+    return null;
 }
 
 function saveOverlayPrefs() {
@@ -445,7 +455,10 @@ async function loadNodeData() {
     if (btn) btn.disabled = true;
 
     try {
-        const resp = await fetchWithRetry(API_BASE + '/api/nodes/geojson', 2, 1000);
+        var geoUrl = API_BASE + '/api/nodes/geojson';
+        var bbox = _getActiveBbox();
+        if (bbox) geoUrl += '?bbox=' + bbox;
+        const resp = await fetchWithRetry(geoUrl, 2, 1000);
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
         processGeoJSON(data);
