@@ -2250,7 +2250,10 @@ function toggleCoverageHeatmap() {
 
 async function loadCoverageHeatmap() {
     try {
-        var resp = await fetchWithRetry(API_BASE + '/api/heatmap', 1, 2000);
+        var heatUrl = API_BASE + '/api/heatmap';
+        var heatBbox = _getActiveBbox();
+        if (heatBbox) heatUrl += '?bbox=' + heatBbox;
+        var resp = await fetchWithRetry(heatUrl, 1, 2000);
         if (!resp.ok) {
             console.debug('Heatmap data unavailable:', resp.status);
             return;
