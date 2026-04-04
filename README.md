@@ -637,7 +637,7 @@ MeshForge Maps uses MQTT in two directions:
   "mqtt_username": "meshdev",
   "mqtt_password": "large4cats",
   "mqtt_use_tls": false,
-  "mqtt_alert_topic": "meshforge/alerts"
+  "enable_meshcore_map": true
 }
 ```
 
@@ -684,7 +684,11 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `rch_host` | string | `localhost` | Reticulum Community Hub API host |
 | `rch_port` | number | `8000` | RCH API port |
 | `rch_api_key` | string | `null` | RCH API authentication key |
-| `mqtt_alert_topic` | string | `meshforge/alerts` | MQTT topic for alert publishing |
+| `deployment_profile` | string | `"full"` | Deployment mode: `"full"` or `"lite"` (reduced collectors, longer cache) |
+| `meshtastic_proxy_port` | number | `4404` | Meshtastic API proxy port |
+| `enable_rmap_public` | bool | `true` | Fetch RMAP.world Reticulum node data |
+| `enable_aredn_worldmap` | bool | `true` | Fetch AREDN worldmap node data |
+| `enable_meshcore_map` | bool | `true` | Fetch MeshCore map node data |
 | `enable_noaa_alerts` | bool | `true` | Enable NOAA weather alerts |
 | `noaa_alerts_area` | string | `null` | State code filter (e.g. `"TX"`, `"CA"`); null = all US |
 | `noaa_alerts_severity` | list | `null` | Severity filter (e.g. `["Extreme","Severe"]`); null = all |
