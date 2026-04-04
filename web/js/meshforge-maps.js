@@ -92,6 +92,8 @@ let consecutiveErrors = 0;
 let ws = null;               // WebSocket connection (real-time updates)
 let wsReconnectTimer = null; // Timer for WebSocket reconnect attempts
 let wsReconnectDelay = 2000; // Current reconnect delay (exponential backoff)
+let lastWsMessage = 0;       // Timestamp of last WebSocket message (staleness detection)
+let regionPresets = {};       // Cached REGION_PRESETS from server config
 let trajectoryLayers = {};   // Active trajectory polylines keyed by node_id
 const MAX_TRAJECTORIES = 20; // Cap to prevent unbounded memory growth
 let historyPanelOpen = false;
@@ -206,26 +208,54 @@ function initMap() {
     // Populate tile selector
     populateTileSelector();
 
-    // Load configuration from server
+    // Load configuration from server, then start loading data
+    // (loadConfig will call startDataLoading() after region check)
     loadConfig();
 
-    // Load node data
-    loadNodeData();
-
-    // Activate saved overlays after initial load
+    // Activate saved overlays after initial load (non-data overlays only)
     if (document.getElementById('overlayTerminator').checked) toggleTerminator();
-    if (showTopology) loadTopologyData();
-    if (showWeatherAlerts) loadWeatherAlerts();
-    if (showHeatmap) loadCoverageHeatmap();
-    if (healthOverlayActive) loadNodeHealthData();
-
-    // Load initial active alerts from API
-    loadInitialAlerts();
 
     // Shift map down for header
     map.getContainer().style.marginTop = '48px';
     map.getContainer().style.height = 'calc(100vh - 48px)';
     map.invalidateSize();
+}
+
+function startDataLoading() {
+    loadNodeData();
+    if (showTopology) loadTopologyData();
+    if (showWeatherAlerts) loadWeatherAlerts();
+    if (showHeatmap) loadCoverageHeatmap();
+    if (healthOverlayActive) loadNodeHealthData();
+    loadInitialAlerts();
+}
+
+function showRegionPicker() {
+    document.getElementById('regionPickerOverlay').classList.add('visible');
+    document.getElementById('regionPickerModal').classList.add('visible');
+}
+
+async function applyRegionPreset() {
+    var select = document.getElementById('regionPickerSelect');
+    var preset = select.value;
+    try {
+        await fetch(API_BASE + '/api/config', {
+            method: 'POST',
+            headers: _getAdminHeaders(),
+            body: JSON.stringify({ region_preset: preset })
+        });
+    } catch (e) {
+        console.debug('Failed to save region preset:', e);
+    }
+    // Apply preset values to map immediately
+    var p = regionPresets[preset];
+    if (p) {
+        map.setView([p.map_center_lat, p.map_center_lon], p.map_default_zoom);
+    }
+    // Close picker and start loading data
+    document.getElementById('regionPickerOverlay').classList.remove('visible');
+    document.getElementById('regionPickerModal').classList.remove('visible');
+    startDataLoading();
 }
 
 async function loadConfig() {
@@ -246,6 +276,10 @@ async function loadConfig() {
         const resp = await fetch(API_BASE + '/api/config');
         if (resp.ok) {
             const config = await resp.json();
+            // Cache region presets from server
+            if (config.region_presets) {
+                regionPresets = config.region_presets;
+            }
             if (config.map_center_lat && config.map_center_lon) {
                 map.setView(
                     [config.map_center_lat, config.map_center_lon],
@@ -263,11 +297,20 @@ async function loadConfig() {
             // Fetch version from status endpoint (upstream: version badge)
             fetchVersion();
             checkAdminStatus();
+
+            // First-run: show region picker if no preset configured
+            if (!config.region_preset) {
+                showRegionPicker();
+                return;  // Data loading deferred until preset is selected
+            }
         }
     } catch (e) {
         console.debug('Using default config');
         checkAdminStatus();
     }
+
+    // Region already configured — start loading data immediately
+    startDataLoading();
 }
 
 async function fetchVersion() {
@@ -325,9 +368,9 @@ function showToast(message, isError) {
 }
 
 function updateLastUpdated() {
-    const el = document.getElementById('lastUpdated');
+    var el = document.getElementById('lastUpdatedTime');
     if (el) {
-        el.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+        el.textContent = new Date().toLocaleTimeString();
     }
 }
 
@@ -779,6 +822,12 @@ async function openSettings() {
         if (!resp.ok) throw new Error('Failed to load config');
         var cfg = await resp.json();
 
+        // Region preset
+        var regionEl = document.getElementById('cfgRegionPreset');
+        if (regionEl) {
+            regionEl.value = cfg.region_preset || 'custom';
+        }
+
         document.getElementById('cfgMqttBroker').value = cfg.mqtt_broker || '';
         document.getElementById('cfgMqttPort').value = cfg.mqtt_port || 1883;
         document.getElementById('cfgMqttUsername').value = cfg.mqtt_username || '';
@@ -858,10 +907,35 @@ function onTopicPresetChange() {
     }
 }
 
+function onRegionPresetChange() {
+    var regionVal = document.getElementById('cfgRegionPreset').value;
+    if (regionVal === 'custom' || !regionPresets[regionVal]) return;
+    var p = regionPresets[regionVal];
+    // Auto-fill MQTT topic to match preset
+    var topicPresetEl = document.getElementById('cfgMqttTopicPreset');
+    var topicInput = document.getElementById('cfgMqttTopic');
+    var matched = false;
+    for (var i = 0; i < topicPresetEl.options.length; i++) {
+        if (topicPresetEl.options[i].value === p.mqtt_topic) {
+            topicPresetEl.value = p.mqtt_topic;
+            topicInput.style.display = 'none';
+            matched = true;
+            break;
+        }
+    }
+    if (!matched) {
+        topicPresetEl.value = 'custom';
+        topicInput.value = p.mqtt_topic;
+        topicInput.style.display = '';
+    }
+}
+
 async function saveSettings(event) {
     event.preventDefault();
 
+    var regionVal = document.getElementById('cfgRegionPreset').value;
     var data = {
+        region_preset: regionVal === 'custom' ? null : regionVal,
         mqtt_broker: document.getElementById('cfgMqttBroker').value.trim(),
         mqtt_port: parseInt(document.getElementById('cfgMqttPort').value, 10),
         mqtt_topic: (document.getElementById('cfgMqttTopicPreset').value === 'custom'
@@ -1408,6 +1482,7 @@ function connectWebSocket(port) {
     };
 
     ws.onmessage = function(event) {
+        lastWsMessage = Date.now();
         try {
             var msg = JSON.parse(event.data);
             handleRealtimeMessage(msg);
@@ -2150,10 +2225,30 @@ var _refreshInterval = setInterval(function() {
 // Periodic health check (every 2 minutes)
 var _healthInterval = setInterval(checkDataHealth, 2 * 60 * 1000);
 
+// WebSocket staleness detection — force reconnect if no message in 90s on an "open" connection
+var _wsStaleInterval = setInterval(function() {
+    if (ws && ws.readyState === WebSocket.OPEN && lastWsMessage > 0) {
+        if (Date.now() - lastWsMessage > 90000) {
+            console.debug('WebSocket stale, forcing reconnect');
+            ws.close();
+        }
+    }
+}, 60000);
+
+// Force refresh when tab becomes visible again (prevents stale display after sleep/background)
+document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+        loadNodeData();
+        if (healthOverlayActive) loadNodeHealthData();
+        if (showWeatherAlerts) loadWeatherAlerts();
+    }
+});
+
 // Cleanup on page unload to prevent leaked timers and connections
 window.addEventListener('beforeunload', function() {
     clearInterval(_refreshInterval);
     clearInterval(_healthInterval);
+    clearInterval(_wsStaleInterval);
     if (ws) { try { ws.close(); } catch (e) { /* ignore */ } }
 });
 
