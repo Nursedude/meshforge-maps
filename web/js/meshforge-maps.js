@@ -97,6 +97,7 @@ let regionPresets = {          // Defaults, overwritten by server config if avai
     hawaii:     { map_center_lat: 20.5, map_center_lon: -157.0, map_default_zoom: 7, bbox: [18.5, -161.0, 22.5, -154.0] },
     west_coast: { map_center_lat: 37.5, map_center_lon: -122.0, map_default_zoom: 6, bbox: [32.0, -125.0, 49.0, -114.0] },
     us:         { map_center_lat: 39.0, map_center_lon: -98.0,  map_default_zoom: 4, bbox: [[24.5,-125,49.5,-66],[51,-180,72,-130],[18.5,-161,22.5,-154],[17.5,-68,18.6,-64]] },
+    americas:   { map_center_lat: 15.0, map_center_lon: -80.0,   map_default_zoom: 3, bbox: [-56.0, -180.0, 72.0, -34.0] },
     world:      { map_center_lat: 20.0, map_center_lon: 0.0,    map_default_zoom: 3, bbox: null },
 };
 let trajectoryLayers = {};   // Active trajectory polylines keyed by node_id

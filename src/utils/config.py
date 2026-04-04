@@ -157,6 +157,14 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
             [17.5, -68.0, 18.6, -64.0],     # PR + USVI
         ],
     },
+    "americas": {
+        "label": "Americas",
+        "map_center_lat": 15.0,
+        "map_center_lon": -80.0,
+        "map_default_zoom": 3,
+        "mqtt_topic": "msh/#",
+        "bbox": [-56.0, -180.0, 72.0, -34.0],  # Tierra del Fuego to Alaska
+    },
     "world": {
         "label": "World",
         "map_center_lat": 20.0,
