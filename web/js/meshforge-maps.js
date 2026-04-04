@@ -840,6 +840,10 @@ async function openSettings() {
     var statusEl = document.getElementById('mqttStatus');
     statusEl.innerHTML = 'Loading current settings...';
 
+    // Show modal immediately so the user sees feedback (fetch may be slow on Pi)
+    overlay.classList.add('visible');
+    modal.classList.add('visible');
+
     try {
         var resp = await fetch(API_BASE + '/api/config');
         if (!resp.ok) throw new Error('Failed to load config');
@@ -909,9 +913,6 @@ async function openSettings() {
     } catch (e) {
         statusEl.innerHTML = '<span class="status-err">Failed to load settings</span>';
     }
-
-    overlay.classList.add('visible');
-    modal.classList.add('visible');
 }
 
 function closeSettings() {
