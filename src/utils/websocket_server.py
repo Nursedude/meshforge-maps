@@ -41,8 +41,8 @@ class MapWebSocketServer:
         history_size: Number of recent messages to replay to new clients.
     """
 
-    # Allowed WebSocket origin prefixes (localhost only by default)
-    _ALLOWED_ORIGINS = [
+    # Allowed WebSocket origin prefixes (localhost only when bound to 127.0.0.1)
+    _LOCALHOST_ORIGINS = [
         "http://localhost", "https://localhost",
         "http://127.0.0.1", "https://127.0.0.1",
         None,  # Allow connections without Origin header (non-browser clients)
@@ -194,11 +194,14 @@ class MapWebSocketServer:
         """Start serving and signal readiness."""
         try:
             serve_kwargs: Dict[str, Any] = {}
-            # Restrict allowed origins to localhost (prevents cross-site
-            # WebSocket hijacking). Older websockets versions may not
-            # support the origins parameter.
+            # When bound to localhost, restrict origins (prevents cross-site
+            # WebSocket hijacking). When bound to 0.0.0.0 (network-accessible),
+            # allow all origins so LAN clients can connect.
             try:
-                serve_kwargs["origins"] = self._ALLOWED_ORIGINS
+                if self.host in ("127.0.0.1", "localhost", "::1"):
+                    serve_kwargs["origins"] = self._LOCALHOST_ORIGINS
+                else:
+                    serve_kwargs["origins"] = None  # Allow all origins
             except Exception:
                 pass
             self._server = await websockets.asyncio.server.serve(
