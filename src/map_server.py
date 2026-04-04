@@ -1607,14 +1607,18 @@ class MapServer:
         """Schedule the next background data collection cycle."""
         if self._bg_collect_stop.is_set():
             return
+        logger.debug("Background collection scheduled in %.0fs", delay)
         self._bg_collect_timer = threading.Timer(delay, self._bg_collect)
         self._bg_collect_timer.daemon = True
         self._bg_collect_timer.start()
 
     def _bg_collect(self) -> None:
         """Run collect_all() in the background, then reschedule."""
+        logger.info("Background collection starting")
         try:
-            self._aggregator.collect_all()
+            result = self._aggregator.collect_all()
+            count = len(result.get("features", [])) if result else 0
+            logger.info("Background collection complete: %d nodes", count)
         except Exception as e:
             logger.warning("Background collection failed: %s", e)
         finally:
