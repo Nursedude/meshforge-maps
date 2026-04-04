@@ -339,13 +339,12 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": "No valid settings provided"}, 400)
             return
 
-        # Cascade region preset values into config
+        # Cascade region preset values into config (always override when preset selected)
         preset_key = validated.get("region_preset")
         if preset_key and preset_key in REGION_PRESETS:
             preset = REGION_PRESETS[preset_key]
             for k in ("map_center_lat", "map_center_lon", "map_default_zoom", "mqtt_topic"):
-                if k not in validated:
-                    validated[k] = preset[k]
+                validated[k] = preset[k]
 
         # Check if MQTT settings are changing
         mqtt_keys = {"mqtt_broker", "mqtt_port", "mqtt_topic",
@@ -1191,6 +1190,18 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         raw = history.get_density_points(
             since=since, until=until, precision=precision, network=network,
         )
+
+        # Apply bbox filter if provided
+        bbox_str = _safe_query_param(query, "bbox")
+        if bbox_str:
+            try:
+                parts = [float(x) for x in bbox_str.split(",")]
+                if len(parts) == 4:
+                    south, west, north, east = parts
+                    raw = [(lat, lon, c) for lat, lon, c in raw
+                           if south <= lat <= north and west <= lon <= east]
+            except (ValueError, TypeError):
+                pass
 
         # Normalize intensity to 0-1 range for Leaflet.heat
         max_count = max(raw[0][2], 1) if raw else 1
