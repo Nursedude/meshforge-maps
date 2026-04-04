@@ -440,19 +440,26 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(data)
             return
 
-        # Apply bbox filter if provided: ?bbox=south,west,north,east
+        # Apply bbox filter: ?bbox=s,w,n,e or multi-bbox ?bbox=s,w,n,e;s,w,n,e
         bbox_str = _safe_query_param(self._query, "bbox")
         if bbox_str:
             try:
-                parts = [float(x) for x in bbox_str.split(",")]
-                if len(parts) == 4:
-                    south, west, north, east = parts
-                    filtered = [
-                        f for f in data.get("features", [])
-                        if len(f.get("geometry", {}).get("coordinates", [])) >= 2
-                        and south <= f["geometry"]["coordinates"][1] <= north
-                        and west <= f["geometry"]["coordinates"][0] <= east
-                    ]
+                bboxes = []
+                for part in bbox_str.split(";"):
+                    coords = [float(x) for x in part.split(",")]
+                    if len(coords) == 4:
+                        bboxes.append(coords)
+                if bboxes:
+                    filtered = []
+                    for f in data.get("features", []):
+                        gc = f.get("geometry", {}).get("coordinates", [])
+                        if len(gc) < 2:
+                            continue
+                        lon, lat = gc[0], gc[1]
+                        for south, west, north, east in bboxes:
+                            if south <= lat <= north and west <= lon <= east:
+                                filtered.append(f)
+                                break
                     data = dict(data)
                     data["features"] = filtered
                     props = dict(data.get("properties", {}))
@@ -1191,15 +1198,19 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             since=since, until=until, precision=precision, network=network,
         )
 
-        # Apply bbox filter if provided
+        # Apply bbox filter (supports multi-bbox with ; separator)
         bbox_str = _safe_query_param(query, "bbox")
         if bbox_str:
             try:
-                parts = [float(x) for x in bbox_str.split(",")]
-                if len(parts) == 4:
-                    south, west, north, east = parts
+                bboxes = []
+                for part in bbox_str.split(";"):
+                    coords = [float(x) for x in part.split(",")]
+                    if len(coords) == 4:
+                        bboxes.append(coords)
+                if bboxes:
                     raw = [(lat, lon, c) for lat, lon, c in raw
-                           if south <= lat <= north and west <= lon <= east]
+                           if any(s <= lat <= n and w <= lon <= e
+                                  for s, w, n, e in bboxes)]
             except (ValueError, TypeError):
                 pass
 
