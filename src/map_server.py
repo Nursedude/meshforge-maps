@@ -1674,6 +1674,8 @@ class MapServer:
             if nh:
                 logger.info("Node history: %d observations, %d nodes",
                             nh.observation_count, nh.node_count)
+            else:
+                logger.warning("Node history DB not available — analytics disabled")
         except Exception as e:
             logger.warning("Background collection failed: %s", e)
         finally:
