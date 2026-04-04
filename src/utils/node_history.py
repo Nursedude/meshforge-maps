@@ -32,7 +32,7 @@ DEFAULT_DB_PATH = get_data_dir() / "maps_node_history.db"
 DEFAULT_THROTTLE_SECONDS = 60
 
 # Default retention period (seconds) - 30 days
-DEFAULT_RETENTION_SECONDS = 30 * 24 * 3600
+DEFAULT_RETENTION_SECONDS = 7 * 24 * 3600  # 7 days (was 30; 42K nodes fills fast)
 
 # Maximum observations per node for trajectory queries
 MAX_TRAJECTORY_POINTS = 1000
