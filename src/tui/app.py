@@ -226,6 +226,7 @@ class TuiApp:
                 self._last_refresh = time.time()
 
         except Exception as e:
+            logger.warning("Data refresh failed: %s", e)
             with self._data_lock:
                 self._connected = False
                 self._error_msg = str(e)
@@ -675,8 +676,8 @@ class TuiApp:
                             try:
                                 msg = json.loads(raw)
                                 self._on_ws_message(msg)
-                            except (ValueError, TypeError):
-                                pass
+                            except (ValueError, TypeError) as e:
+                                logger.debug("WebSocket frame parse error: %s", e)
                 except Exception as e:
                     logger.warning("WebSocket library connection error: %s", e)
                 finally:
@@ -687,8 +688,8 @@ class TuiApp:
 
         try:
             loop.run_until_complete(_listen())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("WebSocket event loop error: %s", e)
         finally:
             loop.close()
 
@@ -746,8 +747,8 @@ class TuiApp:
                         try:
                             msg = json.loads(frame_data)
                             self._on_ws_message(msg)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as e:
+                            logger.debug("WebSocket frame parse error: %s", e)
 
             except (OSError, ConnectionError, socket.timeout) as e:
                 logger.warning("WebSocket raw connection error: %s", e)
@@ -811,7 +812,8 @@ class TuiApp:
             if opcode == 0x1:  # Text frame
                 return data.decode("utf-8")
             return None
-        except (OSError, ConnectionError, struct.error):
+        except (OSError, ConnectionError, struct.error) as e:
+            logger.debug("WebSocket read error: %s", e)
             return None
 
     def _on_ws_message(self, msg: Dict[str, Any]) -> None:
