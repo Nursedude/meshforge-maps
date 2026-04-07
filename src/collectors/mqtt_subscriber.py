@@ -448,7 +448,7 @@ class MQTTSubscriber:
         self._connected = threading.Event()
         self._stats_lock = threading.Lock()
         self._messages_received: int = 0
-        self._parse_errors: int = 0
+        self._decrypt_skipped: int = 0
         self._proto = _try_import_meshtastic()
 
         mqtt_mod, api_version = _try_import_paho()
@@ -554,7 +554,7 @@ class MQTTSubscriber:
         """Return MQTT subscriber statistics (upstream: monitoring integration)."""
         with self._stats_lock:
             messages = self._messages_received
-            errors = self._parse_errors
+            skipped = self._decrypt_skipped
         return {
             "broker": self._broker,
             "port": self._port,
@@ -563,7 +563,7 @@ class MQTTSubscriber:
             "running": self._running.is_set(),
             "has_credentials": self._username is not None,
             "messages_received": messages,
-            "parse_errors": errors,
+            "decrypt_skipped": skipped,
             "node_count": self._store.node_count,
             "protobuf_available": self._proto is not None,
         }
@@ -660,18 +660,19 @@ class MQTTSubscriber:
                 # Fallback: try JSON (if device has JSON mode enabled)
                 self._decode_json(msg.payload, msg.topic)
         except _SILENT_ERRORS:
-            # Unparseable messages are common on the public broker
+            # Most public broker traffic uses non-default channel encryption
+            # keys, so decryption/decode failures are expected and normal.
             with self._stats_lock:
-                self._parse_errors += 1
-                count = self._parse_errors
+                self._decrypt_skipped += 1
+                count = self._decrypt_skipped
             if count % 1000 == 0:
-                logger.warning(
-                    "MQTT: %d total unparseable messages dropped",
+                logger.info(
+                    "MQTT: %d messages skipped (encrypted with non-default channel keys)",
                     count,
                 )
         except Exception as e:
             with self._stats_lock:
-                self._parse_errors += 1
+                self._decrypt_skipped += 1
             logger.warning("MQTT message processing error on %s: %s", msg.topic, e)
 
     def _notify_update(self, node_id: str, update_type: str, **kwargs) -> None:

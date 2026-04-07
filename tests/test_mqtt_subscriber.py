@@ -247,18 +247,18 @@ class TestMQTTPositionValidation:
         sub._run_loop()
 
 
-class TestMQTTParseErrorsThreadSafety:
-    """Tests that _parse_errors counter is read under the stats lock."""
+class TestMQTTDecryptSkippedThreadSafety:
+    """Tests that _decrypt_skipped counter is read under the stats lock."""
 
-    def test_parse_errors_in_get_stats(self):
-        """get_stats() should return _parse_errors consistently."""
+    def test_decrypt_skipped_in_get_stats(self):
+        """get_stats() should return _decrypt_skipped consistently."""
         sub = MQTTSubscriber(broker="test.invalid")
         with sub._stats_lock:
-            sub._parse_errors = 42
+            sub._decrypt_skipped = 42
         stats = sub.get_stats()
-        assert stats["parse_errors"] == 42
+        assert stats["decrypt_skipped"] == 42
 
-    def test_parse_errors_concurrent_increments(self):
+    def test_decrypt_skipped_concurrent_increments(self):
         """Concurrent increments under lock should be consistent."""
         import threading
         sub = MQTTSubscriber(broker="test.invalid")
@@ -267,7 +267,7 @@ class TestMQTTParseErrorsThreadSafety:
         def increment():
             barrier.wait()
             with sub._stats_lock:
-                sub._parse_errors += 1
+                sub._decrypt_skipped += 1
 
         threads = [threading.Thread(target=increment) for _ in range(10)]
         for t in threads:
@@ -275,7 +275,7 @@ class TestMQTTParseErrorsThreadSafety:
         for t in threads:
             t.join()
 
-        assert sub._parse_errors == 10
+        assert sub._decrypt_skipped == 10
 
 
 class TestMQTTSubscriberStopEvent:
