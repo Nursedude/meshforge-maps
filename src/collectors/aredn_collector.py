@@ -234,6 +234,7 @@ class AREDNCollector(BaseCollector):
             api_version=api_version,
             uptime=uptime,
             load_avg=loads[0] if loads else None,
+            last_seen=_time.time(),
             is_online=is_node_online(_time.time(), "aredn"),
             grid_square=data.get("grid_square", ""),
             description=f"AREDN {model} - {firmware}",
@@ -374,7 +375,10 @@ class AREDNCollector(BaseCollector):
         model = row.get("model", "")
         firmware = row.get("firmware_version", "")
         last_seen_val = row.get("last_seen") or None
-        is_online_val = is_node_online(last_seen_val, "aredn") if last_seen_val else None
+        if last_seen_val is None:
+            # Worldmap only lists active nodes; treat presence as online
+            last_seen_val = _time.time()
+        is_online_val = is_node_online(last_seen_val, "aredn")
 
         return make_feature(
             node_id=node_name,
