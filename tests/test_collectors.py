@@ -684,6 +684,16 @@ class TestAREDNCollector:
         assert f["properties"]["firmware"] == "3.24.4.0"
         assert f["properties"]["is_online"] is True
         assert f["properties"]["grid_square"] == "DM04"
+        assert f["properties"]["last_seen"] is not None
+
+    def test_parse_worldmap_row_no_last_seen(self):
+        """Worldmap rows without last_seen should still get is_online=True."""
+        c = AREDNCollector()
+        row = {"node": "WH6DPT-6", "lat": "19.9", "lon": "-155.8"}
+        f = c._parse_worldmap_row(row)
+        assert f is not None
+        assert f["properties"]["is_online"] is True
+        assert f["properties"]["last_seen"] is not None
 
     def test_parse_sysinfo_no_coords(self):
         c = AREDNCollector()

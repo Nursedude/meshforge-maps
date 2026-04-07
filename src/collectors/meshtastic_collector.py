@@ -386,7 +386,7 @@ class MeshtasticCollector(BaseCollector):
             channel_util=node.get("chUtil"),
             air_util_tx=node.get("airUtilTx"),
             altitude=node.get("altitude"),
-            is_online=is_node_online(last_seen, "meshtastic"),
+            is_online=is_node_online(last_seen, "meshmap"),
             last_seen=last_seen,
             firmware=node.get("fwVersion", ""),
             region=node.get("region", ""),

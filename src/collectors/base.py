@@ -32,6 +32,7 @@ ONLINE_THRESHOLDS = {
     "reticulum": 1800,    # 30 minutes — infrequent announces
     "aredn": 3600,        # 60 minutes — slow poll scans
     "meshcore": 3600,     # 60 minutes — externally-polled API
+    "meshmap": 7200,      # 2 hours — aggregated external source with update delays
 }
 DEFAULT_ONLINE_THRESHOLD = 900  # 15 minutes
 

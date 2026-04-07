@@ -463,6 +463,20 @@ class TestOnlineBoostRegression:
         )
         assert result.status != "critical"
 
+    def test_aredn_node_with_last_seen_not_critical(self, scorer):
+        """AREDN node with is_online=True and last_seen should not be critical."""
+        now = time.time()
+        props = {
+            "is_online": True,
+            "last_seen": now,
+            "network": "aredn",
+        }
+        result = scorer.score_node("WH6DPT-6", props, now=now)
+        assert result.score >= 60, (
+            f"AREDN online node scored {result.score}, expected >= 60"
+        )
+        assert result.status != "critical"
+
     def test_meshcore_style_node_not_critical(self, scorer):
         """MeshCore-style node with only last_seen + is_online should not be critical.
 
