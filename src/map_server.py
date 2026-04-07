@@ -1664,8 +1664,28 @@ class MapServer:
         logger.info("Background collection starting")
         try:
             result = self._aggregator.collect_all()
-            count = len(result.get("features", [])) if result else 0
+            features = result.get("features", []) if result else []
+            count = len(features)
             logger.info("Background collection complete: %d nodes", count)
+            # Feed batch-collected nodes into NodeStateTracker so that
+            # nodes from meshmap.net, AREDN worldmap, MeshCore etc. get
+            # heartbeats and reliability scores instead of being invisible
+            # to the state tracker.
+            hb_count = 0
+            for f in features:
+                fp = f.get("properties", {})
+                node_id = fp.get("id")
+                ls = fp.get("last_seen")
+                if node_id and ls:
+                    try:
+                        self._node_state.record_heartbeat(
+                            node_id, timestamp=float(ls),
+                        )
+                        hb_count += 1
+                    except (ValueError, TypeError):
+                        pass
+            if hb_count:
+                logger.debug("Recorded %d batch heartbeats", hb_count)
             # Wait for observation recording thread, then prune + log DB status
             obs = self._aggregator._obs_thread
             if obs:
