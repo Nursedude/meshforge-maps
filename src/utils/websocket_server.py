@@ -52,10 +52,11 @@ class MapWebSocketServer:
     _ALLOWED_MSG_TYPES = frozenset({"ping", "get_history", "get_stats"})
 
     def __init__(self, host: str = "127.0.0.1", port: int = 8809,
-                 history_size: int = 50) -> None:
+                 history_size: int = 50, max_clients: int = 100) -> None:
         self.host = host
         self.port = port
         self.history_size = history_size
+        self.max_clients = max_clients
 
         self._clients: set = set()
         self._lock = threading.Lock()
@@ -222,6 +223,11 @@ class MapWebSocketServer:
     async def _handler(self, websocket) -> None:
         """Handle a single client connection."""
         with self._lock:
+            if len(self._clients) >= self.max_clients:
+                logger.warning("WebSocket: rejecting connection (max %d reached)",
+                               self.max_clients)
+                await websocket.close(1013, "Max connections reached")
+                return
             self._clients.add(websocket)
         self._stats.record_connection()
         client_addr = f"{websocket.remote_address}" if hasattr(websocket, "remote_address") else "unknown"

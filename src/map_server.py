@@ -10,6 +10,7 @@ Follows meshforge patterns: SimpleHTTPRequestHandler, no-cache headers,
 CORS support for local development.
 """
 
+import gzip
 import hmac
 import json
 import logging
@@ -93,6 +94,10 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     """
 
     server: MeshForgeHTTPServer  # type annotation for IDE support
+
+    # HTML file cache: (content_bytes, mtime_ns) — shared across handler instances
+    _html_cache: Optional[tuple] = None
+    _html_cache_lock = threading.Lock()
 
     @property
     def _ctx(self) -> MapServerContext:
@@ -402,29 +407,41 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         })
 
     def _serve_map(self) -> None:
-        """Serve the main map HTML page."""
+        """Serve the main map HTML page (cached in memory, reloads on file change)."""
         map_path = self._find_map_file()
-        if map_path and map_path.exists():
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Frame-Options", "DENY")
-            self.send_header(
-                "Content-Security-Policy",
-                "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com; "
-                "style-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com; "
-                "img-src 'self' https://*.basemaps.cartocdn.com "
-                "https://tile.openstreetmap.org https://tile.opentopomap.org "
-                "https://server.arcgisonline.com https://tiles.stadiamaps.com data:; "
-                "connect-src 'self' ws:",
-            )
-            self.end_headers()
-            with open(map_path, "rb") as f:
-                self.wfile.write(f.read())
-        else:
+        if not map_path or not map_path.exists():
             self.send_error(404, "Map file not found")
+            return
+
+        # Cache HTML in memory; reload only when file mtime changes
+        mtime = map_path.stat().st_mtime_ns
+        with MapRequestHandler._html_cache_lock:
+            cached = MapRequestHandler._html_cache
+            if cached and cached[1] == mtime:
+                content = cached[0]
+            else:
+                with open(map_path, "rb") as f:
+                    content = f.read()
+                MapRequestHandler._html_cache = (content, mtime)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com; "
+            "style-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com; "
+            "img-src 'self' https://*.basemaps.cartocdn.com "
+            "https://tile.openstreetmap.org https://tile.opentopomap.org "
+            "https://server.arcgisonline.com https://tiles.stadiamaps.com data:; "
+            "connect-src 'self' ws:",
+        )
+        self.end_headers()
+        self.wfile.write(content)
 
     def _serve_geojson(self) -> None:
         """Serve aggregated GeoJSON from all enabled sources."""
@@ -1368,6 +1385,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "recommended_version": ">=2.5.0",
         })
 
+    # Minimum response size worth compressing (bytes)
+    _GZIP_MIN_SIZE = 1024
+
     def _send_json(self, data: Any, status: int = 200) -> None:
         self._response_status = status
         try:
@@ -1377,9 +1397,20 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             body = b'{"error": "serialization error"}'
             status = 500
             self._response_status = status
+
+        # Compress if client supports gzip and body is worth compressing
+        use_gzip = (
+            len(body) >= self._GZIP_MIN_SIZE
+            and "gzip" in self.headers.get("Accept-Encoding", "")
+        )
+        if use_gzip:
+            body = gzip.compress(body)
+
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if use_gzip:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
