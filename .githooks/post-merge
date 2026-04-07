@@ -1,0 +1,22 @@
+#!/bin/bash
+# MeshForge Maps - Post-Merge Hook
+# Auto-restarts the service after git pull brings new code.
+# Setup: git config core.hooksPath .githooks
+
+SERVICE="meshforge-maps"
+
+# Only restart if the service is currently running
+if systemctl is-active --quiet "$SERVICE"; then
+    echo "Restarting $SERVICE..."
+    sudo systemctl restart "$SERVICE"
+    sleep 2
+    if systemctl is-active --quiet "$SERVICE"; then
+        echo "$SERVICE restarted successfully."
+        journalctl -u "$SERVICE" --no-pager -n 8 --since "5 seconds ago"
+    else
+        echo "WARNING: $SERVICE failed to restart!"
+        journalctl -u "$SERVICE" --no-pager -n 15
+    fi
+else
+    echo "$SERVICE is not running — skipping restart."
+fi
