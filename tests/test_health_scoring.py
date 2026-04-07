@@ -10,6 +10,7 @@ from src.utils.health_scoring import (
     CHANNEL_UTIL_HIGH,
     CHANNEL_UTIL_LOW,
     FRESH_THRESHOLD,
+    FRESHNESS_THRESHOLDS,
     MAX_HOPS_SCORED,
     SNR_EXCELLENT,
     SNR_POOR,
@@ -298,9 +299,11 @@ class TestCompositeScoring:
         assert result.score >= 90
         assert result.available_weight == WEIGHT_BATTERY
 
-    def test_no_data_scores_zero(self, scorer):
+    def test_no_data_unknown_scores_fair(self, scorer):
+        """Node with no data and unknown online status scores 'fair' (50), not critical."""
         result = scorer.score_node("n1", {}, now=1000.0)
-        assert result.score == 0
+        assert result.score == 50
+        assert result.status == "fair"
         assert result.available_weight == 0
         assert result.components == {}
 
@@ -495,3 +498,138 @@ class TestOnlineBoostRegression:
             f"MeshCore online node scored {result.score}, expected >= 60"
         )
         assert result.status != "critical"
+
+
+class TestPerNetworkFreshness:
+    """Tests for per-network freshness thresholds."""
+
+    @pytest.fixture
+    def scorer(self):
+        return NodeHealthScorer()
+
+    def test_meshmap_node_2h_ago_not_stale(self, scorer):
+        """meshmap.net node seen 2h ago should score well — its stale threshold is 4h."""
+        now = 10000.0
+        props = {
+            "is_online": True,
+            "last_seen": now - 7200,  # 2h ago
+            "network": "meshmap",
+        }
+        result = scorer.score_node("mesh1", props, now=now)
+        fresh = result.components["freshness"]["score"]
+        # 2h is halfway between fresh (1h) and stale (4h), so ~10/20
+        assert fresh > 5, f"meshmap node 2h ago got freshness {fresh}, expected > 5"
+        assert result.score >= 60
+
+    def test_aredn_node_1h_ago_scores_well(self, scorer):
+        """AREDN node seen 1h ago should score high freshness — fresh threshold is 30min."""
+        now = 10000.0
+        props = {
+            "is_online": True,
+            "last_seen": now - 3600,  # 1h ago
+            "network": "aredn",
+        }
+        result = scorer.score_node("aredn1", props, now=now)
+        fresh = result.components["freshness"]["score"]
+        # 1h into a (30min, 2h) window = ~63% → ~12.6/20
+        assert fresh > 8, f"AREDN node 1h ago got freshness {fresh}, expected > 8"
+
+    def test_aredn_worldmap_source_uses_aredn_thresholds(self, scorer):
+        """source='aredn_worldmap' should map to AREDN freshness thresholds."""
+        now = 10000.0
+        props = {
+            "is_online": True,
+            "last_seen": now - 3600,
+            "source": "aredn_worldmap",
+        }
+        result = scorer.score_node("aw1", props, now=now)
+        fresh = result.components["freshness"]["score"]
+        assert fresh > 8
+
+    def test_meshmap_net_source_uses_meshmap_thresholds(self, scorer):
+        """source='meshmap.net' should map to meshmap freshness thresholds."""
+        now = 10000.0
+        props = {
+            "is_online": True,
+            "last_seen": now - 7200,
+            "source": "meshmap.net",
+        }
+        result = scorer.score_node("mm1", props, now=now)
+        fresh = result.components["freshness"]["score"]
+        assert fresh > 5
+
+    def test_meshtastic_unchanged(self, scorer):
+        """Meshtastic nodes still use 5min/1h thresholds."""
+        now = 10000.0
+        props = {
+            "last_seen": now - 600,  # 10min ago
+            "network": "meshtastic",
+        }
+        result = scorer.score_node("mt1", props, now=now)
+        fresh = result.components["freshness"]["score"]
+        # 10min into (5min, 1h) = ~91% → ~18/20
+        assert fresh > 15
+
+    def test_unknown_network_uses_defaults(self, scorer):
+        """Unknown network falls back to default (Meshtastic) thresholds."""
+        now = 10000.0
+        props = {"last_seen": now - 600, "network": "unknown_net"}
+        result = scorer.score_node("u1", props, now=now)
+        fresh = result.components["freshness"]["score"]
+        assert fresh > 15  # Same as meshtastic for 10min age
+
+
+class TestOnlineFloorWidened:
+    """Tests for the widened is_online floor logic."""
+
+    @pytest.fixture
+    def scorer(self):
+        return NodeHealthScorer()
+
+    def test_online_node_with_battery_and_stale_freshness_floors(self, scorer):
+        """Online node with battery + stale freshness should floor at 60.
+
+        Previously this bypassed the floor because available > 35.
+        """
+        now = 10000.0
+        props = {
+            "is_online": True,
+            "battery": 80,
+            "last_seen": now - STALE_THRESHOLD * 2,  # very stale
+        }
+        result = scorer.score_node("n1", props, now=now)
+        assert result.score >= 60, (
+            f"Online node with battery+stale freshness scored {result.score}"
+        )
+
+    def test_online_node_with_congestion_and_stale_freshness_floors(self, scorer):
+        """Online node with congestion + stale freshness should floor at 60."""
+        now = 10000.0
+        props = {
+            "is_online": True,
+            "channel_util": 10.0,
+            "last_seen": now - STALE_THRESHOLD * 2,
+        }
+        result = scorer.score_node("n1", props, now=now)
+        assert result.score >= 60
+
+    def test_rich_telemetry_bypasses_floor(self, scorer):
+        """Node with 2+ rich metrics and bad values should NOT be floored."""
+        now = 10000.0
+        props = {
+            "is_online": True,
+            "battery": 0,           # critical battery
+            "channel_util": 100.0,  # severe congestion
+            "last_seen": now - STALE_THRESHOLD * 2,
+        }
+        result = scorer.score_node("n1", props, now=now)
+        # Has battery + congestion (2 rich metrics) → floor bypassed
+        assert result.score < 60, (
+            f"Node with bad rich telemetry scored {result.score}, expected < 60"
+        )
+
+    def test_unknown_online_status_scores_fair(self, scorer):
+        """Node with is_online=None and no telemetry gets 50 (fair)."""
+        result = scorer.score_node("n1", {"is_online": None}, now=1000.0)
+        assert result.score == 50
+        assert result.status == "fair"

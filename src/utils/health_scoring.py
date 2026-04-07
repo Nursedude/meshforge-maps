@@ -46,9 +46,22 @@ SNR_POOR = -10.0
 # Hop distance scoring
 MAX_HOPS_SCORED = 7     # Beyond 7 hops = minimum score
 
-# Freshness thresholds (seconds)
+# Freshness thresholds (seconds) — defaults for Meshtastic
 FRESH_THRESHOLD = 300       # 5 min — full freshness score
 STALE_THRESHOLD = 3600      # 1 hour — zero freshness score
+
+# Per-network freshness thresholds (fresh_seconds, stale_seconds).
+# Aligned with ONLINE_THRESHOLDS in base.py — each network's "fresh"
+# matches its typical update interval, "stale" is 2x its online threshold.
+FRESHNESS_THRESHOLDS = {
+    "meshtastic": (300, 3600),      # 5min fresh, 1h stale
+    "mqtt":       (300, 3600),      # same as meshtastic
+    "reticulum":  (900, 3600),      # 15min fresh, 1h stale
+    "aredn":      (1800, 7200),     # 30min fresh, 2h stale
+    "meshcore":   (1800, 7200),     # 30min fresh, 2h stale
+    "meshmap":    (3600, 14400),    # 1h fresh, 4h stale
+}
+DEFAULT_FRESHNESS = (FRESH_THRESHOLD, STALE_THRESHOLD)
 
 # Channel utilization thresholds (%)
 CHANNEL_UTIL_LOW = 25       # Below 25% = no congestion
@@ -213,15 +226,18 @@ class NodeHealthScorer:
         # Normalize to 0-100 based on available weight
         if available > 0:
             normalized = int(round((earned / available) * 100))
-            # Online nodes with minimal telemetry (only freshness and/or
-            # reliability) shouldn't score below "good" — they lack
-            # metrics, not health.  Only activates when ≤2 lightweight
-            # components scored, so Meshtastic nodes with full telemetry
-            # are unaffected.
-            if (props.get("is_online") is True
-                    and available <= WEIGHT_FRESHNESS + WEIGHT_RELIABILITY
-                    and normalized < 60):
-                normalized = 60
+            # Online nodes shouldn't score below "good" unless they have
+            # rich telemetry that genuinely indicates problems.
+            # "Rich" = 2+ of (signal, battery, congestion) — the metrics
+            # that reflect actual hardware/network health.  Nodes with
+            # only freshness, or freshness+one-metric, get floored to 60
+            # so that slow-polling networks aren't falsely marked critical.
+            if props.get("is_online") is True and normalized < 60:
+                rich_count = sum(
+                    c in components for c in ("signal", "battery", "congestion")
+                )
+                if rich_count < 2:
+                    normalized = 60
         else:
             # No scorable telemetry — use is_online as fallback.
             # Avoids penalizing networks (e.g. AREDN) that don't
@@ -229,9 +245,9 @@ class NodeHealthScorer:
             if props.get("is_online") is True:
                 normalized = 70  # "good"
             elif props.get("is_online") is False:
-                normalized = 15  # "critical" (actually offline)
+                normalized = 15  # "critical" (confirmed offline)
             else:
-                normalized = 0   # no data at all
+                normalized = 50  # "fair" (unknown — no data isn't bad data)
 
         normalized = max(0, min(100, normalized))
         status = _score_label(normalized)
@@ -411,7 +427,11 @@ class NodeHealthScorer:
     def _score_freshness(
         self, props: Dict[str, Any], now: float
     ) -> Optional[Tuple[float, Dict[str, Any]]]:
-        """Score data freshness from last_seen timestamp."""
+        """Score data freshness from last_seen timestamp.
+
+        Uses per-network thresholds so that slower-polling networks
+        (AREDN, meshmap.net) aren't penalized for normal update cadences.
+        """
         last_seen = props.get("last_seen")
         if last_seen is None:
             return None
@@ -425,10 +445,22 @@ class NodeHealthScorer:
         if age < 0:
             age = 0  # Clock skew protection
 
+        # Look up per-network thresholds; fall back to instance defaults
+        network = props.get("source", "") or props.get("network", "")
+        # Normalize source strings to network keys
+        source_to_network = {
+            "meshmap.net": "meshmap",
+            "aredn_worldmap": "aredn",
+        }
+        network_key = source_to_network.get(network, network)
+        fresh, stale = FRESHNESS_THRESHOLDS.get(
+            network_key, (self._freshness_fresh, self._freshness_stale),
+        )
+
         points = _linear_score(
-            self._freshness_stale - age,
+            stale - age,
             0,
-            self._freshness_stale - self._freshness_fresh,
+            stale - fresh,
             WEIGHT_FRESHNESS,
         )
         detail = {"age_seconds": int(age)}
