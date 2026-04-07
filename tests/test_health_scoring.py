@@ -1,5 +1,7 @@
 """Tests for per-node health scoring."""
 
+import time
+
 import pytest
 
 from src.utils.health_scoring import (
@@ -433,3 +435,49 @@ class TestScorerSummary:
         s = scorer.get_summary()
         total = sum(s["status_counts"].values())
         assert total == 2
+
+
+class TestOnlineBoostRegression:
+    """Regression tests for online boost covering freshness + reliability."""
+
+    @pytest.fixture
+    def scorer(self):
+        return NodeHealthScorer()
+
+    def test_online_node_freshness_plus_reliability_floors_to_good(self, scorer):
+        """Online node with stale freshness AND connectivity_state should score >= 60.
+
+        When NodeStateTracker provides connectivity_state, both freshness and
+        reliability get scored (available=35).  The online boost must cover this
+        case so the node isn't marked critical.
+        """
+        now = time.time()
+        props = {
+            "is_online": True,
+            "last_seen": now - 7200,        # stale (2h ago)
+            "connectivity_state": "new",    # triggers reliability scoring
+        }
+        result = scorer.score_node("!aabb0011", props, now=now)
+        assert result.score >= 60, (
+            f"Online node with freshness+reliability only scored {result.score}, expected >= 60"
+        )
+        assert result.status != "critical"
+
+    def test_meshcore_style_node_not_critical(self, scorer):
+        """MeshCore-style node with only last_seen + is_online should not be critical.
+
+        Simulates a MeshCore node that reports last_advert and is_online=True
+        plus a connectivity_state from NodeStateTracker.
+        """
+        now = time.time()
+        props = {
+            "is_online": True,
+            "last_seen": now - 1800,         # 30 min ago, within meshcore threshold
+            "connectivity_state": "new",
+            "network": "meshcore",
+        }
+        result = scorer.score_node("abc123", props, now=now)
+        assert result.score >= 60, (
+            f"MeshCore online node scored {result.score}, expected >= 60"
+        )
+        assert result.status != "critical"

@@ -213,12 +213,13 @@ class NodeHealthScorer:
         # Normalize to 0-100 based on available weight
         if available > 0:
             normalized = int(round((earned / available) * 100))
-            # Online nodes with minimal telemetry (only freshness or
+            # Online nodes with minimal telemetry (only freshness and/or
             # reliability) shouldn't score below "good" — they lack
-            # metrics, not health.  Only activates when ≤1 component
-            # scored so Meshtastic nodes with full telemetry are unaffected.
+            # metrics, not health.  Only activates when ≤2 lightweight
+            # components scored, so Meshtastic nodes with full telemetry
+            # are unaffected.
             if (props.get("is_online") is True
-                    and available <= WEIGHT_FRESHNESS
+                    and available <= WEIGHT_FRESHNESS + WEIGHT_RELIABILITY
                     and normalized < 60):
                 normalized = 60
         else:

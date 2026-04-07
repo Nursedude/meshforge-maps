@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 
 from .base import (
     BaseCollector,
+    is_node_online,
     make_feature,
     make_feature_collection,
     validate_coordinates,
@@ -118,6 +119,7 @@ class MeshCoreCollector(BaseCollector):
             name=name,
             node_type=node_type,
             last_seen=node.get("last_advert"),
+            is_online=is_node_online(node.get("last_advert"), "meshcore"),
             frequency=params.get("freq"),
             spreading_factor=params.get("sf"),
             coding_rate=params.get("cr"),
