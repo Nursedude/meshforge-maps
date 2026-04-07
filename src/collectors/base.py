@@ -31,6 +31,7 @@ ONLINE_THRESHOLDS = {
     "mqtt": 900,          # 15 minutes — real-time broker
     "reticulum": 1800,    # 30 minutes — infrequent announces
     "aredn": 3600,        # 60 minutes — slow poll scans
+    "meshcore": 3600,     # 60 minutes — externally-polled API
 }
 DEFAULT_ONLINE_THRESHOLD = 900  # 15 minutes
 
