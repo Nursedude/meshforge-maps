@@ -14,7 +14,6 @@ import gzip
 import hmac
 import json
 import logging
-import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -34,7 +33,7 @@ from .utils.event_bus import Event, EventBus, EventType, NodeEvent
 from .utils.health_scoring import NodeHealthScorer
 from .utils.meshtastic_api_proxy import MeshtasticApiProxy
 from .utils.node_history import NodeHistoryDB
-from .utils.node_state import NodeState, NodeStateTracker
+from .utils.node_state import NodeStateTracker
 from .utils.shared_health_state import SharedHealthStateReader
 from .utils.websocket_server import MapWebSocketServer
 

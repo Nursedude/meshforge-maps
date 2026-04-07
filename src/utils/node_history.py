@@ -58,6 +58,11 @@ class NodeHistoryDB:
         self._conn: Optional[sqlite3.Connection] = None
         # In-memory throttle tracker: node_id -> last_recorded_timestamp
         self._last_recorded: Dict[str, float] = {}
+        # Cached count queries (expensive on large DBs)
+        self._cached_obs_count: int = 0
+        self._cached_node_count: int = 0
+        self._count_cache_time: float = 0
+        self._COUNT_CACHE_TTL = 300  # 5 minutes
         self._init_db()
 
     def _init_db(self) -> None:
@@ -207,6 +212,7 @@ class NodeHistoryDB:
                 )
                 self._conn.commit()
                 self._last_recorded[node_id] = now
+                self._count_cache_time = 0
                 return True
             except Exception as e:
                 logger.debug("Failed to record observation for %s: %s", node_id, e)
@@ -258,6 +264,7 @@ class NodeHistoryDB:
                 self._conn.commit()
                 for nid in recorded_ids:
                     self._last_recorded[nid] = now
+                self._count_cache_time = 0
                 return len(rows)
             except Exception as e:
                 logger.debug("Batch recording failed: %s", e)
@@ -495,40 +502,63 @@ class NodeHistoryDB:
                         self._conn.execute("PRAGMA incremental_vacuum(100)")
                     except Exception as ve:
                         logger.debug("Incremental vacuum failed: %s", ve)
+                    try:
+                        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        logger.info("WAL checkpoint (TRUNCATE) completed")
+                    except Exception as we:
+                        logger.warning("WAL checkpoint failed: %s", we)
+                    # Invalidate count cache after prune
+                    self._count_cache_time = 0
+                # Prune stale throttle entries
+                cutoff = time.time() - self._retention_seconds
+                stale = [k for k, v in self._last_recorded.items()
+                         if v < cutoff]
+                for k in stale:
+                    del self._last_recorded[k]
+                if stale:
+                    logger.debug("Pruned %d stale throttle entries",
+                                 len(stale))
                 return deleted
             except Exception as e:
                 logger.error("Prune failed: %s", e)
                 return 0
 
+    def _refresh_count_cache(self) -> None:
+        """Refresh cached observation/node counts from DB (call under lock)."""
+        try:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM observations"
+            ).fetchone()
+            self._cached_obs_count = row[0] if row else 0
+            row = self._conn.execute(
+                "SELECT COUNT(DISTINCT node_id) FROM observations"
+            ).fetchone()
+            self._cached_node_count = row[0] if row else 0
+            self._count_cache_time = time.monotonic()
+        except Exception as e:
+            logger.debug("Count cache refresh failed: %s", e)
+
     @property
     def observation_count(self) -> int:
-        """Total number of observations in the database."""
+        """Total number of observations in the database (cached, 5min TTL)."""
         if not self._conn:
             return 0
+        if (time.monotonic() - self._count_cache_time) < self._COUNT_CACHE_TTL:
+            return self._cached_obs_count
         with self._lock:
-            try:
-                row = self._conn.execute(
-                    "SELECT COUNT(*) FROM observations"
-                ).fetchone()
-                return row[0] if row else 0
-            except Exception as e:
-                logger.debug("observation_count query failed: %s", e)
-                return 0
+            self._refresh_count_cache()
+            return self._cached_obs_count
 
     @property
     def node_count(self) -> int:
-        """Number of distinct nodes with observations."""
+        """Number of distinct nodes with observations (cached, 5min TTL)."""
         if not self._conn:
             return 0
+        if (time.monotonic() - self._count_cache_time) < self._COUNT_CACHE_TTL:
+            return self._cached_node_count
         with self._lock:
-            try:
-                row = self._conn.execute(
-                    "SELECT COUNT(DISTINCT node_id) FROM observations"
-                ).fetchone()
-                return row[0] if row else 0
-            except Exception as e:
-                logger.debug("node_count query failed: %s", e)
-                return 0
+            self._refresh_count_cache()
+            return self._cached_node_count
 
     def get_density_points(
         self,
