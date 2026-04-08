@@ -87,6 +87,8 @@ let topologyLayer;      // Leaflet GeoJSON layer for topology links
 let showTopology = false;
 let useClustering = true;
 let isLoading = false;
+let lastLoadTime = 0;
+let featureIndex = new Map();  // node_id -> index in allFeatures for O(1) lookups
 let lastOverlayData = null;  // cached overlay from last successful fetch
 let consecutiveErrors = 0;
 let ws = null;               // WebSocket connection (real-time updates)
@@ -484,13 +486,13 @@ async function loadNodeData() {
         }
     } finally {
         isLoading = false;
+        lastLoadTime = Date.now();
         if (btn) btn.disabled = false;
     }
 }
 
 function renderMarkers() {
-    // Core marker rendering from allFeatures — single source of truth
-    // for both initial load (processGeoJSON) and re-render (health overlay toggle)
+    // Diff-based rendering: reuse existing markers, only add/remove/update what changed
 
     // Preserve open popup across re-render
     let openPopupNodeId = null;
@@ -501,15 +503,13 @@ function renderMarkers() {
         }
     }
 
-    clusterGroup.clearLayers();
-    directGroup.clearLayers();
-    markerRegistry.clear();
-
     const counts = { meshtastic: 0, reticulum: 0, aredn: 0, meshcore: 0 };
     networkLayers.meshtastic = [];
     networkLayers.reticulum = [];
     networkLayers.aredn = [];
     networkLayers.meshcore = [];
+
+    const seenIds = new Set();
 
     for (const feature of allFeatures) {
         const props = feature.properties || {};
@@ -520,43 +520,80 @@ function renderMarkers() {
         const lon = coords[0];
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
         if (Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
-        const network = props.network || 'unknown';
 
-        // Determine color: health overlay or network color
+        const nodeId = props.id;
+        const network = props.network || 'unknown';
+        const isStale = props.is_online === false;
+
         let color;
         if (healthOverlayActive) {
-            color = getHealthColor(props.id) || '#78909c';
+            color = getHealthColor(nodeId) || '#78909c';
         } else {
             color = NETWORK_COLORS[network] || '#78909c';
         }
 
-        const isStale = props.is_online === false;
-        const marker = L.circleMarker([lat, lon], {
+        if (nodeId) seenIds.add(nodeId);
+
+        const style = {
             radius: isStale ? 5 : 7,
             fillColor: color,
             color: isStale ? '#546e7a' : color,
             weight: isStale ? 1 : 2,
             opacity: isStale ? 0.4 : 1.0,
             fillOpacity: isStale ? 0.2 : 0.7,
-        });
+        };
 
-        marker.bindPopup(function() { return buildPopup(props, color); });
+        const existing = nodeId ? markerRegistry.get(nodeId) : null;
 
-        if (props.id) {
-            markerRegistry.set(props.id, marker);
-        }
+        if (existing) {
+            // Update in place — no allocation
+            existing.setLatLng([lat, lon]);
+            existing.setStyle(style);
+            existing._mmProps = props;
+            existing._mmColor = color;
 
-        if (counts.hasOwnProperty(network)) {
-            counts[network]++;
-            networkLayers[network].push(marker);
-        }
-
-        if (networkVisible[network] !== false) {
-            if (useClustering) {
-                clusterGroup.addLayer(marker);
-            } else {
-                directGroup.addLayer(marker);
+            if (counts.hasOwnProperty(network)) {
+                counts[network]++;
+                networkLayers[network].push(existing);
             }
+            const shouldShow = networkVisible[network] !== false;
+            const group = useClustering ? clusterGroup : directGroup;
+            if (shouldShow && !group.hasLayer(existing)) {
+                group.addLayer(existing);
+            } else if (!shouldShow && group.hasLayer(existing)) {
+                group.removeLayer(existing);
+            }
+        } else {
+            // New marker
+            const marker = L.circleMarker([lat, lon], style);
+            marker._mmProps = props;
+            marker._mmColor = color;
+            marker.bindPopup(function() {
+                return buildPopup(this._mmProps, this._mmColor);
+            });
+
+            if (nodeId) markerRegistry.set(nodeId, marker);
+
+            if (counts.hasOwnProperty(network)) {
+                counts[network]++;
+                networkLayers[network].push(marker);
+            }
+            if (networkVisible[network] !== false) {
+                if (useClustering) {
+                    clusterGroup.addLayer(marker);
+                } else {
+                    directGroup.addLayer(marker);
+                }
+            }
+        }
+    }
+
+    // Remove markers for nodes no longer in allFeatures
+    for (const [nodeId, marker] of markerRegistry) {
+        if (!seenIds.has(nodeId)) {
+            clusterGroup.removeLayer(marker);
+            directGroup.removeLayer(marker);
+            markerRegistry.delete(nodeId);
         }
     }
 
@@ -569,7 +606,6 @@ function renderMarkers() {
     document.getElementById('statAredn').textContent = counts.aredn;
     document.getElementById('statMeshcore').textContent = counts.meshcore;
 
-    // Re-open popup if one was visible before re-render
     if (openPopupNodeId) {
         const restored = markerRegistry.get(openPopupNodeId);
         if (restored) restored.openPopup();
@@ -578,6 +614,12 @@ function renderMarkers() {
 
 function processGeoJSON(data) {
     allFeatures = data.features || [];
+    // Rebuild feature index for O(1) lookups in WebSocket updates
+    featureIndex.clear();
+    for (let i = 0; i < allFeatures.length; i++) {
+        const id = allFeatures[i].properties?.id;
+        if (id) featureIndex.set(id, i);
+    }
     renderMarkers();
 
     // Process overlay data (space weather, terminator)
@@ -1642,11 +1684,9 @@ function updateOrAddNode(msg) {
     if (existing) {
         existing.setLatLng(latlng);
         // Update corresponding feature in allFeatures so next render preserves position
-        for (var i = 0; i < allFeatures.length; i++) {
-            if (allFeatures[i].properties && allFeatures[i].properties.id === nodeId) {
-                allFeatures[i].geometry.coordinates = [msg.lon, msg.lat];
-                break;
-            }
+        var idx = featureIndex.get(nodeId);
+        if (idx !== undefined && allFeatures[idx]) {
+            allFeatures[idx].geometry.coordinates = [msg.lon, msg.lat];
         }
     } else {
         // New node -- add a temporary marker. Full data comes on next poll.
@@ -2346,7 +2386,7 @@ var _wsStaleInterval = setInterval(function() {
 
 // Force refresh when tab becomes visible again (prevents stale display after sleep/background)
 document.addEventListener('visibilitychange', function() {
-    if (!document.hidden) {
+    if (!document.hidden && (Date.now() - lastLoadTime > 30000)) {
         loadNodeData();
         if (healthOverlayActive) loadNodeHealthData();
         if (showWeatherAlerts) loadWeatherAlerts();

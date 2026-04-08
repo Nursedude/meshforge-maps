@@ -173,8 +173,8 @@ async function cacheFirst(request, cacheName) {
         if (response.ok) {
             // Clone and cache the response
             cache.put(request, response.clone());
-            // Amortized eviction: only check every ~100 inserts
-            if (Math.random() < 0.01) {
+            // Amortized eviction: check roughly every ~20 inserts
+            if (Math.random() < 0.05) {
                 enforceCacheLimit(cacheName, MAX_TILE_CACHE_ITEMS);
             }
         }
