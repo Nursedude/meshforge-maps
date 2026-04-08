@@ -499,17 +499,18 @@ class NodeHistoryDB:
                 deleted = cursor.rowcount
                 if deleted:
                     logger.info("Pruned %d old node history observations", deleted)
-                    try:
-                        self._conn.execute("PRAGMA incremental_vacuum(100)")
-                    except Exception as ve:
-                        logger.debug("Incremental vacuum failed: %s", ve)
-                    try:
-                        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                        logger.info("WAL checkpoint (TRUNCATE) completed")
-                    except Exception as we:
-                        logger.warning("WAL checkpoint failed: %s", we)
                     # Invalidate count cache after prune
                     self._count_cache_time = 0
+                # Always checkpoint WAL — runs every ~120s via bg collect;
+                # without this, WAL grows unbounded when no rows are pruned
+                try:
+                    self._conn.execute("PRAGMA incremental_vacuum(100)")
+                except Exception as ve:
+                    logger.debug("Incremental vacuum failed: %s", ve)
+                try:
+                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except Exception as we:
+                    logger.warning("WAL checkpoint failed: %s", we)
                 # Prune stale throttle entries
                 cutoff = time.time() - self._retention_seconds
                 stale = [k for k, v in self._last_recorded.items()
