@@ -597,6 +597,11 @@ function renderMarkers() {
         }
     }
 
+    // Refresh cluster spatial index after marker position updates
+    if (useClustering) {
+        clusterGroup.refreshClusters();
+    }
+
     document.getElementById('countMeshtastic').textContent = counts.meshtastic;
     document.getElementById('countReticulum').textContent = counts.reticulum;
     document.getElementById('countAredn').textContent = counts.aredn;
