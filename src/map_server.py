@@ -264,10 +264,19 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 pass
 
     def end_headers(self) -> None:
-        """Inject Cache-Control for static JS/CSS to prevent stale browser cache."""
-        path = getattr(self, "path", "")
-        if path.endswith((".js", ".css")):
-            self.send_header("Cache-Control", "no-cache, must-revalidate")
+        """Inject Cache-Control + ETag for static JS/CSS."""
+        raw_path = getattr(self, "path", "").split("?")[0]
+        if raw_path.endswith((".js", ".css")):
+            self.send_header("Cache-Control", "public, max-age=86400")
+            # ETag based on file mtime for cache busting on deploys
+            try:
+                web_dir = getattr(self._ctx, "web_dir", None)
+                if web_dir:
+                    fpath = Path(web_dir) / raw_path.lstrip("/")
+                    mtime = fpath.stat().st_mtime
+                    self.send_header("ETag", f'"{int(mtime)}"')
+            except (OSError, AttributeError):
+                pass
         super().end_headers()
 
     def _get_cors_origin(self) -> Optional[str]:
@@ -484,6 +493,38 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                     data["properties"] = props
             except (ValueError, TypeError):
                 pass
+            # bbox-filtered responses can't use pre-serialized cache
+            self._send_json(data)
+            return
+
+        # Use pre-serialized JSON+gzip cache (avoids json.dumps + gzip per request)
+        cached = aggregator.get_cached_json()
+        if cached:
+            json_bytes, gzip_bytes, etag = cached
+            # ETag conditional: return 304 if client has current version
+            if_none_match = self.headers.get("If-None-Match")
+            if if_none_match and if_none_match.strip('" ') == etag:
+                self.send_response(304)
+                self.send_header("ETag", f'"{etag}"')
+                self.end_headers()
+                return
+            use_gzip = "gzip" in self.headers.get("Accept-Encoding", "")
+            body = gzip_bytes if use_gzip else json_bytes
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("ETag", f'"{etag}"')
+            if use_gzip:
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            cors_origin = self._get_cors_origin()
+            if cors_origin:
+                self.send_header("Access-Control-Allow-Origin", cors_origin)
+            self.end_headers()
+            self.wfile.write(body)
+            return
 
         self._send_json(data)
 

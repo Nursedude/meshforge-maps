@@ -5,10 +5,13 @@ Merges GeoJSON FeatureCollections from all enabled collectors
 into a single unified collection with deduplication.
 """
 
+import gzip
+import hashlib
+import json
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .aredn_collector import AREDNCollector
 from .base import (
@@ -46,6 +49,10 @@ class DataAggregator:
         self._cached_result: Optional[Dict[str, Any]] = None
         self._cached_result_time: float = 0
         self._RESULT_CACHE_TTL = 2.0  # seconds — dedup rapid requests
+        # Pre-serialized JSON cache (avoids json.dumps + gzip on every request)
+        self._cached_json: Optional[bytes] = None
+        self._cached_json_gzip: Optional[bytes] = None
+        self._cached_json_etag: Optional[str] = None
         self._node_history = None  # Optional NodeHistoryDB for analytics recording
         self._obs_thread: Optional[threading.Thread] = None
 
@@ -265,6 +272,17 @@ class DataAggregator:
 
         with self._data_lock:
             self._cached_result = result
+            # Pre-serialize JSON + gzip so HTTP handler avoids per-request cost
+            try:
+                raw = json.dumps(result, default=str).encode("utf-8")
+                self._cached_json = raw
+                self._cached_json_gzip = gzip.compress(raw)
+                self._cached_json_etag = hashlib.md5(raw).hexdigest()
+            except Exception as e:
+                logger.debug("JSON pre-serialization failed: %s", e)
+                self._cached_json = None
+                self._cached_json_gzip = None
+                self._cached_json_etag = None
 
         logger.info(
             "Aggregated %d nodes from %d sources: %s",
@@ -278,6 +296,14 @@ class DataAggregator:
         """Return cached collect_all() result without triggering collection."""
         with self._data_lock:
             return self._cached_result
+
+    def get_cached_json(self) -> Optional[Tuple[bytes, bytes, str]]:
+        """Return pre-serialized (json_bytes, gzip_bytes, etag) or None."""
+        with self._data_lock:
+            if self._cached_json is not None:
+                return (self._cached_json, self._cached_json_gzip,
+                        self._cached_json_etag)
+            return None
 
     def collect_source(self, source_name: str) -> Dict[str, Any]:
         """Collect from a single named source."""

@@ -545,6 +545,15 @@ function renderMarkers() {
 
         const existing = nodeId ? markerRegistry.get(nodeId) : null;
 
+        // Pre-format date string to avoid toLocaleString() in popup
+        if (props.last_seen && !props._lastSeenStr) {
+            try {
+                const ts = typeof props.last_seen === 'number'
+                    ? new Date(props.last_seen * 1000) : new Date(props.last_seen);
+                if (!isNaN(ts.getTime())) props._lastSeenStr = ts.toLocaleString();
+            } catch(e) { /* ignore */ }
+        }
+
         if (existing) {
             // Update in place — no allocation
             existing.setLatLng([lat, lon]);
@@ -699,9 +708,11 @@ function buildPopup(props, color) {
     const onlineColor = props.is_online === true ? '#66bb6a' :
                         props.is_online === false ? '#ef5350' : '#78909c';
 
-    // Last-seen timestamp
+    // Last-seen timestamp (pre-formatted in renderMarkers to avoid toLocaleString per popup)
     let lastSeenStr = '';
-    if (props.last_seen) {
+    if (props._lastSeenStr) {
+        lastSeenStr = `<div class="popup-row" style="font-size:10px;color:#546e7a"><span class="popup-key">Seen</span><span class="popup-val">${esc(props._lastSeenStr)}</span></div>`;
+    } else if (props.last_seen) {
         try {
             const ts = typeof props.last_seen === 'number' ? new Date(props.last_seen * 1000) : new Date(props.last_seen);
             if (!isNaN(ts.getTime())) {
@@ -731,9 +742,12 @@ function buildPopup(props, color) {
 
 function esc(str) {
     if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = String(str);
-    return div.innerHTML;
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function safeColor(color) {
