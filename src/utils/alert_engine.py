@@ -36,7 +36,8 @@ MAX_ALERT_HISTORY = 500
 
 # Cooldown cleanup: remove entries older than 24 hours
 _COOLDOWN_MAX_AGE = 86400
-_COOLDOWN_CLEANUP_INTERVAL = 3600
+_COOLDOWN_CLEANUP_INTERVAL = 1800
+_MAX_COOLDOWN_ENTRIES = 10000
 
 # Default cooldown per node+rule (seconds) — avoid re-firing same alert
 DEFAULT_COOLDOWN = 600  # 10 minutes
@@ -421,6 +422,13 @@ class AlertEngine:
                      if now - t > _COOLDOWN_MAX_AGE]
             for k in stale:
                 del self._cooldowns[k]
+            # Cap size: evict oldest entries if over limit
+            overflow = len(self._cooldowns) - _MAX_COOLDOWN_ENTRIES
+            if overflow > 0:
+                sorted_entries = sorted(
+                    self._cooldowns.items(), key=lambda x: x[1])
+                for k, _ in sorted_entries[:overflow]:
+                    del self._cooldowns[k]
             self._last_cooldown_cleanup = now
 
     def acknowledge(self, alert_id: str) -> bool:

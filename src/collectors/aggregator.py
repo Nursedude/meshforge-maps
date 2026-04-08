@@ -231,6 +231,7 @@ class DataAggregator:
         # Record observations in background thread (non-blocking)
         # SQLite writes on Pi SD card take ~80s for 42K nodes — don't block result caching
         if self._node_history and all_features:
+            can_spawn = True
             if self._obs_thread and self._obs_thread.is_alive():
                 logger.debug("Waiting for previous observation thread")
                 self._obs_thread.join(timeout=120)
@@ -239,8 +240,8 @@ class DataAggregator:
                         "Observation thread still running after 120s — "
                         "skipping this cycle"
                     )
-                    self._obs_thread = None
-            if not (self._obs_thread and self._obs_thread.is_alive()):
+                    can_spawn = False
+            if can_spawn:
                 self._obs_thread = threading.Thread(
                     target=self._record_observations,
                     args=(list(all_features),),

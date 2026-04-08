@@ -54,6 +54,7 @@ class NodeHistoryDB:
         self._db_path = db_path or DEFAULT_DB_PATH
         self._throttle_seconds = throttle_seconds
         self._retention_seconds = retention_seconds
+        self._MAX_THROTTLE_ENTRIES = 50000
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
         # In-memory throttle tracker: node_id -> last_recorded_timestamp
@@ -518,6 +519,15 @@ class NodeHistoryDB:
                 if stale:
                     logger.debug("Pruned %d stale throttle entries",
                                  len(stale))
+                # Cap size: evict oldest entries if over limit
+                overflow = len(self._last_recorded) - self._MAX_THROTTLE_ENTRIES
+                if overflow > 0:
+                    sorted_entries = sorted(
+                        self._last_recorded.items(), key=lambda x: x[1])
+                    for k, _ in sorted_entries[:overflow]:
+                        del self._last_recorded[k]
+                    logger.info("Evicted %d throttle entries (size cap)",
+                                overflow)
                 return deleted
             except Exception as e:
                 logger.error("Prune failed: %s", e)
