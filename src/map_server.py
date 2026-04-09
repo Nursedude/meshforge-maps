@@ -1509,11 +1509,20 @@ class MapServer:
         except Exception as e:
             logger.debug("Shared health state not available: %s", e)
 
-        # Config drift detection
-        self._config_drift = ConfigDriftDetector()
+        # Config drift detection (optional — disable to save ~20 MB)
+        _get = getattr(self._config, "get_effective", None) or self._config.get
+        self._config_drift: Optional[ConfigDriftDetector] = None
+        if _get("enable_config_drift", True):
+            self._config_drift = ConfigDriftDetector()
+        else:
+            logger.info("Config drift detection disabled")
 
-        # Node connectivity state machine
-        self._node_state = NodeStateTracker()
+        # Node connectivity state machine (optional — disable to save ~2.6 MB)
+        self._node_state: Optional[NodeStateTracker] = None
+        if _get("enable_node_state", True):
+            self._node_state = NodeStateTracker()
+        else:
+            logger.info("Node state tracking disabled")
 
         # Per-node health scoring
         self._health_scorer = NodeHealthScorer()
@@ -1529,11 +1538,15 @@ class MapServer:
         self._bg_collect_timer: Optional[threading.Timer] = None
         self._bg_collect_stop = threading.Event()
 
-        # Historical analytics (read-only aggregation over history + alerts)
-        self._analytics = HistoricalAnalytics(
-            node_history=self._node_history,
-            alert_engine=self._alert_engine,
-        )
+        # Historical analytics (optional — disable to save memory)
+        self._analytics: Optional[HistoricalAnalytics] = None
+        if _get("enable_analytics", True):
+            self._analytics = HistoricalAnalytics(
+                node_history=self._node_history,
+                alert_engine=self._alert_engine,
+            )
+        else:
+            logger.info("Historical analytics disabled")
 
         # Wire node eviction cleanup to drift detector and state tracker
         if self._aggregator.mqtt_subscriber:
@@ -1654,7 +1667,7 @@ class MapServer:
 
     def _handle_node_info_for_drift(self, event: Event) -> None:
         """Feed node info events to config drift detector."""
-        if not isinstance(event, NodeEvent):
+        if not self._config_drift or not isinstance(event, NodeEvent):
             return
         data = event.data or {}
         self._config_drift.check_node(
@@ -1664,13 +1677,15 @@ class MapServer:
 
     def _handle_node_removed(self, node_id: str) -> None:
         """Clean up drift, state, and health tracking when a node is evicted."""
-        self._config_drift.remove_node(node_id)
-        self._node_state.remove_node(node_id)
+        if self._config_drift:
+            self._config_drift.remove_node(node_id)
+        if self._node_state:
+            self._node_state.remove_node(node_id)
         self._health_scorer.remove_node(node_id)
 
     def _handle_heartbeat(self, event: Event) -> None:
         """Feed any node event as a heartbeat to the state tracker."""
-        if not isinstance(event, NodeEvent):
+        if not self._node_state or not isinstance(event, NodeEvent):
             return
         self._node_state.record_heartbeat(event.node_id)
 
@@ -1704,6 +1719,8 @@ class MapServer:
     def _check_offline_nodes(self) -> None:
         """Check all tracked nodes for offline transitions and fire alerts."""
         try:
+            if not self._node_state:
+                return
             newly_offline = self._node_state.check_offline()
             for node_id in newly_offline:
                 info = self._node_state.get_node_info(node_id)
@@ -1743,18 +1760,19 @@ class MapServer:
             # heartbeats and reliability scores instead of being invisible
             # to the state tracker.
             hb_count = 0
-            for f in features:
-                fp = f.get("properties", {})
-                node_id = fp.get("id")
-                ls = fp.get("last_seen")
-                if node_id and ls:
-                    try:
-                        self._node_state.record_heartbeat(
-                            node_id, timestamp=float(ls),
-                        )
-                        hb_count += 1
-                    except (ValueError, TypeError):
-                        pass
+            if self._node_state:
+                for f in features:
+                    fp = f.get("properties", {})
+                    node_id = fp.get("id")
+                    ls = fp.get("last_seen")
+                    if node_id and ls:
+                        try:
+                            self._node_state.record_heartbeat(
+                                node_id, timestamp=float(ls),
+                            )
+                            hb_count += 1
+                        except (ValueError, TypeError):
+                            pass
             if hb_count:
                 logger.debug("Recorded %d batch heartbeats", hb_count)
             # Wait for observation recording thread, then prune + log DB status

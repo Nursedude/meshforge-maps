@@ -74,6 +74,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_meshcore_map": True,      # Fetch MeshCore map node data
     # Region preset: bundles map center, zoom, and MQTT topic
     "region_preset": None,            # None = first-run (show picker), or key from REGION_PRESETS
+    # Optional subsystems (disable to reduce memory on constrained devices)
+    "enable_config_drift": True,      # Config drift detection (tracks firmware/hardware changes)
+    "enable_node_state": True,        # Node state machine (online/offline/intermittent tracking)
+    "enable_analytics": True,         # Historical analytics (growth, heatmap, ranking)
 }
 
 # Tile provider definitions for Leaflet.js
@@ -332,19 +336,25 @@ class MapsConfig:
     def get_effective(self, key: str, default: Any = None) -> Any:
         """Get config value with lite-mode performance tuning applied.
 
-        Lite mode tunes performance for resource-constrained devices:
-        - Cache TTL minimum 60 minutes (reduces fetch frequency)
-        - Max MQTT nodes capped at 1000 (vs 10K default)
-
-        Source enable/disable is NOT overridden — users control which
-        collectors run via the source toggles in settings UI.
+        Lite mode tunes performance for resource-constrained devices
+        (Pi 2W, Pi 4 with many sources) by enforcing safe defaults.
         """
         value = self.get(key, default)
         if not self.is_lite:
             return value
 
-        if key == "cache_ttl_minutes":
-            return max(value if isinstance(value, (int, float)) else 60, 60)
+        # Lite-mode overrides — reduce CPU, memory, and I/O
+        _lite_overrides = {
+            "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 60, 60),
+            "enable_meshcore_map": lambda v: False,
+            "enable_aredn_worldmap": lambda v: False,
+            "enable_config_drift": lambda v: False,
+            "enable_node_state": lambda v: False,
+            "enable_analytics": lambda v: False,
+        }
+        override = _lite_overrides.get(key)
+        if override:
+            return override(value)
         return value
 
     def get_tile_providers(self) -> Dict[str, Dict[str, str]]:

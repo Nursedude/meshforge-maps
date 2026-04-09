@@ -33,10 +33,10 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Maximum heartbeats to retain per node (sliding window)
-MAX_HEARTBEAT_WINDOW = 20
+MAX_HEARTBEAT_WINDOW = 10
 
 # Maximum nodes to track
-MAX_TRACKED_NODES = 10000
+MAX_TRACKED_NODES = 5000
 
 # Default thresholds
 DEFAULT_EXPECTED_INTERVAL = 300    # 5 minutes — typical Meshtastic position broadcast
