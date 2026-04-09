@@ -577,9 +577,7 @@ function renderMarkers() {
             const marker = L.circleMarker([lat, lon], style);
             marker._mmProps = props;
             marker._mmColor = color;
-            marker.bindPopup(function() {
-                return buildPopup(this._mmProps, this._mmColor);
-            });
+            marker.bindPopup(() => buildPopup(marker._mmProps, marker._mmColor));
 
             if (nodeId) markerRegistry.set(nodeId, marker);
 
