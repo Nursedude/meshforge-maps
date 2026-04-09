@@ -22,8 +22,8 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Default limits
-MAX_DRIFT_HISTORY = 50
-MAX_TRACKED_NODES = 10000
+MAX_DRIFT_HISTORY = 20
+MAX_TRACKED_NODES = 5000
 
 
 class DriftSeverity(Enum):

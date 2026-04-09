@@ -25,8 +25,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=pi
-Group=pi
+User=wh6gxz
+Group=wh6gxz
 WorkingDirectory=/opt/meshforge-maps
 ExecStart=/opt/meshforge-maps/venv/bin/python -m src.main --host 0.0.0.0
 Restart=on-failure
@@ -36,6 +36,11 @@ RestartSec=10
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 
+# Resource limits — prevent runaway memory from degrading the Pi
+MemoryMax=512M
+MemoryHigh=384M
+CPUQuota=75%
+
 # Security hardening (ported from meshforge parent)
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -43,9 +48,9 @@ ProtectHome=read-only
 PrivateTmp=true
 
 # Allow writes to user data/config/cache directories
-ReadWritePaths=/home/pi/.config/meshforge
-ReadWritePaths=/home/pi/.local/share/meshforge
-ReadWritePaths=/home/pi/.cache/meshforge
+ReadWritePaths=/home/wh6gxz/.config/meshforge
+ReadWritePaths=/home/wh6gxz/.local/share/meshforge
+ReadWritePaths=/home/wh6gxz/.cache/meshforge
 
 [Install]
 WantedBy=multi-user.target

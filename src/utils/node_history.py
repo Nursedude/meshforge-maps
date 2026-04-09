@@ -29,10 +29,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = get_data_dir() / "maps_node_history.db"
 
 # Minimum interval between observations for the same node (seconds)
-DEFAULT_THROTTLE_SECONDS = 60
+DEFAULT_THROTTLE_SECONDS = 300  # 5 min (was 60s; 42K nodes at 60s = 60M rows/day)
 
-# Default retention period (seconds) - 30 days
-DEFAULT_RETENTION_SECONDS = 7 * 24 * 3600  # 7 days (was 30; 42K nodes fills fast)
+# Default retention period (seconds)
+DEFAULT_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days (was 7; keeps DB under ~500 MB)
 
 # Maximum observations per node for trajectory queries
 MAX_TRAJECTORY_POINTS = 1000
@@ -139,6 +139,33 @@ class NodeHistoryDB:
             conn.commit()
             self._conn = conn
             logger.info("Node history DB initialized at %s", self._db_path)
+
+            # Startup compaction: prune + VACUUM if DB is bloated (>500 MB)
+            try:
+                db_size = self._db_path.stat().st_size
+                if db_size > 500_000_000:
+                    logger.info(
+                        "DB is %.1f GB — running startup compaction",
+                        db_size / 1e9,
+                    )
+                    cutoff = int(time.time()) - self._retention_seconds
+                    cur = conn.execute(
+                        "DELETE FROM observations WHERE timestamp < ?",
+                        (cutoff,),
+                    )
+                    conn.commit()
+                    pruned = cur.rowcount
+                    if pruned:
+                        logger.info("Startup prune removed %d old rows", pruned)
+                    conn.execute("VACUUM")
+                    conn.commit()
+                    new_size = self._db_path.stat().st_size
+                    logger.info(
+                        "Compaction complete: %.1f GB → %.1f MB",
+                        db_size / 1e9, new_size / 1e6,
+                    )
+            except Exception as ce:
+                logger.warning("Startup compaction failed: %s", ce)
         except Exception as e:
             logger.error("Failed to initialize node history DB: %s", e)
             if conn is not None:
