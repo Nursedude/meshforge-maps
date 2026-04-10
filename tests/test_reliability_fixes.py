@@ -306,6 +306,9 @@ class TestMapServerNodeRemovalHandler:
         config.set("enable_reticulum", False)
         config.set("enable_aredn", False)
         config.set("enable_hamclock", False)
+        config.set("deployment_profile", "full")
+        config.set("enable_config_drift", True)
+        config.set("enable_node_state", True)
 
         server = MapServer(config)
 
