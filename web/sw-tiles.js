@@ -19,7 +19,7 @@
 const CACHE_NAME = 'meshforge-maps-tiles-v1';
 const STATIC_CACHE = 'meshforge-maps-static-v1';
 const API_CACHE = 'meshforge-maps-api-v1';
-const MAX_TILE_CACHE_ITEMS = 500;  // LRU eviction threshold (reduced for Pi/constrained devices)
+const MAX_TILE_CACHE_ITEMS = 1500;  // LRU eviction threshold (~30MB at 20KB/tile, safe for 512MB Pi)
 const API_CACHE_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes for API responses
 
 // 1x1 transparent PNG returned for uncached tiles when offline
@@ -158,32 +158,41 @@ self.addEventListener('fetch', (event) => {
  * of the cache (most recently used). enforceCacheLimit evicts from the
  * beginning (least recently used).
  */
+let _insertsSinceEviction = 0;
+const EVICTION_INTERVAL = 20;
+
 async function cacheFirst(request, cacheName) {
     const cache = await caches.open(cacheName);
     const cached = await cache.match(request);
     if (cached) {
-        // LRU touch: move to end by re-inserting
-        cache.delete(request).then(() => {
-            cache.put(request, cached.clone());
-        });
+        // LRU touch: await delete+put so eviction can't race and lose the tile
+        try {
+            await cache.delete(request);
+            await cache.put(request, cached.clone());
+        } catch (e) {
+            // Touch failed — tile is still in `cached`, safe to return
+        }
         return cached;
     }
     try {
         const response = await fetch(request);
         if (response.ok) {
             // Clone and cache the response
-            cache.put(request, response.clone());
-            // Amortized eviction: check roughly every ~20 inserts
-            if (Math.random() < 0.05) {
+            await cache.put(request, response.clone());
+            // Deterministic eviction: every EVICTION_INTERVAL inserts
+            _insertsSinceEviction++;
+            if (_insertsSinceEviction >= EVICTION_INTERVAL) {
+                _insertsSinceEviction = 0;
                 enforceCacheLimit(cacheName, MAX_TILE_CACHE_ITEMS);
             }
         }
         return response;
     } catch (error) {
-        // Network failure with no cache -- return transparent placeholder tile
+        // Network failure with no cache -- return 503 so Leaflet fires tileerror
         return new Response(BLANK_TILE.buffer, {
-            status: 200,
-            headers: { 'Content-Type': 'image/png' },
+            status: 503,
+            statusText: 'Offline',
+            headers: { 'Content-Type': 'image/png', 'X-Tile-Offline': '1' },
         });
     }
 }

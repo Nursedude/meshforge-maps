@@ -208,6 +208,30 @@ let allFeatures = [];
 // Initialization
 // =========================================================================
 
+function createTileLayer(url, options) {
+    var layer = L.tileLayer(url, Object.assign({ errorTileUrl: '' }, options));
+
+    layer.on('tileloadstart', function(e) {
+        if (!e.tile._originalSrc) e.tile._originalSrc = e.tile.src;
+    });
+
+    layer.on('tileerror', function(e) {
+        var tile = e.tile;
+        var retryCount = tile._retryCount || 0;
+        if (retryCount < 3) {
+            tile._retryCount = retryCount + 1;
+            var delay = 1000 * Math.pow(2, retryCount); // 1s, 2s, 4s
+            setTimeout(function() {
+                var src = tile._originalSrc || tile.src;
+                tile.src = '';
+                tile.src = src;
+            }, delay);
+        }
+    });
+
+    return layer;
+}
+
 function initMap() {
     // Apply saved region preset immediately (no async wait)
     var initialCenter = [20, -100];
@@ -229,7 +253,7 @@ function initMap() {
     });
 
     // Default tile layer
-    currentTileLayer = L.tileLayer(TILE_PROVIDERS.carto_dark.url, {
+    currentTileLayer = createTileLayer(TILE_PROVIDERS.carto_dark.url, {
         attribution: TILE_PROVIDERS.carto_dark.attribution,
         maxZoom: parseInt(TILE_PROVIDERS.carto_dark.max_zoom),
     }).addTo(map);
@@ -491,6 +515,15 @@ async function loadNodeData() {
     }
 }
 
+var _clusterRefreshTimer = null;
+function debouncedClusterRefresh() {
+    if (_clusterRefreshTimer) clearTimeout(_clusterRefreshTimer);
+    _clusterRefreshTimer = setTimeout(function() {
+        if (useClustering && clusterGroup) clusterGroup.refreshClusters();
+        _clusterRefreshTimer = null;
+    }, 300);
+}
+
 function renderMarkers() {
     // Diff-based rendering: reuse existing markers, only add/remove/update what changed
 
@@ -604,9 +637,9 @@ function renderMarkers() {
         }
     }
 
-    // Refresh cluster spatial index after marker position updates
+    // Refresh cluster spatial index after marker position updates (debounced to avoid blocking tiles)
     if (useClustering) {
-        clusterGroup.refreshClusters();
+        debouncedClusterRefresh();
     }
 
     document.getElementById('countMeshtastic').textContent = counts.meshtastic;
@@ -763,9 +796,10 @@ function changeTileLayer() {
     if (!provider) return;
 
     if (currentTileLayer) {
+        currentTileLayer.off();
         map.removeLayer(currentTileLayer);
     }
-    currentTileLayer = L.tileLayer(provider.url, {
+    currentTileLayer = createTileLayer(provider.url, {
         attribution: provider.attribution,
         maxZoom: parseInt(provider.max_zoom) || 19,
     }).addTo(map);
@@ -2380,13 +2414,28 @@ async function checkDataHealth() {
 // Auto-refresh
 // =========================================================================
 
-// Auto-refresh interval (silent -- no toast on auto-refresh, upstream improvement)
-var _refreshInterval = setInterval(function() {
-    loadNodeData();
-    if (showTopology) loadTopologyData();
-    if (showWeatherAlerts) loadWeatherAlerts();
-    if (showHeatmap) loadCoverageHeatmap();
-}, 60 * 1000); // Refresh every 60 seconds (WebSocket fallback)
+// Visibility-aware polling — pause when tab is hidden to save Pi resources
+var _refreshInterval = null;
+var REFRESH_MS = 60 * 1000;
+
+function startPolling() {
+    if (_refreshInterval) return;
+    _refreshInterval = setInterval(function() {
+        loadNodeData();
+        if (showTopology) loadTopologyData();
+        if (showWeatherAlerts) loadWeatherAlerts();
+        if (showHeatmap) loadCoverageHeatmap();
+    }, REFRESH_MS);
+}
+
+function stopPolling() {
+    if (_refreshInterval) {
+        clearInterval(_refreshInterval);
+        _refreshInterval = null;
+    }
+}
+
+startPolling();
 
 // Periodic health check (every 2 minutes)
 var _healthInterval = setInterval(checkDataHealth, 2 * 60 * 1000);
@@ -2401,20 +2450,42 @@ var _wsStaleInterval = setInterval(function() {
     }
 }, 60000);
 
-// Force refresh when tab becomes visible again (prevents stale display after sleep/background)
+// Tile health watchdog — detect white screen and force redraw
+var _tileHealthInterval = setInterval(function() {
+    if (!currentTileLayer || !map) return;
+    var container = currentTileLayer.getContainer();
+    if (!container) return;
+    var imgs = container.querySelectorAll('img');
+    var blank = 0;
+    imgs.forEach(function(img) {
+        if (!img.complete || img.naturalWidth === 0) blank++;
+    });
+    if (imgs.length > 4 && blank / imgs.length > 0.5 && navigator.onLine) {
+        console.warn('Tile health: ' + blank + '/' + imgs.length + ' blank, forcing redraw');
+        currentTileLayer.redraw();
+    }
+}, 5 * 60 * 1000);
+
+// Pause polling when tab hidden, resume + refresh when visible
 document.addEventListener('visibilitychange', function() {
-    if (!document.hidden && (Date.now() - lastLoadTime > 30000)) {
-        loadNodeData();
-        if (healthOverlayActive) loadNodeHealthData();
-        if (showWeatherAlerts) loadWeatherAlerts();
+    if (document.hidden) {
+        stopPolling();
+    } else {
+        startPolling();
+        if (Date.now() - lastLoadTime > 30000) {
+            loadNodeData();
+            if (healthOverlayActive) loadNodeHealthData();
+            if (showWeatherAlerts) loadWeatherAlerts();
+        }
     }
 });
 
 // Cleanup on page unload to prevent leaked timers and connections
 window.addEventListener('beforeunload', function() {
-    clearInterval(_refreshInterval);
+    stopPolling();
     clearInterval(_healthInterval);
     clearInterval(_wsStaleInterval);
+    clearInterval(_tileHealthInterval);
     if (ws) { try { ws.close(); } catch (e) { /* ignore */ } }
 });
 
