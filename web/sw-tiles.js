@@ -16,16 +16,11 @@
  *   - tiles.stadiamaps.com      (Stadia Terrain)
  */
 
-const CACHE_NAME = 'meshforge-maps-tiles-v1';
+const CACHE_NAME = 'meshforge-maps-tiles-v2';
 const STATIC_CACHE = 'meshforge-maps-static-v1';
 const API_CACHE = 'meshforge-maps-api-v1';
 const MAX_TILE_CACHE_ITEMS = 1500;  // LRU eviction threshold (~30MB at 20KB/tile, safe for 512MB Pi)
 const API_CACHE_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes for API responses
-
-// 1x1 transparent PNG returned for uncached tiles when offline
-const BLANK_TILE = Uint8Array.from(atob(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQ=='
-), c => c.charCodeAt(0));
 
 // Tile domains to cache
 const TILE_DOMAINS = [
