@@ -258,6 +258,11 @@ function initMap() {
         maxZoom: parseInt(TILE_PROVIDERS.carto_dark.max_zoom),
     }).addTo(map);
 
+    // After zoom completes, allow tiles to load then verify health
+    map.on('zoomend', function() {
+        setTimeout(checkTileHealth, 3000);
+    });
+
     // Cluster group
     clusterGroup = L.markerClusterGroup({
         maxClusterRadius: 50,
@@ -2451,20 +2456,29 @@ var _wsStaleInterval = setInterval(function() {
 }, 60000);
 
 // Tile health watchdog — detect white screen and force redraw
-var _tileHealthInterval = setInterval(function() {
+var _lastTileRedraw = 0;
+var TILE_REDRAW_COOLDOWN = 15000; // 15s between redraws to avoid storms on Pi
+
+function checkTileHealth() {
     if (!currentTileLayer || !map) return;
     var container = currentTileLayer.getContainer();
     if (!container) return;
     var imgs = container.querySelectorAll('img');
     var blank = 0;
     imgs.forEach(function(img) {
-        if (!img.complete || img.naturalWidth === 0) blank++;
+        // naturalWidth <= 1 catches both failed loads (0) and 1x1 blank tiles
+        if (!img.complete || img.naturalWidth <= 1) blank++;
     });
     if (imgs.length > 4 && blank / imgs.length > 0.5 && navigator.onLine) {
+        var now = Date.now();
+        if (now - _lastTileRedraw < TILE_REDRAW_COOLDOWN) return;
+        _lastTileRedraw = now;
         console.warn('Tile health: ' + blank + '/' + imgs.length + ' blank, forcing redraw');
         currentTileLayer.redraw();
     }
-}, 5 * 60 * 1000);
+}
+
+var _tileHealthInterval = setInterval(checkTileHealth, 30 * 1000);
 
 // Pause polling when tab hidden, resume + refresh when visible
 document.addEventListener('visibilitychange', function() {
