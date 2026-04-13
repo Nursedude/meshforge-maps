@@ -250,6 +250,8 @@ function initMap() {
         zoom: initialZoom,
         zoomControl: true,
         attributionControl: true,
+        zoomAnimation: false,
+        fadeAnimation: false,
     });
 
     // Default tile layer
@@ -269,6 +271,7 @@ function initMap() {
         spiderfyOnMaxZoom: true,
         showCoverageOnHover: false,
         zoomToBoundsOnClick: true,
+        animate: false,
         iconCreateFunction: function(cluster) {
             const count = cluster.getChildCount();
             let size = 'small';
