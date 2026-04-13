@@ -188,11 +188,14 @@ async function cacheFirst(request, cacheName) {
         }
         return response;
     } catch (error) {
-        // Network failure with no cache -- return 503 so Leaflet fires tileerror
-        return new Response(BLANK_TILE.buffer, {
+        // Network failure with no cache — return non-image 503 so the
+        // browser's <img> onerror fires and Leaflet's tileerror retry
+        // logic kicks in.  Previous code returned a valid 1x1 PNG which
+        // the browser decoded successfully, silently hiding the failure.
+        return new Response('', {
             status: 503,
             statusText: 'Offline',
-            headers: { 'Content-Type': 'image/png', 'X-Tile-Offline': '1' },
+            headers: { 'Content-Type': 'text/plain', 'X-Tile-Offline': '1' },
         });
     }
 }
