@@ -90,6 +90,8 @@ let isLoading = false;
 let lastLoadTime = 0;
 let featureIndex = new Map();  // node_id -> index in allFeatures for O(1) lookups
 let lastOverlayData = null;  // cached overlay from last successful fetch
+let lastBboxFiltered = false;  // true when server applied a bbox filter on last geojson response
+let lastStatus = null;  // latest /api/status payload for count tooltips
 let consecutiveErrors = 0;
 let ws = null;               // WebSocket connection (real-time updates)
 let wsReconnectTimer = null; // Timer for WebSocket reconnect attempts
@@ -480,6 +482,7 @@ async function fetchVersion() {
         const resp = await fetch(API_BASE + '/api/status');
         if (resp.ok) {
             const status = await resp.json();
+            lastStatus = status;
             if (status.version) {
                 var sub = document.getElementById('headerSubtitle');
                 if (sub) sub.textContent = 'v' + status.version;
@@ -494,6 +497,50 @@ async function fetchVersion() {
         }
     } catch (e) {
         // Non-critical, silently ignore
+    }
+}
+setInterval(fetchVersion, 30000);
+
+// Render a source count in the sidebar and header. When the server applied a
+// bbox filter and the viewport count differs from the total, show "N (of M)".
+// When N is 0, set a title attribute explaining why (disabled / unreachable /
+// no data / outside viewport) using the latest /api/status payload.
+function renderSourceCount(sourceKey, viewCount, sidebarId, headerId) {
+    var sidebar = document.getElementById(sidebarId);
+    var header = document.getElementById(headerId);
+    var total = (lastStatus && lastStatus.source_counts && lastStatus.source_counts[sourceKey]);
+    if (typeof total !== 'number') total = null;
+
+    var display = String(viewCount);
+    if (lastBboxFiltered && total != null && total !== viewCount) {
+        display = viewCount + ' (of ' + total + ')';
+    }
+
+    var title = '';
+    if (viewCount === 0) {
+        var enabledSources = (lastStatus && lastStatus.sources) || [];
+        var health = (lastStatus && lastStatus.source_health && lastStatus.source_health[sourceKey]) || null;
+        if (lastStatus && enabledSources.indexOf(sourceKey) === -1) {
+            title = 'Disabled in lite deployment profile';
+        } else if (total === 0) {
+            if (health && health.last_error) {
+                var age = health.last_error_age_seconds;
+                title = 'Unreachable: ' + health.last_error + (age != null ? ' (' + Math.round(age) + 's ago)' : '');
+            } else {
+                title = 'No nodes reported';
+            }
+        } else if (total > 0) {
+            title = total + ' total — zoom out or pan to see';
+        }
+    }
+
+    if (sidebar) {
+        sidebar.textContent = display;
+        if (title) sidebar.title = title; else sidebar.removeAttribute('title');
+    }
+    if (header) {
+        header.textContent = display;
+        if (title) header.title = title; else header.removeAttribute('title');
     }
 }
 
@@ -703,14 +750,10 @@ function renderMarkers() {
         debouncedClusterRefresh();
     }
 
-    document.getElementById('countMeshtastic').textContent = counts.meshtastic;
-    document.getElementById('countReticulum').textContent = counts.reticulum;
-    document.getElementById('countAredn').textContent = counts.aredn;
-    document.getElementById('countMeshcore').textContent = counts.meshcore;
-    document.getElementById('statMeshtastic').textContent = counts.meshtastic;
-    document.getElementById('statReticulum').textContent = counts.reticulum;
-    document.getElementById('statAredn').textContent = counts.aredn;
-    document.getElementById('statMeshcore').textContent = counts.meshcore;
+    renderSourceCount('meshtastic', counts.meshtastic, 'countMeshtastic', 'statMeshtastic');
+    renderSourceCount('reticulum', counts.reticulum, 'countReticulum', 'statReticulum');
+    renderSourceCount('aredn', counts.aredn, 'countAredn', 'statAredn');
+    renderSourceCount('meshcore', counts.meshcore, 'countMeshcore', 'statMeshcore');
 
     if (openPopupNodeId) {
         const restored = markerRegistry.get(openPopupNodeId);
@@ -720,6 +763,7 @@ function renderMarkers() {
 
 function processGeoJSON(data) {
     allFeatures = data.features || [];
+    lastBboxFiltered = !!(data.properties && data.properties.bbox_filtered);
     // Rebuild feature index for O(1) lookups in WebSocket updates
     featureIndex.clear();
     for (let i = 0; i < allFeatures.length; i++) {
