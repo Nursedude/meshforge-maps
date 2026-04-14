@@ -5,7 +5,7 @@ an AI spend fifteen commits chasing a bug neither of you is looking at.*
 
 ---
 
-A Raspberry Pi in the garage, running the map 24 hours a day. Click zoom —
+A Raspberry Pi in the lab/QTH, running the map 24 hours a day. Click zoom —
 the tiles vanish, the screen goes white, and nothing comes back until you
 hard-reload. Four rounds of "fixes" ship. None of them hold. That was the
 shape of the last two days on `meshforge-maps`, and the pattern is worth
@@ -120,4 +120,4 @@ something the model will volunteer. You have to bring it to the session.
 
 Find us on the mesh.
 
-— nursedude
+— nursedude & Claude (Opus 4.6, 1M context)
