@@ -1484,7 +1484,7 @@ class MapServer:
 
     def __init__(self, config: MapsConfig):
         self._config = config
-        self._aggregator = DataAggregator(config.to_dict())
+        self._aggregator = DataAggregator(config)
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._port: int = 0  # Actual bound port
