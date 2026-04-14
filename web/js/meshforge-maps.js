@@ -260,18 +260,12 @@ function initMap() {
         maxZoom: parseInt(TILE_PROVIDERS.carto_dark.max_zoom),
     }).addTo(map);
 
-    // After zoom completes, allow tiles to load then verify health
-    map.on('zoomend', function() {
-        setTimeout(checkTileHealth, 3000);
-    });
-
     // Cluster group
     clusterGroup = L.markerClusterGroup({
         maxClusterRadius: 50,
         spiderfyOnMaxZoom: true,
         showCoverageOnHover: false,
         zoomToBoundsOnClick: true,
-        animate: false,
         iconCreateFunction: function(cluster) {
             const count = cluster.getChildCount();
             let size = 'small';
@@ -2470,7 +2464,7 @@ function checkTileHealth() {
     var blank = 0;
     imgs.forEach(function(img) {
         // naturalWidth <= 1 catches both failed loads (0) and 1x1 blank tiles
-        if (!img.complete || img.naturalWidth <= 1) blank++;
+        if (img.complete && img.naturalWidth <= 1) blank++;
     });
     if (imgs.length > 4 && blank / imgs.length > 0.5 && navigator.onLine) {
         var now = Date.now();
