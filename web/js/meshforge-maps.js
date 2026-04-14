@@ -494,10 +494,37 @@ async function fetchVersion() {
                 if (badge) badge.style.display = '';
                 if (count) count.textContent = status.mqtt_node_count;
             }
+            updateHeaderSysInfo(status.hardware);
         }
     } catch (e) {
         // Non-critical, silently ignore
     }
+}
+
+function updateHeaderSysInfo(hw) {
+    var el = document.getElementById('headerSysInfo');
+    if (!el || !hw) return;
+    var model = (hw.device_model || 'unknown').replace(/^Raspberry Pi /, 'Pi ');
+    var parts = [
+        model,
+        (hw.total_memory_mb || 0) + 'MB',
+        'RSS ' + (hw.rss_mb != null ? hw.rss_mb : '?') + 'MB',
+    ];
+    if (Array.isArray(hw.load_avg) && hw.load_avg.length > 0) {
+        parts.push('load ' + Number(hw.load_avg[0]).toFixed(2));
+    }
+    var profile = hw.deployment_profile || '';
+    var profileColor = profile === 'lite' ? '#ffa726' : profile === 'full' ? '#66bb6a' : '#78909c';
+    el.textContent = parts.join(' · ') + ' · profile: ';
+    var chip = document.createElement('span');
+    chip.textContent = profile || 'unknown';
+    chip.style.color = profileColor;
+    chip.style.fontWeight = '600';
+    el.appendChild(chip);
+    el.title = 'Device: ' + model + '\nTotal RAM: ' + hw.total_memory_mb + ' MB\n'
+        + 'Process RSS: ' + hw.rss_mb + ' MB\nCPU cores: ' + hw.cpu_count + '\n'
+        + 'Load avg (1/5/15 min): ' + (hw.load_avg || []).map(function(v){return Number(v).toFixed(2);}).join(' / ')
+        + '\nDeployment profile: ' + profile;
 }
 setInterval(fetchVersion, 30000);
 

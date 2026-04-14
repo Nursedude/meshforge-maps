@@ -14,6 +14,9 @@ import gzip
 import hmac
 import json
 import logging
+import os
+import platform
+import resource
 import threading
 import time
 from dataclasses import dataclass, field
@@ -38,6 +41,49 @@ from .utils.shared_health_state import SharedHealthStateReader
 from .utils.websocket_server import MapWebSocketServer
 
 logger = logging.getLogger(__name__)
+
+
+_DEVICE_MODEL: Optional[str] = None
+_TOTAL_MEMORY_MB: Optional[int] = None
+
+
+def _cached_device_model() -> str:
+    global _DEVICE_MODEL
+    if _DEVICE_MODEL is None:
+        try:
+            with open("/proc/cpuinfo") as fh:
+                for line in fh:
+                    if line.startswith("Model"):
+                        _DEVICE_MODEL = line.split(":", 1)[1].strip()
+                        break
+        except OSError:
+            pass
+        if not _DEVICE_MODEL:
+            _DEVICE_MODEL = platform.machine() or "unknown"
+    return _DEVICE_MODEL
+
+
+def _cached_total_memory_mb() -> int:
+    global _TOTAL_MEMORY_MB
+    if _TOTAL_MEMORY_MB is None:
+        try:
+            with open("/proc/meminfo") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        _TOTAL_MEMORY_MB = int(line.split()[1]) // 1024
+                        break
+        except OSError:
+            pass
+        if _TOTAL_MEMORY_MB is None:
+            _TOTAL_MEMORY_MB = 0
+    return _TOTAL_MEMORY_MB
+
+
+def _current_load_avg() -> List[float]:
+    try:
+        return list(os.getloadavg())
+    except OSError:
+        return [0.0, 0.0, 0.0]
 
 
 def _safe_query_param(query: Dict[str, List[str]], key: str,
@@ -1332,6 +1378,17 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "db_path": str(nh._db_path) if nh else None,
         }
 
+        # ru_maxrss is KB on Linux, bytes on macOS. Convert to MB for Linux (our deploy target).
+        rss_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+        hardware = {
+            "device_model": _cached_device_model(),
+            "total_memory_mb": _cached_total_memory_mb(),
+            "rss_mb": rss_mb,
+            "cpu_count": os.cpu_count() or 0,
+            "load_avg": _current_load_avg(),
+            "deployment_profile": "lite" if (config and config.is_lite) else "full",
+        }
+
         self._send_json({
             "status": "ok",
             "extension": "meshforge-maps",
@@ -1348,6 +1405,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "websocket": websocket_stats,
             "event_bus": event_bus_stats,
             "alerts": self._ctx.alert_engine.get_summary() if self._ctx.alert_engine else None,
+            "hardware": hardware,
         })
 
     # Cache for PyPI latest version (avoid hammering PyPI on every request)
