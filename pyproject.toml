@@ -1,6 +1,6 @@
 [project]
 name = "meshforge-maps"
-version = "0.7.0-beta"
+version = "0.7.1-beta"
 description = "Unified multi-source mesh network map for MeshForge"
 requires-python = ">=3.9"
 license = "GPL-3.0"
