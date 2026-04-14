@@ -24,6 +24,7 @@ from .base import (
     is_node_online,
     make_feature,
     make_feature_collection,
+    point_in_bboxes,
     validate_coordinates,
 )
 
@@ -50,9 +51,11 @@ class MeshCoreCollector(BaseCollector):
         enable_map: bool = True,
         cache_ttl_seconds: int = 1800,
         max_retries: int = 0,
+        region_bboxes: Optional[List[List[float]]] = None,
     ):
         super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._enable_map = enable_map
+        self._region_bboxes = region_bboxes
 
     def _fetch(self) -> Dict[str, Any]:
         features: List[Dict[str, Any]] = []
@@ -79,10 +82,18 @@ class MeshCoreCollector(BaseCollector):
                 logger.debug("MeshCore map: unexpected response format")
                 return features
 
+            skipped_oob = 0
             for node in data:
+                if self._region_bboxes and not point_in_bboxes(
+                    node.get("adv_lat"), node.get("adv_lon"), self._region_bboxes
+                ):
+                    skipped_oob += 1
+                    continue
                 feature = self._parse_meshcore_node(node)
                 if feature:
                     features.append(feature)
+            if self._region_bboxes and skipped_oob:
+                logger.debug("MeshCore map: skipped %d nodes outside region bbox", skipped_oob)
 
             if features:
                 logger.debug("MeshCore map returned %d nodes", len(features))

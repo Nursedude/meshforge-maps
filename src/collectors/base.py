@@ -104,6 +104,39 @@ def validate_coordinates(
     return (lat, lon)
 
 
+def normalize_bboxes(bbox: Any) -> Optional[List[List[float]]]:
+    """Coerce a REGION_PRESETS bbox value to a list of [s,w,n,e] tuples, or None.
+
+    Accepts single `[s,w,n,e]`, multi `[[s,w,n,e], ...]`, or None (= no scope).
+    """
+    if not bbox:
+        return None
+    if isinstance(bbox[0], (int, float)):
+        return [list(bbox)]
+    return [list(b) for b in bbox if b]
+
+
+def point_in_bboxes(lat: Any, lon: Any, bboxes: Optional[List[List[float]]]) -> bool:
+    """Return True if (lat, lon) falls inside any bbox in the list.
+
+    Pass-through when bboxes is None/empty. Rejects non-numeric coordinates.
+    """
+    if not bboxes:
+        return True
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        return False
+    for bbox in bboxes:
+        if len(bbox) < 4:
+            continue
+        s, w, n, e = bbox[0], bbox[1], bbox[2], bbox[3]
+        if s <= lat_f <= n and w <= lon_f <= e:
+            return True
+    return False
+
+
 def make_feature(
     node_id: str,
     lat: float,
