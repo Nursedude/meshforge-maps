@@ -531,7 +531,7 @@ class NodeHistoryDB:
                 # Always checkpoint WAL — runs every ~120s via bg collect;
                 # without this, WAL grows unbounded when no rows are pruned
                 try:
-                    self._conn.execute("PRAGMA incremental_vacuum(100)")
+                    self._conn.execute("PRAGMA incremental_vacuum(2000)")
                 except Exception as ve:
                     logger.debug("Incremental vacuum failed: %s", ve)
                 try:

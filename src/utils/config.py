@@ -346,6 +346,7 @@ class MapsConfig:
         # Lite-mode overrides — reduce CPU, memory, and I/O
         _lite_overrides = {
             "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 60, 60),
+            "enable_meshcore": lambda v: False,
             "enable_meshcore_map": lambda v: False,
             "enable_aredn_worldmap": lambda v: False,
             "enable_config_drift": lambda v: False,
