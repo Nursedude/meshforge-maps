@@ -17,6 +17,7 @@
  */
 
 const CACHE_NAME = 'meshforge-maps-tiles-v2';
+const DEBUG_SW = true;  // DIAGNOSTIC: log tile fetch failures to console
 const STATIC_CACHE = 'meshforge-maps-static-v1';
 const API_CACHE = 'meshforge-maps-api-v1';
 const MAX_TILE_CACHE_ITEMS = 1500;  // LRU eviction threshold (~30MB at 20KB/tile, safe for 512MB Pi)
@@ -187,6 +188,7 @@ async function cacheFirst(request, cacheName) {
         // browser's <img> onerror fires and Leaflet's tileerror retry
         // logic kicks in.  Previous code returned a valid 1x1 PNG which
         // the browser decoded successfully, silently hiding the failure.
+        if (DEBUG_SW) console.warn('[SW] tile fetch failed', request.url, error && error.message);
         return new Response('', {
             status: 503,
             statusText: 'Offline',
