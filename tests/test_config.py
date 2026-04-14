@@ -186,6 +186,22 @@ class TestNoRadioProfile:
         assert config.get("enable_hamclock") is True
 
 
+class TestLiteModeOverrides:
+    """Lite deployment profile must disable heavy collectors and subsystems."""
+
+    def test_lite_disables_meshcore_collector(self, tmp_config):
+        config = MapsConfig(config_path=tmp_config)
+        config.set("deployment_profile", "lite")
+        config.set("enable_meshcore", True)
+        assert config.get_effective("enable_meshcore") is False
+
+    def test_full_profile_preserves_meshcore(self, tmp_config):
+        config = MapsConfig(config_path=tmp_config)
+        config.set("deployment_profile", "full")
+        config.set("enable_meshcore", True)
+        assert config.get_effective("enable_meshcore") is True
+
+
 class TestTileProviders:
     """Tests for tile provider definitions."""
 
