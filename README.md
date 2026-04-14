@@ -3,6 +3,8 @@
 Visualization plugin for the [MeshForge ecosystem](https://github.com/Nursedude/meshforge/blob/main/.claude/foundations/meshforge_ecosystem.md)
 
 > **Read the white paper:** [Building MeshForge Maps -- AI-Assisted Mesh Network Cartography](https://nursedude.substack.com/p/building-meshforge-maps)
+>
+> **More field notes:** [`docs/substack/`](docs/substack/) -- debugging post-mortems and collaboration notes from this project.
 
 ![Version](https://img.shields.io/badge/version-0.7.0--beta-blue)
 ![Status](https://img.shields.io/badge/status-beta-orange)
