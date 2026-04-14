@@ -862,8 +862,13 @@ function changeTileLayer() {
     const provider = TILE_PROVIDERS[key];
     if (!provider) return;
 
+    // Skip if this provider is already active. Prevents double-creation
+    // during init (initMap creates default → loadConfig re-calls with same
+    // provider → old layer's map events leak, crashing zoom with
+    // "getCenter of null" in GridLayer._resetView).
+    if (currentTileLayer && currentTileLayer._url === provider.url) return;
+
     if (currentTileLayer) {
-        currentTileLayer.off();
         map.removeLayer(currentTileLayer);
     }
     currentTileLayer = createTileLayer(provider.url, {
