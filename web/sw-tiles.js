@@ -18,7 +18,7 @@
 
 const CACHE_NAME = 'meshforge-maps-tiles-v2';
 const DEBUG_SW = true;  // DIAGNOSTIC: log tile fetch failures to console
-const STATIC_CACHE = 'meshforge-maps-static-v1';
+const STATIC_CACHE = 'meshforge-maps-static-v2';
 const API_CACHE = 'meshforge-maps-api-v1';
 const MAX_TILE_CACHE_ITEMS = 1500;  // LRU eviction threshold (~30MB at 20KB/tile, safe for 512MB Pi)
 const API_CACHE_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes for API responses
