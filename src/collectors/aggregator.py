@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .aredn_collector import AREDNCollector
 from .base import (
     deduplicate_features, make_feature_collection, make_geometry_feature,
-    make_link_feature,
+    make_link_feature, normalize_bboxes,
 )
 from .hamclock_collector import HamClockCollector
 from .meshtastic_collector import MeshtasticCollector
@@ -24,6 +24,7 @@ from .meshcore_collector import MeshCoreCollector
 from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
 from .noaa_alert_collector import NOAAAlertCollector
 from .reticulum_collector import ReticulumCollector
+from ..utils.config import REGION_PRESETS
 from ..utils.event_bus import EventBus
 from ..utils.perf_monitor import PerfMonitor
 
@@ -68,6 +69,24 @@ class DataAggregator:
         is_lite = getattr(config, "is_lite", False)
         if is_lite:
             logger.info("Lite deployment profile active (reduced collectors, longer cache)")
+
+        # Region scope: clip big global collectors (meshcore, AREDN worldmap) to
+        # the configured region preset so lite-mode Pis can still include them.
+        preset_key = config.get("region_preset")
+        region_bboxes = normalize_bboxes(
+            REGION_PRESETS.get(preset_key, {}).get("bbox") if preset_key else None
+        )
+        # Safety: in lite mode with no region scope, keep meshcore + aredn_worldmap
+        # off — fetching 34K global nodes on a Pi is the condition the 0.7.1 fix
+        # was created to prevent.
+        lite_unscoped = is_lite and not region_bboxes
+        if region_bboxes:
+            logger.info(
+                "Region scope '%s' active: %d bbox(es) applied to meshcore/aredn_worldmap",
+                preset_key, len(region_bboxes),
+            )
+        elif lite_unscoped:
+            logger.info("Lite + world/no region: meshcore and AREDN worldmap disabled (safety)")
 
         # Initialize live MQTT subscriber for Meshtastic
         self._mqtt_subscriber: Optional[MQTTSubscriber] = None
@@ -121,18 +140,21 @@ class DataAggregator:
             )
 
         if config.get("enable_aredn", True):
+            aredn_worldmap = _get("enable_aredn_worldmap", True) and not lite_unscoped
             self._collectors["aredn"] = AREDNCollector(
                 node_targets=config.get("aredn_node_targets"),
-                enable_worldmap=_get("enable_aredn_worldmap", True),
+                enable_worldmap=aredn_worldmap,
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
+                region_bboxes=region_bboxes,
             )
 
-        if _get("enable_meshcore", True):
+        if _get("enable_meshcore", True) and not lite_unscoped:
             self._collectors["meshcore"] = MeshCoreCollector(
                 enable_map=_get("enable_meshcore_map", True),
                 cache_ttl_seconds=max(cache_ttl, 1800),  # 30min min for large API
                 max_retries=retries,
+                region_bboxes=region_bboxes,
             )
 
         # NOAA weather alerts (polygon overlay — not included in collect_all)

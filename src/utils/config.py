@@ -41,6 +41,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "map_center_lon": -100.0,
     "map_default_zoom": 4,
     "cache_ttl_minutes": 15,
+    "node_history_throttle_seconds": 300,   # 5 min — min gap between observations per node
+    "node_history_retention_days": 3,       # keep last 3 days of observations
     "http_port": 8808,
     "http_host": "127.0.0.1",
     "ws_host": "127.0.0.1",
@@ -346,9 +348,11 @@ class MapsConfig:
         # Lite-mode overrides — reduce CPU, memory, and I/O
         _lite_overrides = {
             "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 60, 60),
-            "enable_meshcore": lambda v: False,
-            "enable_meshcore_map": lambda v: False,
-            "enable_aredn_worldmap": lambda v: False,
+            # meshcore + aredn_worldmap are now region-scoped in lite (see
+            # DataAggregator); the aggregator disables them only when no
+            # region_preset is set (safety for lite + world).
+            "node_history_throttle_seconds": lambda v: max(v if isinstance(v, (int, float)) else 600, 600),
+            "node_history_retention_days": lambda v: min(v if isinstance(v, (int, float)) else 1, 1),
             "enable_config_drift": lambda v: False,
             "enable_node_state": lambda v: False,
             "enable_analytics": lambda v: False,

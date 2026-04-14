@@ -187,19 +187,27 @@ class TestNoRadioProfile:
 
 
 class TestLiteModeOverrides:
-    """Lite deployment profile must disable heavy collectors and subsystems."""
+    """Lite deployment profile must tighten resource-heavy knobs."""
 
-    def test_lite_disables_meshcore_collector(self, tmp_config):
+    def test_lite_tightens_history_retention(self, tmp_config):
+        # Lite caps retention at 1 day even if user configured more
         config = MapsConfig(config_path=tmp_config)
         config.set("deployment_profile", "lite")
-        config.set("enable_meshcore", True)
-        assert config.get_effective("enable_meshcore") is False
+        config.set("node_history_retention_days", 7)
+        assert config.get_effective("node_history_retention_days") == 1
 
-    def test_full_profile_preserves_meshcore(self, tmp_config):
+    def test_lite_raises_history_throttle(self, tmp_config):
+        # Lite forces at least 600s between observations per node
+        config = MapsConfig(config_path=tmp_config)
+        config.set("deployment_profile", "lite")
+        config.set("node_history_throttle_seconds", 60)
+        assert config.get_effective("node_history_throttle_seconds") == 600
+
+    def test_full_profile_preserves_retention(self, tmp_config):
         config = MapsConfig(config_path=tmp_config)
         config.set("deployment_profile", "full")
-        config.set("enable_meshcore", True)
-        assert config.get_effective("enable_meshcore") is True
+        config.set("node_history_retention_days", 7)
+        assert config.get_effective("node_history_retention_days") == 7
 
 
 class TestTileProviders:
