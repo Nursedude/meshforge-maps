@@ -267,6 +267,27 @@ function initMap() {
         zoomAnimation: false,
         fadeAnimation: false,
     });
+    window.mfMap = map;  // DIAGNOSTIC: expose for console inspection
+
+    // DIAGNOSTIC: capture the Leaflet getCenter-null bug with full layer info
+    window.addEventListener('error', function(evt) {
+        if (evt.error && /getCenter/.test(evt.error.message || '')) {
+            try {
+                var layers = Object.values(map._layers).map(function(l) {
+                    return {
+                        type: l.constructor && l.constructor.name || 'unknown',
+                        hasMap: !!l._map,
+                        url: l._url || '',
+                        options: l.options ? Object.keys(l.options).join(',') : '',
+                    };
+                });
+                console.error('[DIAG] getCenter null caught. Layers on map:', layers);
+                console.error('[DIAG] map._events keys:', Object.keys(map._events || {}));
+            } catch (e) {
+                console.error('[DIAG] error during diag capture:', e);
+            }
+        }
+    });
 
     // Default tile layer
     currentTileLayer = createTileLayer(TILE_PROVIDERS.carto_dark.url, {
