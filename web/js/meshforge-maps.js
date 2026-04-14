@@ -208,16 +208,30 @@ let allFeatures = [];
 // Initialization
 // =========================================================================
 
+// DIAGNOSTIC: tile event counters reset on each zoomend
+var _tileStats = { start: 0, load: 0, error: 0, unload: 0 };
+
 function createTileLayer(url, options) {
     var layer = L.tileLayer(url, Object.assign({ errorTileUrl: '' }, options));
 
     layer.on('tileloadstart', function(e) {
         if (!e.tile._originalSrc) e.tile._originalSrc = e.tile.src;
+        _tileStats.start++;
+    });
+
+    layer.on('tileload', function(e) {
+        _tileStats.load++;
+    });
+
+    layer.on('tileunload', function(e) {
+        _tileStats.unload++;
     });
 
     layer.on('tileerror', function(e) {
+        _tileStats.error++;
         var tile = e.tile;
         var retryCount = tile._retryCount || 0;
+        console.warn('[tile] error', { url: tile._originalSrc || tile.src, retry: retryCount });
         if (retryCount < 3) {
             tile._retryCount = retryCount + 1;
             var delay = 1000 * Math.pow(2, retryCount); // 1s, 2s, 4s
@@ -259,6 +273,30 @@ function initMap() {
         attribution: TILE_PROVIDERS.carto_dark.attribution,
         maxZoom: parseInt(TILE_PROVIDERS.carto_dark.max_zoom),
     }).addTo(map);
+
+    // DIAGNOSTIC: log zoom state and tile counts on every zoomend
+    map.on('zoomstart', function() {
+        _tileStats = { start: 0, load: 0, error: 0, unload: 0 };
+        console.log('[tile] zoomstart at zoom', map.getZoom());
+    });
+    map.on('zoomend', function() {
+        var container = currentTileLayer && currentTileLayer.getContainer();
+        var imgs = container ? container.querySelectorAll('img') : [];
+        var loaded = 0, broken = 0;
+        imgs.forEach(function(img) {
+            if (img.complete && img.naturalWidth > 1) loaded++;
+            else if (img.complete && img.naturalWidth <= 1) broken++;
+        });
+        console.log('[tile] zoomend', {
+            zoom: map.getZoom(),
+            tileZoom: currentTileLayer && currentTileLayer._tileZoom,
+            layerAttached: map.hasLayer(currentTileLayer),
+            events: Object.assign({}, _tileStats),
+            domImgs: imgs.length,
+            loaded: loaded,
+            broken: broken,
+        });
+    });
 
     // Cluster group
     clusterGroup = L.markerClusterGroup({
@@ -791,6 +829,12 @@ function safeColor(color) {
 // =========================================================================
 // UI Controls
 // =========================================================================
+
+function reloadTiles() {
+    console.log('[tile] manual reload requested');
+    if (currentTileLayer) currentTileLayer.redraw();
+    if (map) map.invalidateSize();
+}
 
 function changeTileLayer() {
     const key = document.getElementById('tileSelect').value;
