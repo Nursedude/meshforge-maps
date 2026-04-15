@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
 from .collectors.aggregator import DataAggregator
-from .collectors.base import validate_node_id
+from .collectors.base import point_in_bboxes, validate_node_id
 from .utils.alert_engine import Alert, AlertEngine
 from .utils.analytics import HistoricalAnalytics
 from .utils.config import NETWORK_COLORS, REGION_PRESETS, TILE_PROVIDERS, MapsConfig
@@ -526,11 +526,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                         gc = f.get("geometry", {}).get("coordinates", [])
                         if len(gc) < 2:
                             continue
-                        lon, lat = gc[0], gc[1]
-                        for south, west, north, east in bboxes:
-                            if south <= lat <= north and west <= lon <= east:
-                                filtered.append(f)
-                                break
+                        if point_in_bboxes(gc[1], gc[0], bboxes):
+                            filtered.append(f)
                     data = dict(data)
                     data["features"] = filtered
                     props = dict(data.get("properties", {}))
@@ -1402,6 +1399,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "source_health": source_health,
             "mqtt_live": mqtt_status,
             "mqtt_node_count": mqtt_nodes,
+            "mqtt_brokers": aggregator.mqtt_broker_status() if aggregator else [],
             "uptime_seconds": uptime,
             "data_age_seconds": data_age,
             "data_stale": data_stale,

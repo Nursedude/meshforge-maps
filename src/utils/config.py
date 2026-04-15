@@ -55,6 +55,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "mqtt_username": "meshdev",
     "mqtt_password": "large4cats",
     "mqtt_use_tls": False,
+    # Optional: additional MQTT brokers that feed the same node store in parallel.
+    # Each entry: {"broker": host, "port": int, "topic": str, "username": str,
+    # "password": str, "use_tls": bool, "label": str}. If empty, only the scalar
+    # mqtt_* keys above are used.
+    "mqtt_brokers": [],
     # CORS: None = same-origin (no CORS headers sent); set to "*" or a specific origin to enable
     "cors_allowed_origin": None,
     # API key for protecting /api/ endpoints (None = no auth required)

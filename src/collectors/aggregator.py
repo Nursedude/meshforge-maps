@@ -35,6 +35,42 @@ logger = logging.getLogger(__name__)
 DEFAULT_COLLECTOR_RETRIES = 2
 
 
+def _resolve_broker_specs(config) -> List[Dict[str, Any]]:
+    """Build the list of MQTT broker specs from config.
+
+    If `mqtt_brokers` is populated, each entry is used as-is (with safe defaults).
+    Otherwise a single spec is synthesized from the legacy scalar mqtt_* keys so
+    existing single-broker configs keep working.
+    """
+    brokers_raw = config.get("mqtt_brokers") or []
+    specs: List[Dict[str, Any]] = []
+    if brokers_raw:
+        for idx, entry in enumerate(brokers_raw):
+            if not isinstance(entry, dict) or not entry.get("broker"):
+                logger.warning("Skipping invalid mqtt_brokers entry at index %d", idx)
+                continue
+            specs.append({
+                "broker": entry["broker"],
+                "port": int(entry.get("port", 1883)),
+                "topic": entry.get("topic", "msh/#"),
+                "username": entry.get("username"),
+                "password": entry.get("password"),
+                "use_tls": bool(entry.get("use_tls", False)),
+                "label": entry.get("label"),
+            })
+    if not specs:
+        specs.append({
+            "broker": config.get("mqtt_broker", "mqtt.meshtastic.org"),
+            "port": int(config.get("mqtt_port", 1883)),
+            "topic": config.get("mqtt_topic", "msh/#"),
+            "username": config.get("mqtt_username", "meshdev"),
+            "password": config.get("mqtt_password", "large4cats"),
+            "use_tls": bool(config.get("mqtt_use_tls", False)),
+            "label": "primary",
+        })
+    return specs
+
+
 class DataAggregator:
     """Aggregates data from all enabled collectors into unified GeoJSON."""
 
@@ -89,27 +125,38 @@ class DataAggregator:
         elif lite_unscoped:
             logger.info("Lite + world/no region: meshcore and AREDN worldmap disabled (safety)")
 
-        # Initialize live MQTT subscriber for Meshtastic
+        # Initialize live MQTT subscribers for Meshtastic.
+        # Multiple brokers can feed the same MQTTNodeStore concurrently; the
+        # first entry is the "primary" used for topology/stats reporting.
         self._mqtt_subscriber: Optional[MQTTSubscriber] = None
+        self._mqtt_secondary: List[MQTTSubscriber] = []
         mqtt_store: Optional[MQTTNodeStore] = None
         if config.get("enable_meshtastic", True):
-            # Lite mode: cap MQTT store at 1000 nodes (vs 10K default)
-            node_store = MQTTNodeStore(max_nodes=1000) if is_lite else None
-            self._mqtt_subscriber = MQTTSubscriber(
-                broker=config.get("mqtt_broker", "mqtt.meshtastic.org"),
-                port=config.get("mqtt_port", 1883),
-                topic=config.get("mqtt_topic", "msh/#"),
-                username=config.get("mqtt_username", "meshdev"),
-                password=config.get("mqtt_password", "large4cats"),
-                tls=config.get("mqtt_use_tls", False),
-                node_store=node_store,
-                event_bus=self._event_bus,
-            )
-            if self._mqtt_subscriber.available:
-                self._mqtt_subscriber.start()
+            node_store = MQTTNodeStore(max_nodes=1000) if is_lite else MQTTNodeStore()
+            broker_specs = _resolve_broker_specs(config)
+            for idx, spec in enumerate(broker_specs):
+                sub = MQTTSubscriber(
+                    broker=spec["broker"],
+                    port=spec["port"],
+                    topic=spec["topic"],
+                    username=spec.get("username"),
+                    password=spec.get("password"),
+                    tls=spec.get("use_tls", False),
+                    node_store=node_store,
+                    event_bus=self._event_bus if idx == 0 else None,
+                )
+                if not sub.available:
+                    logger.warning("MQTT: paho-mqtt unavailable; skipping broker %s", spec["broker"])
+                    continue
+                sub.start()
+                if self._mqtt_subscriber is None:
+                    self._mqtt_subscriber = sub
+                else:
+                    self._mqtt_secondary.append(sub)
+                logger.info("MQTT broker started: %s:%d (%s)",
+                            spec["broker"], spec["port"], spec.get("label") or "primary" if idx == 0 else spec.get("label") or f"broker{idx}")
+            if self._mqtt_subscriber is not None:
                 mqtt_store = self._mqtt_subscriber.store
-            else:
-                self._mqtt_subscriber = None
 
         if config.get("enable_meshtastic", True):
             self._collectors["meshtastic"] = MeshtasticCollector(
@@ -129,6 +176,7 @@ class DataAggregator:
                 enable_rmap_public=config.get("enable_rmap_public", True),
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
+                region_bboxes=region_bboxes,
             )
 
         if config.get("enable_hamclock", True):
@@ -465,41 +513,70 @@ class DataAggregator:
 
     @property
     def mqtt_subscriber(self) -> Optional[MQTTSubscriber]:
-        """The MQTT subscriber instance, or None if not configured."""
+        """Primary MQTT subscriber (first broker) used for topology/stats."""
         return self._mqtt_subscriber
 
+    @property
+    def mqtt_subscribers(self) -> List[MQTTSubscriber]:
+        """All active MQTT subscribers (primary + secondary)."""
+        subs: List[MQTTSubscriber] = []
+        if self._mqtt_subscriber is not None:
+            subs.append(self._mqtt_subscriber)
+        subs.extend(self._mqtt_secondary)
+        return subs
+
+    def mqtt_broker_status(self) -> List[Dict[str, Any]]:
+        """Per-broker connection status for /api/status."""
+        out = []
+        for sub in self.mqtt_subscribers:
+            out.append({
+                "broker": getattr(sub, "_broker", None),
+                "port": getattr(sub, "_port", None),
+                "topic": getattr(sub, "_topic", None),
+                "connected": sub._connected.is_set() if hasattr(sub, "_connected") else False,
+            })
+        return out
+
     def restart_mqtt(self, config: Dict[str, Any]) -> bool:
-        """Restart the MQTT subscriber with updated config. Returns True on success."""
-        # Stop existing subscriber
-        if self._mqtt_subscriber:
-            self._mqtt_subscriber.stop()
-            self._mqtt_subscriber = None
+        """Restart all MQTT subscribers with updated config. Returns True on success."""
+        for sub in self.mqtt_subscribers:
+            sub.stop()
+        self._mqtt_subscriber = None
+        self._mqtt_secondary = []
 
         if not config.get("enable_meshtastic", True):
             logger.info("MQTT restart skipped: meshtastic disabled")
             return False
 
-        self._mqtt_subscriber = MQTTSubscriber(
-            broker=config.get("mqtt_broker", "mqtt.meshtastic.org"),
-            port=config.get("mqtt_port", 1883),
-            topic=config.get("mqtt_topic", "msh/#"),
-            username=config.get("mqtt_username", "meshdev"),
-            password=config.get("mqtt_password", "large4cats"),
-            tls=config.get("mqtt_use_tls", False),
-            event_bus=self._event_bus,
-        )
-        if not self._mqtt_subscriber.available:
-            logger.warning("MQTT restart: paho-mqtt not available")
-            self._mqtt_subscriber = None
+        is_lite = getattr(config, "is_lite", False)
+        node_store = MQTTNodeStore(max_nodes=1000) if is_lite else MQTTNodeStore()
+        for idx, spec in enumerate(_resolve_broker_specs(config)):
+            sub = MQTTSubscriber(
+                broker=spec["broker"],
+                port=spec["port"],
+                topic=spec["topic"],
+                username=spec.get("username"),
+                password=spec.get("password"),
+                tls=spec.get("use_tls", False),
+                node_store=node_store,
+                event_bus=self._event_bus if idx == 0 else None,
+            )
+            if not sub.available:
+                logger.warning("MQTT restart: paho-mqtt unavailable")
+                continue
+            sub.start()
+            if self._mqtt_subscriber is None:
+                self._mqtt_subscriber = sub
+            else:
+                self._mqtt_secondary.append(sub)
+            logger.info("MQTT broker restarted: %s:%d", spec["broker"], spec["port"])
+
+        if self._mqtt_subscriber is None:
             return False
 
-        self._mqtt_subscriber.start()
-        # Update the MeshtasticCollector's mqtt_store reference
         meshtastic = self._collectors.get("meshtastic")
         if meshtastic and hasattr(meshtastic, "_mqtt_store"):
             meshtastic._mqtt_store = self._mqtt_subscriber.store
-        logger.info("MQTT subscriber restarted with broker=%s:%d",
-                     config.get("mqtt_broker"), config.get("mqtt_port"))
         return True
 
     def clear_all_caches(self) -> None:
@@ -510,10 +587,11 @@ class DataAggregator:
             self._cached_result = None
 
     def shutdown(self) -> None:
-        """Stop MQTT subscriber, reset event bus, and release resources."""
-        if self._mqtt_subscriber:
-            self._mqtt_subscriber.stop()
-            self._mqtt_subscriber = None
+        """Stop MQTT subscribers, reset event bus, and release resources."""
+        for sub in self.mqtt_subscribers:
+            sub.stop()
+        self._mqtt_subscriber = None
+        self._mqtt_secondary = []
         if self._obs_thread and self._obs_thread.is_alive():
             self._obs_thread.join(timeout=30)
         self._event_bus.reset()
