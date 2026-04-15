@@ -561,7 +561,11 @@ function renderSourceCount(sourceKey, viewCount, sidebarId, headerId) {
         ? ' in ' + scopeLabel : '';
 
     var display = String(viewCount);
-    if (lastBboxFiltered && total != null && total !== viewCount) {
+    // Always show "(of M)" when the backend reports a meaningful total, so the
+    // format is consistent across sources. Skip when total is 0 (empty or
+    // disabled — tooltip explains that case) and when it would just say
+    // "0 (of 0)".
+    if (total != null && total > 0) {
         display = viewCount + ' (of ' + total + scopeSuffix + ')';
     }
 
