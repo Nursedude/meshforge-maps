@@ -34,7 +34,7 @@ from .base import (
     is_node_online,
     make_feature,
     make_feature_collection,
-    point_in_bboxes,
+    point_in_region,
     validate_coordinates,
 )
 
@@ -68,11 +68,13 @@ class AREDNCollector(BaseCollector):
         cache_ttl_seconds: int = 900,
         max_retries: int = 0,
         region_bboxes: Optional[List[List[float]]] = None,
+        region_polygons: Optional[List[List[List[float]]]] = None,
     ):
         super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._node_targets = node_targets or list(DEFAULT_AREDN_NODES)
         self._enable_worldmap = enable_worldmap
         self._region_bboxes = region_bboxes
+        self._region_polygons = region_polygons
         self._topo_lock = threading.Lock()
         # Topology links from LQM data (source_name -> [{neighbor, snr, quality, ...}])
         self._lqm_links: List[Dict[str, Any]] = []
@@ -355,17 +357,19 @@ class AREDNCollector(BaseCollector):
 
             reader = csv.DictReader(io.StringIO(text))
             skipped_oob = 0
+            scoped = self._region_bboxes or self._region_polygons
             for row in reader:
-                if self._region_bboxes and not point_in_bboxes(
-                    row.get("lat"), row.get("lon"), self._region_bboxes
+                if scoped and not point_in_region(
+                    row.get("lat"), row.get("lon"),
+                    self._region_bboxes, self._region_polygons,
                 ):
                     skipped_oob += 1
                     continue
                 feature = self._parse_worldmap_row(row)
                 if feature:
                     features.append(feature)
-            if self._region_bboxes and skipped_oob:
-                logger.debug("AREDN worldmap: skipped %d rows outside region bbox", skipped_oob)
+            if scoped and skipped_oob:
+                logger.debug("AREDN worldmap: skipped %d rows outside region scope", skipped_oob)
             if features:
                 logger.debug("AREDN worldmap returned %d nodes", len(features))
         except (URLError, OSError, ValueError) as e:

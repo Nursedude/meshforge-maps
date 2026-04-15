@@ -144,6 +144,61 @@ def point_in_bboxes(lat: Any, lon: Any, bboxes: Optional[List[List[float]]]) -> 
     return False
 
 
+def point_in_polygon(lat: Any, lon: Any, polygon: List[List[float]]) -> bool:
+    """Ray-cast even-odd point-in-polygon test.
+
+    `polygon` is a list of [lon, lat] pairs forming a ring. The ring may be
+    open or closed (first point repeated at the end); both work. Rejects
+    non-numeric coordinates and polygons with fewer than 3 vertices.
+    """
+    if not polygon or len(polygon) < 3:
+        return False
+    try:
+        y = float(lat)
+        x = float(lon)
+    except (TypeError, ValueError):
+        return False
+    inside = False
+    n = len(polygon)
+    j = n - 1
+    for i in range(n):
+        try:
+            xi, yi = float(polygon[i][0]), float(polygon[i][1])
+            xj, yj = float(polygon[j][0]), float(polygon[j][1])
+        except (TypeError, ValueError, IndexError):
+            return False
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def point_in_polygons(lat: Any, lon: Any, polygons: Optional[List[List[List[float]]]]) -> bool:
+    """True if (lat, lon) lies inside any polygon in the list. Pass-through on None/empty."""
+    if not polygons:
+        return True
+    for poly in polygons:
+        if point_in_polygon(lat, lon, poly):
+            return True
+    return False
+
+
+def point_in_region(
+    lat: Any,
+    lon: Any,
+    bboxes: Optional[List[List[float]]] = None,
+    polygons: Optional[List[List[List[float]]]] = None,
+) -> bool:
+    """True if the point is inside any bbox OR any polygon. Pass-through when both empty."""
+    if not bboxes and not polygons:
+        return True
+    if bboxes and point_in_bboxes(lat, lon, bboxes):
+        return True
+    if polygons and point_in_polygons(lat, lon, polygons):
+        return True
+    return False
+
+
 def make_feature(
     node_id: str,
     lat: float,

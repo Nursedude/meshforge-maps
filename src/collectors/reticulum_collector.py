@@ -38,7 +38,7 @@ from .base import (
     deduplicate_features,
     make_feature,
     make_feature_collection,
-    point_in_bboxes,
+    point_in_region,
     validate_coordinates,
 )
 
@@ -84,12 +84,14 @@ class ReticulumCollector(BaseCollector):
         cache_ttl_seconds: int = 900,
         max_retries: int = 0,
         region_bboxes: Optional[List[List[float]]] = None,
+        region_polygons: Optional[List[List[List[float]]]] = None,
     ):
         super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._rch_base = f"http://{rch_host}:{rch_port}"
         self._rch_api_key = rch_api_key
         self._enable_rmap_public = enable_rmap_public
         self._region_bboxes = region_bboxes
+        self._region_polygons = region_polygons
 
     def _fetch(self) -> Dict[str, Any]:
         # Collect from all sources in priority order, then deduplicate.
@@ -111,14 +113,14 @@ class ReticulumCollector(BaseCollector):
         return make_feature_collection(features, self.source_name)
 
     def _scope(self, features: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        if not self._region_bboxes:
+        if not self._region_bboxes and not self._region_polygons:
             return features
         kept = []
         for f in features:
             coords = f.get("geometry", {}).get("coordinates") or []
             if len(coords) < 2:
                 continue
-            if point_in_bboxes(coords[1], coords[0], self._region_bboxes):
+            if point_in_region(coords[1], coords[0], self._region_bboxes, self._region_polygons):
                 kept.append(f)
         return kept
 
