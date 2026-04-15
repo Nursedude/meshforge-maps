@@ -533,7 +533,11 @@ function updateHeaderSysInfo(hw) {
         parts.push('load ' + Number(hw.load_avg[0]).toFixed(2));
     }
     var profile = hw.deployment_profile || '';
-    var profileColor = profile === 'lite' ? '#ffa726' : profile === 'full' ? '#66bb6a' : '#78909c';
+    var profileColor =
+        profile === 'lite'   ? '#ffa726' :
+        profile === 'medium' ? '#29b6f6' :
+        profile === 'full'   ? '#66bb6a' :
+                               '#78909c';
     el.textContent = parts.join(' · ') + ' · profile: ';
     var chip = document.createElement('span');
     chip.textContent = profile || 'unknown';
@@ -789,7 +793,7 @@ function renderMarkers() {
             const marker = L.circleMarker([lat, lon], style);
             marker._mmProps = props;
             marker._mmColor = color;
-            marker.bindPopup(() => buildPopup(marker._mmProps, marker._mmColor));
+            marker.bindPopup(() => buildPopup(marker._mmProps, marker._mmColor), { maxWidth: 320, minWidth: 220 });
 
             if (nodeId) markerRegistry.set(nodeId, marker);
 

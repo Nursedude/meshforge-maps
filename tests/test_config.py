@@ -310,3 +310,70 @@ class TestAtomicConfigWrite:
         assert not bak_path.exists()
 
 
+class TestDeploymentProfiles:
+    """Tests for lite/medium/full deployment profile overrides."""
+
+    def test_full_profile_no_overrides(self, tmp_config):
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.set("deployment_profile", "full")
+        cfg.set("cache_ttl_minutes", 15)
+        assert cfg.is_lite is False
+        assert cfg.is_medium is False
+        assert cfg.get_effective("cache_ttl_minutes") == 15
+        assert cfg.get_effective("enable_analytics", True) is True
+
+    def test_lite_profile_overrides(self, tmp_config):
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.set("deployment_profile", "lite")
+        cfg.set("cache_ttl_minutes", 15)  # should be raised to 60
+        assert cfg.is_lite is True
+        assert cfg.is_medium is False
+        assert cfg.get_effective("cache_ttl_minutes") == 60
+        assert cfg.get_effective("node_history_throttle_seconds", 0) == 600
+        assert cfg.get_effective("node_history_retention_days", 10) == 1
+        assert cfg.get_effective("enable_analytics", True) is False
+        assert cfg.get_effective("enable_node_state", True) is False
+        assert cfg.get_effective("enable_config_drift", True) is False
+
+    def test_medium_profile_overrides(self, tmp_config):
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.set("deployment_profile", "medium")
+        cfg.set("cache_ttl_minutes", 15)  # should be raised to 30
+        assert cfg.is_medium is True
+        assert cfg.is_lite is False
+        assert cfg.get_effective("cache_ttl_minutes") == 30
+        assert cfg.get_effective("node_history_throttle_seconds", 100) == 300
+        assert cfg.get_effective("node_history_retention_days", 10) == 2
+        # Medium keeps heavy features enabled
+        assert cfg.get_effective("enable_analytics", True) is True
+        assert cfg.get_effective("enable_node_state", True) is True
+        assert cfg.get_effective("enable_config_drift", True) is True
+
+    def test_medium_does_not_lower_already_long_cache(self, tmp_config):
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.set("deployment_profile", "medium")
+        cfg.set("cache_ttl_minutes", 90)
+        assert cfg.get_effective("cache_ttl_minutes") == 90
+
+
+class TestMqttStoreCap:
+    """Tests for the tiered MQTT store capacity helper."""
+
+    def test_cap_by_profile(self, tmp_config):
+        from src.collectors.aggregator import _mqtt_store_cap
+        cfg = MapsConfig(config_path=tmp_config)
+
+        cfg.set("deployment_profile", "lite")
+        assert _mqtt_store_cap(cfg) == 1000
+
+        cfg.set("deployment_profile", "medium")
+        assert _mqtt_store_cap(cfg) == 5000
+
+        cfg.set("deployment_profile", "full")
+        assert _mqtt_store_cap(cfg) == 10000
+
+    def test_cap_default_for_unknown_profile(self, tmp_config):
+        from src.collectors.aggregator import _mqtt_store_cap
+        cfg = MapsConfig(config_path=tmp_config)
+        cfg.set("deployment_profile", "something-else")
+        assert _mqtt_store_cap(cfg) == 10000
