@@ -521,10 +521,23 @@ function updateHeaderSysInfo(hw) {
     chip.style.color = profileColor;
     chip.style.fontWeight = '600';
     el.appendChild(chip);
+
+    // Scope chip — makes it obvious the MeshCore/AREDN totals reflect a region
+    var scopeKey = hw.region_preset || 'world';
+    var scopeLabel = hw.region_label || 'World';
+    var scopeColor = scopeKey === 'world' ? '#78909c' : '#ffa726';
+    el.appendChild(document.createTextNode(' · scope: '));
+    var scopeChip = document.createElement('span');
+    scopeChip.textContent = scopeLabel;
+    scopeChip.style.color = scopeColor;
+    scopeChip.style.fontWeight = '600';
+    el.appendChild(scopeChip);
+
     el.title = 'Device: ' + model + '\nTotal RAM: ' + hw.total_memory_mb + ' MB\n'
         + 'Process RSS: ' + hw.rss_mb + ' MB\nCPU cores: ' + hw.cpu_count + '\n'
         + 'Load avg (1/5/15 min): ' + (hw.load_avg || []).map(function(v){return Number(v).toFixed(2);}).join(' / ')
-        + '\nDeployment profile: ' + profile;
+        + '\nDeployment profile: ' + profile
+        + '\nRegion scope: ' + scopeLabel + (scopeKey !== 'world' ? ' (MeshCore/AREDN totals clipped to this region)' : '');
 }
 setInterval(fetchVersion, 30000);
 
@@ -538,9 +551,18 @@ function renderSourceCount(sourceKey, viewCount, sidebarId, headerId) {
     var total = (lastStatus && lastStatus.source_counts && lastStatus.source_counts[sourceKey]);
     if (typeof total !== 'number') total = null;
 
+    // Region-scoped sources (meshcore/aredn) get an "in <region>" suffix so
+    // the total isn't misread as a global count. Meshtastic/RNS totals reflect
+    // the collector population directly and don't need the suffix.
+    var hw = (lastStatus && lastStatus.hardware) || {};
+    var scopeKey = hw.region_preset || null;
+    var scopeLabel = hw.region_label || '';
+    var scopeSuffix = (scopeKey && scopeKey !== 'world' && (sourceKey === 'meshcore' || sourceKey === 'aredn'))
+        ? ' in ' + scopeLabel : '';
+
     var display = String(viewCount);
     if (lastBboxFiltered && total != null && total !== viewCount) {
-        display = viewCount + ' (of ' + total + ')';
+        display = viewCount + ' (of ' + total + scopeSuffix + ')';
     }
 
     var title = '';
@@ -557,7 +579,7 @@ function renderSourceCount(sourceKey, viewCount, sidebarId, headerId) {
                 title = 'No nodes reported';
             }
         } else if (total > 0) {
-            title = total + ' total — zoom out or pan to see';
+            title = total + ' total' + scopeSuffix + ' — zoom out or pan to see';
         }
     }
 
