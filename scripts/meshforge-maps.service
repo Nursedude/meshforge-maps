@@ -37,8 +37,8 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 
 # Resource limits — prevent runaway memory from degrading the Pi
-MemoryMax=512M
-MemoryHigh=384M
+MemoryMax=768M
+MemoryHigh=640M
 CPUQuota=75%
 
 # Security hardening (ported from meshforge parent)

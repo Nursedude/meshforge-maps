@@ -155,18 +155,33 @@ function _getCachedConfig() {
 }
 
 function _getActiveBbox() {
+    // Return the current Leaflet viewport bounds so counts reflect what the
+    // user is actually looking at. Falls back to the region_preset bbox when
+    // the map isn't ready yet (e.g. initial load before map creation).
     try {
+        if (map && typeof map.getBounds === 'function') {
+            var b = map.getBounds();
+            return b.getSouth() + ',' + b.getWest() + ',' + b.getNorth() + ',' + b.getEast();
+        }
         var preset = localStorage.getItem('meshforge_region_preset');
         if (preset && regionPresets[preset] && regionPresets[preset].bbox) {
-            var bbox = regionPresets[preset].bbox;
-            // Multi-bbox: [[s,w,n,e],[s,w,n,e],...] → "s,w,n,e;s,w,n,e"
-            if (Array.isArray(bbox[0])) {
-                return bbox.map(function(b) { return b.join(','); }).join(';');
+            var pbox = regionPresets[preset].bbox;
+            if (Array.isArray(pbox[0])) {
+                return pbox.map(function(b) { return b.join(','); }).join(';');
             }
-            return bbox.join(',');
+            return pbox.join(',');
         }
     } catch (e) {}
     return null;
+}
+
+var _viewportReloadTimer = null;
+function _scheduleViewportReload() {
+    if (_viewportReloadTimer) clearTimeout(_viewportReloadTimer);
+    _viewportReloadTimer = setTimeout(function() {
+        _viewportReloadTimer = null;
+        loadNodeData();
+    }, 350);
 }
 
 function saveOverlayPrefs() {
@@ -320,6 +335,10 @@ function initMap() {
             broken: broken,
         });
     });
+
+    // Refresh the node feed after the user settles on a new viewport so
+    // counts reflect what's actually on screen (moveend fires after zoomend).
+    map.on('moveend', _scheduleViewportReload);
 
     // Cluster group
     clusterGroup = L.markerClusterGroup({
@@ -562,11 +581,10 @@ function renderSourceCount(sourceKey, viewCount, sidebarId, headerId) {
 
     var display = String(viewCount);
     // Always show "(of M)" when the backend reports a meaningful total, so the
-    // format is consistent across sources. Skip when total is 0 (empty or
-    // disabled — tooltip explains that case) and when it would just say
-    // "0 (of 0)".
+    // format is consistent across sources. The scope chip in the header carries
+    // the region name — no need to repeat it inside every count.
     if (total != null && total > 0) {
-        display = viewCount + ' (of ' + total + scopeSuffix + ')';
+        display = viewCount + ' (of ' + total + ')';
     }
 
     var title = '';
