@@ -340,10 +340,17 @@ body {
     display: flex;
     justify-content: space-between;
     padding: 2px 0;
+    min-width: 0;
+    gap: 8px;
 }
 
 .popup-key { color: #78909c; }
 .popup-val { color: #e0e0e0; font-weight: 500; }
+.popup-key, .popup-val, .popup-row > span {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
+}
 
 /* Override marker cluster colors */
 .marker-cluster-small {

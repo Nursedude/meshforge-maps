@@ -132,8 +132,15 @@ def point_in_bboxes(lat: Any, lon: Any, bboxes: Optional[List[List[float]]]) -> 
         if len(bbox) < 4:
             continue
         s, w, n, e = bbox[0], bbox[1], bbox[2], bbox[3]
-        if s <= lat_f <= n and w <= lon_f <= e:
-            return True
+        if not (s <= lat_f <= n):
+            continue
+        # w > e means the box crosses the antimeridian (e.g. w=170, e=-150)
+        if w <= e:
+            if w <= lon_f <= e:
+                return True
+        else:
+            if lon_f >= w or lon_f <= e:
+                return True
     return False
 
 

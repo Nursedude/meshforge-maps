@@ -5,7 +5,31 @@ from unittest.mock import patch
 
 import pytest
 
-from src.collectors.base import BaseCollector, make_feature, make_feature_collection
+from src.collectors.base import BaseCollector, make_feature, make_feature_collection, point_in_bboxes
+
+
+class TestPointInBboxes:
+    def test_none_bboxes_pass_through(self):
+        assert point_in_bboxes(20, -157, None) is True
+        assert point_in_bboxes(20, -157, []) is True
+
+    def test_normal_bbox_hit_and_miss(self):
+        hawaii = [[18.5, -161, 22.5, -154]]
+        assert point_in_bboxes(20, -157, hawaii) is True
+        assert point_in_bboxes(40, -100, hawaii) is False
+
+    def test_antimeridian_crossing_bbox(self):
+        # west=170, east=-150: crosses the antimeridian
+        wrap = [[15, 170, 25, -150]]
+        assert point_in_bboxes(20, 175, wrap) is True   # east of 170
+        assert point_in_bboxes(20, -160, wrap) is True  # west of -150
+        assert point_in_bboxes(20, 180, wrap) is True
+        assert point_in_bboxes(20, 0, wrap) is False
+        assert point_in_bboxes(5, 175, wrap) is False   # lat out of range
+
+    def test_invalid_coords_rejected(self):
+        assert point_in_bboxes("abc", 0, [[0, 0, 1, 1]]) is False
+        assert point_in_bboxes(0, None, [[0, 0, 1, 1]]) is False
 
 
 class TestMakeFeature:

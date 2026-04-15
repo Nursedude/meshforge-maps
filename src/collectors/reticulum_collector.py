@@ -38,6 +38,7 @@ from .base import (
     deduplicate_features,
     make_feature,
     make_feature_collection,
+    point_in_bboxes,
     validate_coordinates,
 )
 
@@ -82,20 +83,25 @@ class ReticulumCollector(BaseCollector):
         enable_rmap_public: bool = True,
         cache_ttl_seconds: int = 900,
         max_retries: int = 0,
+        region_bboxes: Optional[List[List[float]]] = None,
     ):
         super().__init__(cache_ttl_seconds, max_retries=max_retries)
         self._rch_base = f"http://{rch_host}:{rch_port}"
         self._rch_api_key = rch_api_key
         self._enable_rmap_public = enable_rmap_public
+        self._region_bboxes = region_bboxes
 
     def _fetch(self) -> Dict[str, Any]:
-        # Collect from all sources in priority order, then deduplicate
+        # Collect from all sources in priority order, then deduplicate.
+        # Local/authoritative sources (rnstatus, caches) are never region-scoped —
+        # users should always see their own RNS regardless of viewport.
+        # Remote aggregators (RCH, RMAP.world) are region-scoped when configured.
         sources = [
             self._fetch_from_rnstatus(),       # Source 1: local rnstatus
-            self._fetch_from_rch(),             # Source 2: RCH API
+            self._scope(self._fetch_from_rch()),             # Source 2: RCH API
         ]
         if self._enable_rmap_public:
-            sources.append(self._fetch_from_rmap_world())  # Source 3: RMAP.world
+            sources.append(self._scope(self._fetch_from_rmap_world()))  # Source 3: RMAP.world
         sources.extend([
             self._fetch_from_cache(),           # Source 4: RNS node cache
             self._fetch_from_unified_cache(),   # Source 5: unified cache
@@ -103,6 +109,18 @@ class ReticulumCollector(BaseCollector):
         features = deduplicate_features(sources, allow_no_id=False)
 
         return make_feature_collection(features, self.source_name)
+
+    def _scope(self, features: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not self._region_bboxes:
+            return features
+        kept = []
+        for f in features:
+            coords = f.get("geometry", {}).get("coordinates") or []
+            if len(coords) < 2:
+                continue
+            if point_in_bboxes(coords[1], coords[0], self._region_bboxes):
+                kept.append(f)
+        return kept
 
     def _fetch_from_rnstatus(self) -> List[Dict[str, Any]]:
         """Query local Reticulum instance via rnstatus."""
