@@ -79,17 +79,21 @@ def run_setup() -> None:
 
     # --- Deployment profile ---
     print("[Deployment Profile]")
-    print("  Full: all data sources enabled (Pi 4, cloud, desktop)")
-    print("  Lite: reduced sources for low-power devices (Pi 2W, solar nodes)")
+    print("  Full:   all data sources enabled, no caps (Pi 4/cloud/desktop)")
+    print("  Medium: analytics on, MQTT cap 5K, 30-min cache (Pi 4/5, 4-8GB)")
+    print("  Lite:   reduced sources, MQTT cap 1K, 60-min cache (Pi 2W, solar)")
     profile = _prompt_choice(
         "Select profile",
-        ["full", "lite"],
+        ["full", "medium", "lite"],
         settings.get("deployment_profile", "full"),
     )
     settings["deployment_profile"] = profile
     if profile == "lite":
         print("  Lite mode: MeshCore (30K nodes) and AREDN Worldmap (2.5K) disabled")
         print("  Cache TTL increased to 60 minutes. MQTT store capped at 1000 nodes.")
+    elif profile == "medium":
+        print("  Medium mode: MeshCore + AREDN worldmap stay enabled (region-scoped if set).")
+        print("  Cache TTL 30 min. MQTT store capped at 5000 nodes. Analytics/state/drift on.")
     print()
 
     # --- Network binding ---

@@ -187,6 +187,31 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Deployment-profile overrides applied by MapsConfig.get_effective().
+# Each entry maps a config key to a lambda that transforms the raw value.
+# A missing profile (e.g. "full") receives no overrides.
+_LITE_OVERRIDES: Dict[str, Any] = {
+    "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 60, 60),
+    "node_history_throttle_seconds": lambda v: max(v if isinstance(v, (int, float)) else 600, 600),
+    "node_history_retention_days": lambda v: min(v if isinstance(v, (int, float)) else 1, 1),
+    "enable_config_drift": lambda v: False,
+    "enable_node_state": lambda v: False,
+    "enable_analytics": lambda v: False,
+}
+
+_MEDIUM_OVERRIDES: Dict[str, Any] = {
+    "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 30, 30),
+    "node_history_throttle_seconds": lambda v: max(v if isinstance(v, (int, float)) else 300, 300),
+    "node_history_retention_days": lambda v: min(v if isinstance(v, (int, float)) else 2, 2),
+    # analytics/state/drift stay ON in medium — that's the point of the tier
+}
+
+_PROFILE_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    "lite": _LITE_OVERRIDES,
+    "medium": _MEDIUM_OVERRIDES,
+}
+
+
 class MapsConfig:
     """Configuration manager for MeshForge Maps extension."""
 
@@ -340,29 +365,25 @@ class MapsConfig:
         """True if running in lite deployment profile (Pi 2W / low-power)."""
         return self.get("deployment_profile") == "lite"
 
-    def get_effective(self, key: str, default: Any = None) -> Any:
-        """Get config value with lite-mode performance tuning applied.
+    @property
+    def is_medium(self) -> bool:
+        """True if running in medium deployment profile (Pi 4/5, 4-8GB)."""
+        return self.get("deployment_profile") == "medium"
 
-        Lite mode tunes performance for resource-constrained devices
-        (Pi 2W, Pi 4 with many sources) by enforcing safe defaults.
+    def get_effective(self, key: str, default: Any = None) -> Any:
+        """Get config value with deployment-profile tuning applied.
+
+        Lite: resource-constrained (Pi 2W). Disables analytics/state/drift and
+        enforces long cache/history intervals.
+        Medium: middling hardware (Pi 4/5, 4-8GB). Keeps analytics/state/drift
+        enabled but smooths I/O.
+        Full: no overrides.
         """
         value = self.get(key, default)
-        if not self.is_lite:
+        overrides = _PROFILE_OVERRIDES.get(self.get("deployment_profile"))
+        if overrides is None:
             return value
-
-        # Lite-mode overrides — reduce CPU, memory, and I/O
-        _lite_overrides = {
-            "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 60, 60),
-            # meshcore + aredn_worldmap are now region-scoped in lite (see
-            # DataAggregator); the aggregator disables them only when no
-            # region_preset is set (safety for lite + world).
-            "node_history_throttle_seconds": lambda v: max(v if isinstance(v, (int, float)) else 600, 600),
-            "node_history_retention_days": lambda v: min(v if isinstance(v, (int, float)) else 1, 1),
-            "enable_config_drift": lambda v: False,
-            "enable_node_state": lambda v: False,
-            "enable_analytics": lambda v: False,
-        }
-        override = _lite_overrides.get(key)
+        override = overrides.get(key)
         if override:
             return override(value)
         return value

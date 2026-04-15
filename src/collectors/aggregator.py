@@ -35,6 +35,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_COLLECTOR_RETRIES = 2
 
 
+def _mqtt_store_cap(config) -> int:
+    """Tiered MQTTNodeStore capacity based on deployment profile."""
+    if getattr(config, "is_lite", False):
+        return 1000
+    if getattr(config, "is_medium", False):
+        return 5000
+    return 10000
+
+
 def _resolve_broker_specs(config) -> List[Dict[str, Any]]:
     """Build the list of MQTT broker specs from config.
 
@@ -132,7 +141,7 @@ class DataAggregator:
         self._mqtt_secondary: List[MQTTSubscriber] = []
         mqtt_store: Optional[MQTTNodeStore] = None
         if config.get("enable_meshtastic", True):
-            node_store = MQTTNodeStore(max_nodes=1000) if is_lite else MQTTNodeStore()
+            node_store = MQTTNodeStore(max_nodes=_mqtt_store_cap(config))
             broker_specs = _resolve_broker_specs(config)
             for idx, spec in enumerate(broker_specs):
                 sub = MQTTSubscriber(
@@ -548,8 +557,7 @@ class DataAggregator:
             logger.info("MQTT restart skipped: meshtastic disabled")
             return False
 
-        is_lite = getattr(config, "is_lite", False)
-        node_store = MQTTNodeStore(max_nodes=1000) if is_lite else MQTTNodeStore()
+        node_store = MQTTNodeStore(max_nodes=_mqtt_store_cap(config))
         for idx, spec in enumerate(_resolve_broker_specs(config)):
             sub = MQTTSubscriber(
                 broker=spec["broker"],
