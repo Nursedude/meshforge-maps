@@ -1380,6 +1380,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
         # ru_maxrss is KB on Linux, bytes on macOS. Convert to MB for Linux (our deploy target).
         rss_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+        preset_key = config.get("region_preset") if config else None
+        preset = REGION_PRESETS.get(preset_key, {}) if preset_key else {}
         hardware = {
             "device_model": _cached_device_model(),
             "total_memory_mb": _cached_total_memory_mb(),
@@ -1387,6 +1389,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "cpu_count": os.cpu_count() or 0,
             "load_avg": _current_load_avg(),
             "deployment_profile": "lite" if (config and config.is_lite) else "full",
+            "region_preset": preset_key,
+            "region_label": preset.get("label") or "World",
         }
 
         self._send_json({
