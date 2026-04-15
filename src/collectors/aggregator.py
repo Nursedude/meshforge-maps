@@ -119,17 +119,17 @@ class DataAggregator:
         # Region scope: clip big global collectors (meshcore, AREDN worldmap) to
         # the configured region preset so lite-mode Pis can still include them.
         preset_key = config.get("region_preset")
-        region_bboxes = normalize_bboxes(
-            REGION_PRESETS.get(preset_key, {}).get("bbox") if preset_key else None
-        )
+        preset_data = REGION_PRESETS.get(preset_key, {}) if preset_key else {}
+        region_bboxes = normalize_bboxes(preset_data.get("bbox"))
+        region_polygons = preset_data.get("polygons") or None
         # Safety: in lite mode with no region scope, keep meshcore + aredn_worldmap
         # off — fetching 34K global nodes on a Pi is the condition the 0.7.1 fix
         # was created to prevent.
-        lite_unscoped = is_lite and not region_bboxes
-        if region_bboxes:
+        lite_unscoped = is_lite and not region_bboxes and not region_polygons
+        if region_bboxes or region_polygons:
             logger.info(
-                "Region scope '%s' active: %d bbox(es) applied to meshcore/aredn_worldmap",
-                preset_key, len(region_bboxes),
+                "Region scope '%s' active: %d bbox(es), %d polygon(s) applied to meshcore/aredn_worldmap/reticulum",
+                preset_key, len(region_bboxes or []), len(region_polygons or []),
             )
         elif lite_unscoped:
             logger.info("Lite + world/no region: meshcore and AREDN worldmap disabled (safety)")
@@ -186,6 +186,7 @@ class DataAggregator:
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
                 region_bboxes=region_bboxes,
+                region_polygons=region_polygons,
             )
 
         if config.get("enable_hamclock", True):
@@ -205,6 +206,7 @@ class DataAggregator:
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,
                 region_bboxes=region_bboxes,
+                region_polygons=region_polygons,
             )
 
         if _get("enable_meshcore", True) and not lite_unscoped:
@@ -213,6 +215,7 @@ class DataAggregator:
                 cache_ttl_seconds=max(cache_ttl, 1800),  # 30min min for large API
                 max_retries=retries,
                 region_bboxes=region_bboxes,
+                region_polygons=region_polygons,
             )
 
         # NOAA weather alerts (polygon overlay — not included in collect_all)

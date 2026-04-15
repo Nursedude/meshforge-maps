@@ -137,6 +137,102 @@ NETWORK_COLORS: Dict[str, str] = {
     "noaa_alerts": "#f44336",
 }
 
+# Simplified CONUS land boundary for point-in-polygon region scoping.
+# ~55 vertices, [lon, lat] pairs, clockwise from the NW corner. Target precision:
+# excludes Toronto/Montreal/Windsor/Tijuana/Juárez/Bahamas/Havana while keeping
+# Seattle/Key West/Brownsville/El Paso/San Diego/Bangor inside. Border-town
+# accuracy is not guaranteed; this is a filter, not a survey.
+US_CONUS_POLYGON: List[List[float]] = [
+    [-123.00, 49.00],   # Point Roberts / NW corner (US-BC)
+    # US-Canada 49°N parallel east to MN
+    [-95.15, 49.00],
+    # MN northern jag / Lake of the Woods
+    [-94.82, 48.70],
+    [-93.84, 48.63],
+    [-91.60, 48.10],
+    # Lake Superior (border through lake — hug south shore)
+    [-88.00, 47.40],
+    # Upper Peninsula MI
+    [-84.88, 46.50],    # Sault Ste Marie area
+    [-84.12, 45.95],    # Mackinac
+    [-83.40, 45.00],
+    # Lower MI / Lake Huron (ON-MI border through lake)
+    [-82.50, 44.00],
+    [-82.50, 43.10],
+    # Detroit — keep Windsor (ON, lat 42.30) out by hugging the river west side
+    [-83.15, 42.15],
+    [-82.80, 41.50],    # Lake Erie south shore
+    # Lake Erie south shore, Niagara, Lake Ontario south shore
+    [-79.05, 42.25],    # PA/NY Erie
+    [-79.05, 43.27],    # Niagara — Toronto is 43.7 (outside)
+    [-76.60, 43.55],    # Oswego
+    [-75.30, 43.90],
+    [-74.60, 44.55],
+    [-73.30, 44.95],    # VT/NH/QC
+    [-71.00, 45.00],
+    [-70.00, 45.70],    # ME
+    [-69.20, 47.46],    # ME north corner
+    [-68.00, 47.35],
+    [-67.78, 45.70],    # ME east (St. Croix River)
+    [-66.98, 44.80],    # Eastport/Calais
+    # Atlantic coast south from Maine
+    [-67.80, 44.50],
+    [-69.00, 43.80],    # Portland ME
+    [-70.50, 42.80],    # MA N
+    [-70.00, 41.50],    # Cape Cod
+    [-72.00, 41.15],
+    [-73.70, 40.55],    # Long Island S shore
+    [-74.20, 39.30],    # NJ
+    [-75.10, 38.40],
+    [-76.00, 37.00],
+    [-75.50, 35.20],    # NC Outer Banks
+    [-77.95, 33.80],
+    [-80.80, 32.00],    # SC/GA
+    [-81.30, 30.50],    # FL N Atlantic
+    [-79.95, 26.80],    # FL E (Miami coast ~-80.13)
+    [-80.30, 25.20],    # FL S
+    [-81.80, 24.50],    # Key West
+    # Gulf of Mexico FL -> TX
+    [-82.70, 25.80],
+    [-83.40, 27.80],
+    [-84.90, 29.80],
+    [-87.50, 30.30],
+    [-88.70, 30.20],
+    [-89.40, 29.00],    # LA delta
+    [-93.80, 29.50],
+    [-97.00, 27.80],
+    [-97.20, 25.83],    # Rio Grande mouth (south of Brownsville 25.90)
+    # Rio Grande border NW
+    [-97.80, 25.95],
+    [-99.10, 26.50],
+    [-100.40, 28.45],
+    [-101.40, 29.80],
+    [-102.80, 29.80],   # Big Bend
+    [-104.50, 30.60],
+    [-105.50, 31.00],
+    [-106.50, 31.80],   # El Paso area (Juárez 31.70 outside)
+    # NM/AZ south border (approx 31°20'N)
+    [-108.20, 31.33],
+    [-111.05, 31.33],
+    [-114.81, 32.55],   # AZ/CA corner near Yuma (north of Mexicali 32.65? actually Mexicali 32.65, keep polygon north)
+    # CA-Mex border (real border ~32.535°N; place at 32.55 to keep Tijuana 32.53 out)
+    [-117.13, 32.55],
+    # Pacific coast north to NW corner
+    [-117.25, 33.00],
+    [-118.50, 34.00],
+    [-120.70, 34.50],
+    [-121.95, 36.60],
+    [-122.50, 37.80],   # SF
+    [-123.80, 39.00],
+    [-124.40, 40.00],
+    [-124.40, 42.00],
+    [-124.30, 43.60],
+    [-124.10, 46.20],
+    [-124.80, 48.40],
+    [-123.00, 49.00],   # close
+]
+
+
 # Region presets — bundles map center, zoom, and MQTT topic into one-click templates
 REGION_PRESETS: Dict[str, Dict[str, Any]] = {
     "hawaii": {
@@ -161,12 +257,14 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "map_center_lon": -98.0,
         "map_default_zoom": 4,
         "mqtt_topic": "msh/US",
-        "bbox": [  # Multi-bbox: CONUS, Alaska, Hawaii, PR/USVI
-            [24.5, -125.0, 49.5, -66.0],   # CONUS (Key West to Canadian border)
-            [51.0, -180.0, 72.0, -130.0],   # Alaska (Aleutians to North Slope)
-            [18.5, -161.0, 22.5, -154.0],   # Hawaii
-            [17.5, -68.0, 18.6, -64.0],     # PR + USVI
+        # Islands use bboxes (no shared borders); CONUS uses a land polygon
+        # to avoid rectangular leaks into Mexico/Canada/Bahamas.
+        "bbox": [
+            [51.0, -180.0, 72.0, -130.0],  # Alaska
+            [18.5, -161.0, 22.5, -154.0],  # Hawaii
+            [17.5, -68.0, 18.6, -64.0],    # PR + USVI
         ],
+        "polygons": [US_CONUS_POLYGON],
     },
     "americas": {
         "label": "Americas",

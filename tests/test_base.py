@@ -32,6 +32,114 @@ class TestPointInBboxes:
         assert point_in_bboxes(0, None, [[0, 0, 1, 1]]) is False
 
 
+class TestPointInPolygon:
+    # A unit square polygon as [lon, lat] pairs (open ring — last point != first).
+    square = [[0, 0], [1, 0], [1, 1], [0, 1]]
+
+    def test_inside_square(self):
+        from src.collectors.base import point_in_polygon
+        assert point_in_polygon(0.5, 0.5, self.square) is True
+
+    def test_outside_square(self):
+        from src.collectors.base import point_in_polygon
+        assert point_in_polygon(1.5, 0.5, self.square) is False
+        assert point_in_polygon(-0.1, 0.5, self.square) is False
+
+    def test_closed_ring_equivalent_to_open(self):
+        from src.collectors.base import point_in_polygon
+        closed = self.square + [self.square[0]]
+        assert point_in_polygon(0.5, 0.5, closed) is True
+        assert point_in_polygon(2.0, 2.0, closed) is False
+
+    def test_degenerate_polygon(self):
+        from src.collectors.base import point_in_polygon
+        assert point_in_polygon(0.5, 0.5, []) is False
+        assert point_in_polygon(0.5, 0.5, [[0, 0], [1, 1]]) is False  # only 2 verts
+
+    def test_invalid_coords(self):
+        from src.collectors.base import point_in_polygon
+        assert point_in_polygon("x", 0, self.square) is False
+
+
+class TestPointInRegion:
+    def test_both_empty_is_passthrough(self):
+        from src.collectors.base import point_in_region
+        assert point_in_region(0, 0, None, None) is True
+        assert point_in_region(0, 0, [], []) is True
+
+    def test_bbox_only(self):
+        from src.collectors.base import point_in_region
+        assert point_in_region(0.5, 0.5, [[0, 0, 1, 1]], None) is True
+        assert point_in_region(2, 2, [[0, 0, 1, 1]], None) is False
+
+    def test_polygon_only(self):
+        from src.collectors.base import point_in_region
+        poly = [[[0, 0], [1, 0], [1, 1], [0, 1]]]
+        assert point_in_region(0.5, 0.5, None, poly) is True
+        assert point_in_region(2, 2, None, poly) is False
+
+    def test_either_matches(self):
+        from src.collectors.base import point_in_region
+        bboxes = [[10, 10, 11, 11]]
+        polys = [[[0, 0], [1, 0], [1, 1], [0, 1]]]
+        # inside polygon, outside bbox
+        assert point_in_region(0.5, 0.5, bboxes, polys) is True
+        # inside bbox, outside polygon
+        assert point_in_region(10.5, 10.5, bboxes, polys) is True
+        # outside both
+        assert point_in_region(50, 50, bboxes, polys) is False
+
+
+class TestUsConusPolygon:
+    """Validate the shipped US CONUS polygon against a city table.
+
+    Any failure here means the US region preset leaks or over-filters.
+    Adjust config.US_CONUS_POLYGON vertices to make this table pass.
+    """
+
+    CITIES = [
+        # (name, lat, lon, expected_inside)
+        ("Seattle",        47.60, -122.30, True),
+        ("Miami",          25.80,  -80.20, True),
+        ("Key West",       24.55,  -81.80, True),
+        ("Brownsville",    25.90,  -97.50, True),
+        ("El Paso",        31.80, -106.45, True),
+        ("San Diego",      32.72, -117.16, True),
+        ("Bangor ME",      44.80,  -68.80, True),
+        ("Chicago",        41.88,  -87.63, True),
+        ("Denver",         39.74, -104.99, True),
+        ("NYC",            40.71,  -74.00, True),
+        ("Toronto",        43.70,  -79.40, False),
+        ("Montreal",       45.50,  -73.60, False),
+        ("Windsor ON",     42.30,  -83.00, False),
+        ("Tijuana",        32.53, -117.00, False),
+        ("Juarez",         31.70, -106.40, False),
+        ("Nassau",         25.00,  -77.40, False),
+        ("Havana",         23.10,  -82.40, False),
+        ("Vancouver",      49.28, -123.12, False),
+    ]
+
+    def test_city_table(self):
+        from src.collectors.base import point_in_polygon
+        from src.utils.config import US_CONUS_POLYGON
+        failures = []
+        for name, lat, lon, expected in self.CITIES:
+            actual = point_in_polygon(lat, lon, US_CONUS_POLYGON)
+            if actual != expected:
+                failures.append(f"{name} ({lat},{lon}): expected {expected}, got {actual}")
+        assert not failures, "US polygon mismatches:\n  " + "\n  ".join(failures)
+
+
+class TestUsPresetShape:
+    def test_us_preset_has_polygon_and_island_bboxes(self):
+        from src.utils.config import REGION_PRESETS, US_CONUS_POLYGON
+        us = REGION_PRESETS["us"]
+        # Islands remain as bboxes (Alaska, Hawaii, PR)
+        assert isinstance(us["bbox"], list) and len(us["bbox"]) == 3
+        # CONUS is now a polygon
+        assert us["polygons"] == [US_CONUS_POLYGON]
+
+
 class TestMakeFeature:
     """Tests for make_feature() GeoJSON helper."""
 
