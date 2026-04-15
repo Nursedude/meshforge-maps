@@ -5,6 +5,7 @@ Merges GeoJSON FeatureCollections from all enabled collectors
 into a single unified collection with deduplication.
 """
 
+import gc
 import gzip
 import hashlib
 import json
@@ -312,6 +313,9 @@ class DataAggregator:
             len(self._collectors),
             source_counts,
         )
+        # Explicit GC trims the intermediate feature lists and dicts that pile up
+        # between cycles. Small cost (~10-30 ms on a Pi), meaningful RSS relief.
+        gc.collect()
         return result
 
     def get_cached_result(self) -> Optional[Dict[str, Any]]:
