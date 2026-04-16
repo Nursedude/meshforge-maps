@@ -1,6 +1,5 @@
 """Tests for NodeStateTracker — node connectivity state machine."""
 
-import time
 import unittest
 
 from src.utils.node_state import (

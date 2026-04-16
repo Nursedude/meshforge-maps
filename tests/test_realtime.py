@@ -12,14 +12,12 @@ Also tests:
 
 import asyncio
 import json
-import time
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.utils.event_bus import EventBus, EventType, NodeEvent, ServiceEvent
+from src.utils.event_bus import EventBus, EventType, NodeEvent
 from src.utils.websocket_server import HAS_WEBSOCKETS, MapWebSocketServer
-from src.collectors.mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
+from src.collectors.mqtt_subscriber import MQTTSubscriber
 
 if HAS_WEBSOCKETS:
     import websockets

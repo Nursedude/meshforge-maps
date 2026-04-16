@@ -6,22 +6,15 @@ verifying that components are wired correctly and work end-to-end.
 
 import json
 import time
-import unittest
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.map_server import (
-    MapRequestHandler,
     MapServer,
-    MapServerContext,
-    MeshForgeHTTPServer,
 )
 from src.utils.config import MapsConfig
 from src.utils.config_drift import (
     ConfigDriftDetector,
-    DriftSeverity,
-    TRACKED_FIELDS,
     _normalize_value,
 )
 from src.utils.event_bus import EventBus, EventType, NodeEvent

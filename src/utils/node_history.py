@@ -171,8 +171,8 @@ class NodeHistoryDB:
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as close_exc:
+                    logger.debug("Error closing DB connection during init failure: %s", close_exc)
             self._conn = None
 
     def _open_connection(self) -> sqlite3.Connection:

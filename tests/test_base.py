@@ -1,9 +1,7 @@
 """Tests for base collector module: GeoJSON helpers and BaseCollector caching."""
 
 import time
-from unittest.mock import patch
 
-import pytest
 
 from src.collectors.base import BaseCollector, make_feature, make_feature_collection, point_in_bboxes
 

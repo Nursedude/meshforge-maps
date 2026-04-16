@@ -10,7 +10,6 @@ from src.utils.health_scoring import (
     CHANNEL_UTIL_HIGH,
     CHANNEL_UTIL_LOW,
     FRESH_THRESHOLD,
-    FRESHNESS_THRESHOLDS,
     MAX_HOPS_SCORED,
     SNR_EXCELLENT,
     SNR_POOR,

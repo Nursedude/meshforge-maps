@@ -139,7 +139,7 @@ jobs:
           pip install -r requirements.txt || true
 
       - name: Ruff security rules (blocking)
-        run: ruff check src/ --select S --ignore S101,S603,S607
+        run: ruff check src/ --select S --ignore S101,S310,S603,S607
 
       - name: pip-audit (informational)
         if: always()

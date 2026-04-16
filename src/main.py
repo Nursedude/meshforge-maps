@@ -13,8 +13,10 @@ Usage:
   - Standalone: python -m src.main
 """
 
+import argparse
 import logging
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -354,13 +356,11 @@ def _get_error_log_path() -> Path:
         return log_dir / "maps_errors.log"
     except Exception as exc:
         logger.debug("Could not resolve cache dir for error log: %s", exc)
-        return Path("/tmp/meshforge_maps_errors.log")
+        return Path(tempfile.gettempdir()) / "meshforge_maps_errors.log"
 
 
-def _parse_args() -> "argparse.Namespace":
+def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
-    import argparse
-
     parser = argparse.ArgumentParser(
         prog="meshforge-maps",
         description="MeshForge Maps - Unified mesh network visualization",
@@ -472,7 +472,7 @@ def main() -> None:
         except Exception as log_exc:
             logger.debug("Could not write fatal error log: %s", log_exc)
 
-        print(f"\nMeshForge Maps encountered a fatal error:\n")
+        print("\nMeshForge Maps encountered a fatal error:\n")
         print(f"  {type(e).__name__}: {e}\n")
         print(f"Full error details saved to:\n  {error_log}\n")
         print("To report this issue:")

@@ -32,7 +32,7 @@ from .utils.alert_engine import Alert, AlertEngine
 from .utils.analytics import HistoricalAnalytics
 from .utils.config import NETWORK_COLORS, REGION_PRESETS, TILE_PROVIDERS, MapsConfig
 from .utils.config_drift import ConfigDriftDetector
-from .utils.event_bus import Event, EventBus, EventType, NodeEvent
+from .utils.event_bus import Event, EventType, NodeEvent
 from .utils.health_scoring import NodeHealthScorer
 from .utils.meshtastic_api_proxy import MeshtasticApiProxy
 from .utils.node_history import NodeHistoryDB

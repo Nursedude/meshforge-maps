@@ -1,7 +1,6 @@
 """Tests for MapServer reliability improvements."""
 
 import json
-import threading
 import time
 from http.server import HTTPServer
 
@@ -150,7 +149,7 @@ class TestMapServerHTTPEndpoints:
         assert isinstance(data, dict)
         assert len(data) > 0
         # Each provider should have required fields
-        for key, provider in data.items():
+        for _key, provider in data.items():
             assert "name" in provider
             assert "url" in provider
 
@@ -168,8 +167,7 @@ class TestMapServerHTTPEndpoints:
         from urllib.error import HTTPError
         try:
             self._get_json("/api/hamclock")
-            # If it returns without error, check the response
-            assert False, "Expected 404"
+            raise AssertionError("Expected 404")
         except HTTPError as e:
             assert e.code == 404
 

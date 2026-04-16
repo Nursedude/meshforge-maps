@@ -3,14 +3,12 @@
 import json
 import subprocess
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
-import pytest
 
 from src.collectors.base import make_feature, make_feature_collection
 from src.collectors.meshtastic_collector import MeshtasticCollector
-from src.collectors.reticulum_collector import ReticulumCollector, RNS_NODE_TYPES
+from src.collectors.reticulum_collector import ReticulumCollector
 from src.collectors.hamclock_collector import HamClockCollector
 from src.collectors.aredn_collector import AREDNCollector
 from src.collectors.aggregator import DataAggregator
@@ -125,14 +123,12 @@ class TestMeshtasticCollector:
         }]).encode()
 
         call_count = {"n": 0}
-        original_urlopen = None
 
         def mock_urlopen(req, timeout=None):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise URLError("Connection refused")
             # Second call succeeds
-            from io import BytesIO
             resp = MagicMock()
             resp.__enter__ = lambda s: s
             resp.__exit__ = MagicMock(return_value=False)

@@ -13,15 +13,10 @@ Covers:
   - NodeStateTracker.remove_node()
 """
 
-import re
 import sqlite3
 import threading
-import time
-from pathlib import Path
-from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +30,6 @@ class TestProxyRequestCounterThreadSafety:
         from src.utils.meshtastic_api_proxy import MeshtasticApiProxy
 
         proxy = MeshtasticApiProxy()
-        errors = []
 
         def hammer(n):
             for _ in range(n):
