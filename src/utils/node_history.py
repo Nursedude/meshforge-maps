@@ -62,7 +62,10 @@ class NodeHistoryDB:
         # Cached count queries (expensive on large DBs)
         self._cached_obs_count: int = 0
         self._cached_node_count: int = 0
-        self._count_cache_time: float = 0
+        # Use -inf so the "invalidated" sentinel forces a refresh regardless of
+        # time.monotonic()'s starting value. (Fresh CI runners/containers can
+        # report monotonic < TTL, making a plain `= 0` sentinel ineffective.)
+        self._count_cache_time: float = float("-inf")
         self._COUNT_CACHE_TTL = 300  # 5 minutes
         self._init_db()
 
@@ -240,7 +243,7 @@ class NodeHistoryDB:
                 )
                 self._conn.commit()
                 self._last_recorded[node_id] = now
-                self._count_cache_time = 0
+                self._count_cache_time = float("-inf")
                 return True
             except Exception as e:
                 logger.debug("Failed to record observation for %s: %s", node_id, e)
@@ -292,7 +295,7 @@ class NodeHistoryDB:
                 self._conn.commit()
                 for nid in recorded_ids:
                     self._last_recorded[nid] = now
-                self._count_cache_time = 0
+                self._count_cache_time = float("-inf")
                 return len(rows)
             except Exception as e:
                 logger.debug("Batch recording failed: %s", e)
@@ -527,7 +530,7 @@ class NodeHistoryDB:
                 if deleted:
                     logger.info("Pruned %d old node history observations", deleted)
                     # Invalidate count cache after prune
-                    self._count_cache_time = 0
+                    self._count_cache_time = float("-inf")
                 # Always checkpoint WAL — runs every ~120s via bg collect;
                 # without this, WAL grows unbounded when no rows are pruned
                 try:
