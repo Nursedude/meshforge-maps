@@ -271,10 +271,16 @@ class ReticulumCollector(BaseCollector):
                     "User-Agent": "MeshForge/1.0",
                 },
             )
-            # RMAP.world may have self-signed cert; use unverified context
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            # RMAP.world may have self-signed cert; TLS verification is
+            # disabled by default but can be enabled via config.
+            verify_ssl = getattr(self, '_verify_rmap_ssl', False)
+            if verify_ssl:
+                ctx = ssl.create_default_context()
+            else:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                logger.debug("RMAP.world: TLS verification disabled (rmap_verify_ssl=false)")
             with urlopen(req, timeout=15, context=ctx) as resp:
                 data = json.loads(resp.read().decode())
 

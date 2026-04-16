@@ -72,8 +72,8 @@ def _resolve_broker_specs(config) -> List[Dict[str, Any]]:
             "broker": config.get("mqtt_broker", "mqtt.meshtastic.org"),
             "port": int(config.get("mqtt_port", 1883)),
             "topic": config.get("mqtt_topic", "msh/#"),
-            "username": config.get("mqtt_username", "meshdev"),
-            "password": config.get("mqtt_password", "large4cats"),
+            "username": config.get("mqtt_username") or "",
+            "password": config.get("mqtt_password") or "",
             "use_tls": bool(config.get("mqtt_use_tls", False)),
             "label": "primary",
         })
