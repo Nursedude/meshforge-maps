@@ -1246,7 +1246,7 @@ async function openSettings() {
                 var mq = await mqResp.json();
                 if (mq.connected) {
                     statusEl.innerHTML = '<span class="status-ok">&#10003; Connected to ' +
-                        (mq.broker || cfg.mqtt_broker) + '</span>';
+                        esc(mq.broker || cfg.mqtt_broker) + '</span>';
                 } else {
                     statusEl.innerHTML = '<span class="status-err">&#10007; Disconnected</span>';
                 }
