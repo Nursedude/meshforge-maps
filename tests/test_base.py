@@ -394,3 +394,57 @@ class TestDeduplicateFeatures:
         from src.collectors.base import deduplicate_features
         result = deduplicate_features([[], []])
         assert result == []
+
+
+class TestIsNodeOnline:
+    """Regression tests for is_node_online clock-skew / unknown-network guards."""
+
+    def test_recent_timestamp_online(self):
+        from src.collectors.base import is_node_online
+        assert is_node_online(time.time() - 10, "meshtastic") is True
+
+    def test_old_timestamp_offline(self):
+        from src.collectors.base import is_node_online
+        assert is_node_online(time.time() - 10_000, "meshtastic") is False
+
+    def test_future_timestamp_not_online(self):
+        # Guards against a hostile broker forging last_heard far in the
+        # future to pin nodes "online" indefinitely.
+        from src.collectors.base import is_node_online
+        assert is_node_online(time.time() + 10_000, "mqtt") is False
+
+    def test_zero_or_missing_returns_none(self):
+        from src.collectors.base import is_node_online
+        assert is_node_online(0, "mqtt") is None
+        assert is_node_online(None, "mqtt") is None
+        assert is_node_online("", "mqtt") is None
+
+    def test_unknown_network_returns_none(self):
+        from src.collectors.base import is_node_online
+        assert is_node_online(time.time(), "not-a-network") is None
+
+    def test_empty_network_uses_default_threshold(self):
+        from src.collectors.base import is_node_online
+        assert is_node_online(time.time() - 10, "") is True
+
+    def test_invalid_type_returns_none(self):
+        from src.collectors.base import is_node_online
+        assert is_node_online("abc", "mqtt") is None
+
+
+class TestBoundedRead:
+    """bounded_read enforces a max-bytes cap for third-party HTTP bodies."""
+
+    def test_within_cap_returns_full_body(self):
+        from io import BytesIO
+        from src.collectors.base import bounded_read
+        resp = BytesIO(b"x" * 100)
+        assert bounded_read(resp, max_bytes=1024) == b"x" * 100
+
+    def test_over_cap_raises(self):
+        import pytest
+        from io import BytesIO
+        from src.collectors.base import bounded_read
+        resp = BytesIO(b"x" * 1025)
+        with pytest.raises(ValueError, match="exceeded"):
+            bounded_read(resp, max_bytes=1024)

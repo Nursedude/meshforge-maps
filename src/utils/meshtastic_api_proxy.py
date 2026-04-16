@@ -357,6 +357,15 @@ class MeshtasticApiProxy:
         self._host = host
         self._port = port
         self._cors_origin = cors_origin
+        # The proxy has no authentication — it mirrors meshtasticd's localhost
+        # UX. Binding non-loopback exposes the full MQTT node store (positions,
+        # telemetry) to anyone on the network. Warn loudly so operators notice.
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            logger.warning(
+                "Meshtastic API proxy configured to bind %s (non-loopback); "
+                "the proxy has no authentication — node data will be exposed "
+                "to everyone reachable on this interface.", host,
+            )
         self._server: Optional[ProxyHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False

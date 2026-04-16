@@ -271,12 +271,18 @@ class MapWebSocketServer:
                 "timestamp": time.time(),
             }))
         elif msg_type == "get_history":
-            limit = min(int(data.get("limit", 50)), self.history_size)
+            try:
+                raw_limit = int(data.get("limit", 50))
+            except (TypeError, ValueError):
+                raw_limit = 50
+            # Clamp: negative limits would turn `history[-limit:]` into an
+            # off-by-one slice and return more than requested.
+            limit = max(0, min(raw_limit, self.history_size))
             with self._lock:
                 history = list(self._history)
             await websocket.send(json.dumps({
                 "type": "history",
-                "messages": history[-limit:],
+                "messages": history[-limit:] if limit else [],
             }))
         elif msg_type == "get_stats":
             await websocket.send(json.dumps({

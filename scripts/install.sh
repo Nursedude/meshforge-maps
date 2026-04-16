@@ -145,9 +145,14 @@ if [[ "$NO_RADIO" == true ]]; then
     CONFIG_DIR="$REAL_HOME/.config/meshforge/plugins/org.meshforge.extension.maps"
     mkdir -p "$CONFIG_DIR"
 
-    # Only write if no existing config (don't overwrite user settings)
+    # Only write if no existing config (don't overwrite user settings).
+    # Set a restrictive umask before the heredoc so the file is never
+    # world-readable in the window between creation and chmod 600 —
+    # this guards future copies of the pattern that might include secrets.
     if [[ ! -f "$CONFIG_DIR/settings.json" ]]; then
-        cat > "$CONFIG_DIR/settings.json" <<'SETTINGS'
+        (
+            umask 077
+            cat > "$CONFIG_DIR/settings.json" <<'SETTINGS'
 {
   "deployment_profile": "lite",
   "enable_meshtastic": true,
@@ -160,6 +165,7 @@ if [[ "$NO_RADIO" == true ]]; then
   "ws_host": "0.0.0.0"
 }
 SETTINGS
+        )
         chmod 600 "$CONFIG_DIR/settings.json"
         chown "$REAL_USER:$REAL_USER" "$CONFIG_DIR/settings.json"
         ok "No-radio config written (lite profile — MQTT + public sources)"

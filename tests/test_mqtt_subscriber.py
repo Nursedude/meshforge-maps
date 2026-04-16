@@ -293,7 +293,7 @@ class TestMQTTSubscriberStopEvent:
         """_run_loop should exit promptly when _stop_event is set mid-backoff."""
         import socket
         import time
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
 
         sub = MQTTSubscriber()
         if not sub.available:
@@ -306,9 +306,16 @@ class TestMQTTSubscriberStopEvent:
         # Pre-set stop_event to simulate shutdown during wait
         sub._stop_event.set()
 
-        start = time.time()
-        sub._run_loop()
-        elapsed = time.time() - start
+        # _run_loop does a TCP reachability precheck before calling
+        # _client.connect; stub it out so the test exercises only the
+        # stop-event-interrupts-backoff path.
+        with patch(
+            "src.collectors.mqtt_subscriber.socket.create_connection",
+            side_effect=socket.timeout("timed out"),
+        ):
+            start = time.time()
+            sub._run_loop()
+            elapsed = time.time() - start
 
         # Should exit near-instantly, not wait for full backoff delay
         assert elapsed < 2.0
