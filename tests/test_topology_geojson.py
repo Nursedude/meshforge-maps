@@ -5,9 +5,6 @@ import pytest
 from src.collectors.mqtt_subscriber import (
     MQTTNodeStore,
     _classify_snr,
-    SNR_TIERS,
-    SNR_DEFAULT,
-    SNR_UNKNOWN,
 )
 
 

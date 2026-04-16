@@ -2,7 +2,6 @@
 
 import sqlite3
 import threading
-import pytest
 
 from src.utils.shared_health_state import SharedHealthStateReader
 

@@ -3,7 +3,6 @@
 import threading
 import time
 
-import pytest
 
 from src.utils.connection_manager import ConnectionManager
 

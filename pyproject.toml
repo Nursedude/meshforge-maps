@@ -49,9 +49,10 @@ select = [
 ignore = [
     "E501",  # line length (handled by formatter)
     "S101",  # assert usage (needed in tests)
+    "S310",  # urlopen audit — project only opens http(s) URLs from config/constants
     "S603",  # subprocess without shell (we validate this manually)
     "S607",  # start process with partial path (rnstatus is expected)
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S106", "S108"]  # asserts, hardcoded passwords, temp paths OK in tests
+"tests/**" = ["S101", "S104", "S106", "S108"]  # asserts, bind-all, hardcoded passwords, temp paths OK in tests

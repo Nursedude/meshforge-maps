@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.main import MeshForgeMapsPlugin
 
@@ -13,7 +12,6 @@ class TestPluginActivation:
     @patch("src.main.MapServer")
     @patch("src.main.MapsConfig")
     def test_activate_checks_start_result(self, MockConfig, MockServer):
-        mock_config = MockConfig.return_value
         mock_server = MockServer.return_value
         mock_server.start.return_value = True
         mock_server.port = 8808
@@ -117,7 +115,6 @@ class TestPluginEventHandlers:
     @patch("src.main.MapServer")
     @patch("src.main.MapsConfig")
     def test_on_config_changed_ignores_non_dict(self, MockConfig, MockServer):
-        mock_config = MockConfig.return_value
         mock_server = MockServer.return_value
         mock_server.start.return_value = True
         mock_server.port = 8808

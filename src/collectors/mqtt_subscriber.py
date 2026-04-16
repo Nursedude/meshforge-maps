@@ -707,7 +707,6 @@ class MQTTSubscriber:
     def _decode_protobuf(self, payload: bytes, topic: str) -> None:
         """Decode ServiceEnvelope protobuf message."""
         mqtt_pb2 = self._proto["mqtt_pb2"]
-        mesh_pb2 = self._proto["mesh_pb2"]
 
         env = mqtt_pb2.ServiceEnvelope()
         env.ParseFromString(payload)

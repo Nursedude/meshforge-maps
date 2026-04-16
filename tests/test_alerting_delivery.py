@@ -1,20 +1,12 @@
 """Tests for alerting delivery: EventBus ALERT_FIRED propagation."""
 
 import json
-import time
-from unittest.mock import MagicMock
 
-import pytest
 
 from src.utils.alert_engine import (
-    Alert,
     AlertEngine,
-    AlertRule,
-    AlertSeverity,
-    AlertType,
-    DEFAULT_COOLDOWN,
 )
-from src.utils.event_bus import Event, EventBus, EventType, NodeEvent
+from src.utils.event_bus import Event, EventBus, EventType
 
 
 # ---------------------------------------------------------------------------

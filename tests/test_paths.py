@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from src.utils.paths import get_cache_dir, get_config_dir, get_data_dir, get_real_home
 

@@ -19,10 +19,8 @@ class TestAirQualityTelemetry(unittest.TestCase):
             pm_voc_idx=120.5,
             pm_nox_idx=50.0,
         )
-        nodes = store.get_all_nodes()
-        # No position yet, so no nodes returned by get_all_nodes
-        # (which filters by valid coordinates)
-        # Access internal store directly
+        # No position yet, so get_all_nodes() would return nothing
+        # (it filters by valid coordinates). Access internal store directly.
         node = store._nodes.get("!aq0001")
         self.assertIsNotNone(node)
         self.assertEqual(node["pm25_standard"], 15)

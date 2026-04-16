@@ -1,10 +1,7 @@
 """Tests for reliability integration: retry with backoff in collectors."""
 
-import json
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from src.collectors.base import BaseCollector, make_feature, make_feature_collection
 from src.collectors.aggregator import DataAggregator

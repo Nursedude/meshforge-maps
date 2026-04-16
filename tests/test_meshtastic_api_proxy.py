@@ -1,7 +1,6 @@
 """Tests for MeshtasticApiProxy — meshtasticd-compatible JSON API proxy."""
 
 import json
-import threading
 import time
 import unittest
 from http.client import HTTPConnection
