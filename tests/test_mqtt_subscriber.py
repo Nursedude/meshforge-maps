@@ -226,7 +226,7 @@ class TestMQTTPositionValidation:
     def test_connect_timeout_exception_handled(self):
         """Socket timeout on MQTT connect should not crash subscriber."""
         import socket
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock
 
         sub = MQTTSubscriber(broker="unreachable.invalid", port=1883)
         if not sub.available:

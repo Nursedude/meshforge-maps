@@ -12,7 +12,6 @@ import re
 import threading
 import time
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..utils.paths import get_data_dir

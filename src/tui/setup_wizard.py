@@ -8,11 +8,10 @@ Usage:
     python -m src.main --setup
 """
 
-import json
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from ..utils.config import DEFAULT_CONFIG, MapsConfig
+from ..utils.config import MapsConfig
 
 
 def _prompt(label: str, default: Any = None, password: bool = False) -> str:

@@ -9,11 +9,10 @@ Tests cover:
 """
 
 import json
-import time
 from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -186,14 +185,14 @@ class TestColorHelpers:
         from src.tui.helpers import health_color
         with patch("src.tui.helpers.curses") as mock_curses:
             mock_curses.color_pair.return_value = 0
-            result = health_color("nonexistent")
+            health_color("nonexistent")
             mock_curses.color_pair.assert_called_with(0)
 
     def test_severity_color_unknown_severity(self):
         from src.tui.helpers import severity_color
         with patch("src.tui.helpers.curses") as mock_curses:
             mock_curses.color_pair.return_value = 0
-            result = severity_color("unknown")
+            severity_color("unknown")
             mock_curses.color_pair.assert_called_with(0)
 
 
@@ -719,7 +718,6 @@ class TestWebSocketState:
     def test_ws_read_frame_returns_text(self):
         """Test that _ws_read_frame can parse a simple text frame."""
         from src.tui.app import TuiApp
-        import struct
         app = TuiApp()
         mock_sock = MagicMock()
         payload = b'{"type":"test"}'
@@ -763,8 +761,6 @@ class TestWebSocketState:
 
             with patch('socket.socket', return_value=mock_sock):
                 # Run one iteration then stop
-                original_running = app._running
-
                 def stop_after_one(*args, **kwargs):
                     app._running = False
                     return 0.1

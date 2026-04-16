@@ -1,17 +1,13 @@
 """Tests for the alert engine — threshold evaluation, cooldown, history."""
 
-import time
 
-import pytest
 
 from src.utils.alert_engine import (
     AlertEngine,
     AlertRule,
     AlertSeverity,
     AlertType,
-    DEFAULT_COOLDOWN,
     DEFAULT_RULES,
-    MAX_ALERT_HISTORY,
 )
 
 

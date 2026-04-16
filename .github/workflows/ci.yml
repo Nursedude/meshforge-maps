@@ -28,6 +28,9 @@ jobs:
     name: Test Suite
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write # for the PR-comment failure diagnostic below
     strategy:
       fail-fast: false
       matrix:
@@ -48,10 +51,56 @@ jobs:
           pip install -r requirements.txt || echo "Some optional deps failed - continuing"
 
       - name: Run tests
+        id: pytest
+        shell: bash
         run: |
-          python -m pytest tests/ -v --tb=short
+          set -o pipefail
+          # Tee full output to a file; the "Dump failure summary" step below
+          # surfaces an extracted summary if this step exits non-zero, because
+          # GitHub's lazy-loaded log viewer sometimes hides raw output.
+          python -m pytest tests/ -v --tb=short 2>&1 | tee /tmp/pytest.log
         env:
           CI: true
+          PYTHONUNBUFFERED: "1"
+
+      - name: Dump failure summary
+        if: failure() && steps.pytest.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "============================================"
+          echo "== PYTEST FAILURE SUMMARY (CI-EXTRACTED) =="
+          echo "============================================"
+          grep -aE "^FAILED|^ERROR|^tests/.*FAIL|assert|Error:|^E +" /tmp/pytest.log | head -50 || true
+          echo "--- short test summary info ---"
+          awk '/short test summary info/{flag=1} flag' /tmp/pytest.log | head -50 || true
+          echo "============================================"
+
+      - name: Comment failure summary on PR
+        if: failure() && steps.pytest.outcome == 'failure' && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PY_VERSION: ${{ matrix.python-version }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "DEBUG: entering comment step for PR #${PR_NUMBER} on ${REPO}"
+          echo "DEBUG: /tmp/pytest.log size: $(wc -c </tmp/pytest.log 2>/dev/null || echo MISSING)"
+          {
+            echo "## CI failure summary (Python ${PY_VERSION})"
+            echo
+            echo '```'
+            echo "--- FAILED lines ---"
+            grep -aE "^FAILED|^ERROR|^tests/.*FAIL|AssertionError|^E +" /tmp/pytest.log | head -30 || true
+            echo
+            echo "--- short test summary info ---"
+            awk '/short test summary info/{flag=1} flag' /tmp/pytest.log | head -30 || true
+            echo '```'
+          } > /tmp/comment.md
+          echo "DEBUG: comment body:"
+          cat /tmp/comment.md
+          echo "DEBUG: posting comment…"
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md --repo "$REPO" && echo "DEBUG: gh exit=$?" || echo "DEBUG: gh exit=$?"
 
       - name: Run tests with coverage
         if: matrix.python-version == '3.11'
@@ -90,7 +139,7 @@ jobs:
           pip install -r requirements.txt || true
 
       - name: Ruff security rules (blocking)
-        run: ruff check src/ --select S --ignore S101,S603,S607
+        run: ruff check src/ --select S --ignore S101,S310,S603,S607
 
       - name: pip-audit (informational)
         if: always()

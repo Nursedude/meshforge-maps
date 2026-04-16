@@ -80,7 +80,6 @@ def draw_system(win: Any, top: int, height: int, cols: int,
     for pkg in packages:
         name = pkg.get("name", "?")
         installed = pkg.get("installed_version")
-        desc = pkg.get("description", "")
         if installed:
             indicator = "OK "
             ca = curses.color_pair(CP_SOURCE_ONLINE)

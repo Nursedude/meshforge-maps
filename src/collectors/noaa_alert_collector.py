@@ -8,7 +8,6 @@ for rendering as map overlays.
 
 import json
 import logging
-import time
 from typing import Any, Dict, List, Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError

@@ -360,7 +360,7 @@ class DataAggregator:
                 raw = json.dumps(result, default=str).encode("utf-8")
                 self._cached_json = raw
                 self._cached_json_gzip = gzip.compress(raw)
-                self._cached_json_etag = hashlib.md5(raw).hexdigest()
+                self._cached_json_etag = hashlib.md5(raw, usedforsecurity=False).hexdigest()
             except Exception as e:
                 logger.debug("JSON pre-serialization failed: %s", e)
                 self._cached_json = None

@@ -1,6 +1,6 @@
 """Tests for MeshtasticCollector source_mode (auto / mqtt_only / local_only)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from src.collectors.base import make_feature
 from src.collectors.meshtastic_collector import MeshtasticCollector
@@ -78,8 +78,6 @@ class TestLockContentionRetry:
             def __exit__(self, *args):
                 pass
 
-        original_acquire = collector._conn_mgr.acquire
-
         def fake_acquire(**kwargs):
             nonlocal call_count
             idx = min(call_count, len(acquired_values) - 1)
@@ -88,7 +86,7 @@ class TestLockContentionRetry:
 
         with patch.object(collector._conn_mgr, "acquire", side_effect=fake_acquire):
             with patch("time.sleep"):
-                result = collector._fetch_from_api()
+                collector._fetch_from_api()
 
         # Should have retried (2 acquire calls)
         assert call_count == 2

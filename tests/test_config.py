@@ -1,11 +1,9 @@
 """Tests for MapsConfig configuration management."""
 
 import json
-import pytest
 
 from src.utils.config import (
     DEFAULT_CONFIG,
-    NETWORK_COLORS,
     TILE_PROVIDERS,
     MapsConfig,
 )

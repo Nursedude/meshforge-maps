@@ -65,7 +65,7 @@ class ReconnectStrategy:
             delay = self._base_delay * (self._multiplier ** self._attempt)
             delay = min(delay, self._max_delay)
 
-            jitter = random.uniform(0, delay * self._jitter_factor)
+            jitter = random.uniform(0, delay * self._jitter_factor)  # noqa: S311 — backoff jitter, not cryptographic
             delay += jitter
 
             self._attempt += 1
