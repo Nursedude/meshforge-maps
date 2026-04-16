@@ -10,7 +10,7 @@ Visualization plugin for the [MeshForge ecosystem](https://github.com/Nursedude/
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-994-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1047-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
 A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, AREDN, and MeshCore into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
@@ -707,6 +707,17 @@ The HTTP and WebSocket servers bind to **127.0.0.1** (localhost) by default. Cha
 
 **CORS:** Disabled by default (no CORS headers sent). Set `cors_allowed_origin` to a specific origin or `"*"` to enable cross-origin access.
 
+**Defense-in-depth hardening** (see PRs #70 and #71 for the full audit):
+
+- **Bounded HTTP reads.** Every third-party or public-internet response is read through `bounded_read(resp, max_bytes=...)` from `src/collectors/base.py`; the PyPI `/api/dependencies` fetch is capped at 2 MB. A compromised mirror or MITM cannot exhaust server RAM.
+- **Clock-skew-resistant presence.** `is_node_online()` rejects negative ages, so a hostile broker cannot forge a future `last_heard` to pin nodes "online" indefinitely.
+- **Untrusted broker strings are truncated.** MapReport fields (`long_name`, `firmware_version`, `region`, `modem_preset`, `hw_model`, `role`) are capped per-field before being persisted to the node store.
+- **WebSocket limits per RFC 6455.** Control frames (ping/pong/close) are capped at 125 bytes; data frames at 1 MB. The library client sets `open_timeout=10` so a stalled upgrade cannot hang indefinitely.
+- **TUI stderr log.** Opened with `O_NOFOLLOW` + mode `0o600` (library output can leak MQTT credentials). Close is deferred if a background thread is still writing, so shutdown cannot produce "I/O on closed file" in that thread.
+- **No process-global socket timeouts.** The MQTT connect uses a per-socket `create_connection` probe rather than `socket.setdefaulttimeout()`, which would bleed a 30s timeout into concurrent HTTP collectors.
+- **Install-time.** `install.sh` wraps its seed `settings.json` heredoc in `(umask 077; cat > … <<EOF)` so the file is never briefly world-readable between creation and `chmod 600`.
+- **CI gates.** Ruff lint + bandit-style security scan, syntax check, and pytest (with coverage ≥70%) run on every PR; a failure posts an extracted summary to the PR automatically.
+
 See [SECURITY.md](SECURITY.md) for the full security audit report, findings, and a deployment hardening checklist.
 
 ## API Endpoints
@@ -775,6 +786,7 @@ See [SECURITY.md](SECURITY.md) for the full security audit report, findings, and
 | `/api/sources` | GET | Enabled data sources |
 | `/api/core-health` | GET | Cross-process health state (shared memory) |
 | `/api/proxy/stats` | GET | Meshtastic API proxy statistics |
+| `/api/dependencies` | GET | Installed package versions + latest `meshtastic` from PyPI (5-min cache, 2 MB response cap) |
 
 ## Offline Tile Caching
 
@@ -809,15 +821,25 @@ flowchart LR
 ## Testing
 
 ```bash
-pip install pytest
-pytest tests/ -v    # ~994 tests, no network access needed
+pip install pytest pytest-cov
+pytest tests/ -v    # 1047 tests, no network access needed
+ruff check src/ tests/       # lint gate used by CI
 ```
 
 All tests use mocked HTTP/MQTT responses — no live radio, broker, or network required.
 
+**Continuous Integration** (`.github/workflows/ci.yml`) runs five jobs on every push and pull request:
+
+- **Lint & Security Check** — `ruff check src/ tests/` with pyflakes/bugbear/bandit rules
+- **Security Scan** — `ruff check src/ --select S` (bandit security rules) as a blocking gate
+- **Syntax Check** — `py_compile` on every `src/**/*.py`
+- **Test Suite (3.9 / 3.11)** — pytest with coverage on 3.11 (≥70% threshold)
+
+Any pytest failure posts an extracted summary as a comment on the PR (via `tee /tmp/pytest.log` + `gh pr comment`) so opaque `exit code 1` errors become actionable without opening the Actions UI.
+
 ### Testing Status
 
-This project is in **beta**. The unit test suite (~994 tests) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
+This project is in **beta**. The unit test suite (1047 tests) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
 
 | Area | Unit Tested | Live Tested | Notes |
 |------|:-----------:|:-----------:|-------|
