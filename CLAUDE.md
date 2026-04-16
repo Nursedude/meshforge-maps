@@ -38,8 +38,10 @@ src/utils/
   openhamclock_compat.py     Port detection (3000 first, 8080 fallback)
 src/tui/                     Curses terminal dashboard (7 tabs)
 web/                         Leaflet.js frontend, sw-tiles.js offline cache
-tests/                       pytest suite (994 tests)
+tests/                       pytest suite (1047 tests)
 scripts/                     install.sh, verify.sh
+.github/workflows/ci.yml     Ruff lint + security scan, syntax check, pytest 3.9+3.11,
+                             coverage ≥70%, tee'd pytest log + failure-summary PR comment
 ```
 
 ## Key Patterns
@@ -47,6 +49,8 @@ scripts/                     install.sh, verify.sh
 - **Collector pattern**: All collectors extend `BaseCollector` (ABC) with built-in cache, retry with exponential backoff, and stale-cache fallback. Override `_fetch()` to return a GeoJSON `FeatureCollection`.
 - **GeoJSON everywhere**: Use `make_feature()` and `make_feature_collection()` from `src/collectors/base.py` for all node data. Never build GeoJSON dicts by hand.
 - **Coordinate validation**: Always use `validate_coordinates()` — handles NaN, Infinity, out-of-range, int-to-float conversion (`convert_int=True` for Meshtastic `latitudeI`), and Null Island (0,0) rejection.
+- **HTTP body caps**: For any third-party or public-internet fetch, use `bounded_read(resp, max_bytes=...)` from `src/collectors/base.py`. A bare `resp.read()` lets a compromised mirror or on-path attacker exhaust RAM. Default cap is 10 MB.
+- **Online detection**: `is_node_online(last_heard, network)` from `src/collectors/base.py` rejects future timestamps (a hostile broker could otherwise forge `last_heard` in the future to pin nodes "online") and returns `None` for unknown networks.
 - **Config**: `MapsConfig` in `src/utils/config.py`. `DEFAULT_CONFIG` dict is canonical. Settings persist to `~/.config/meshforge/plugins/org.meshforge.extension.maps/settings.json`.
 - **Paths**: Use `get_real_home()` from `src/utils/paths.py`, never `Path.home()` directly (returns `/root` under sudo/systemd).
 - **Dependency injection**: `MapServerContext` dataclass in `map_server.py` holds all server dependencies. No monkey-patching stdlib objects.
@@ -67,24 +71,35 @@ scripts/                     install.sh, verify.sh
 - Query parameters extracted via `_safe_query_param()` helper — never access raw query dicts
 - HTTP responses include `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`
 - HTML responses include `Content-Security-Policy` header restricting script/style/image/connect sources
-- Config file written with restrictive umask (`0o077`) to protect MQTT credentials in `settings.json`
+- Config file written with restrictive umask (`0o077`) to protect MQTT credentials in `settings.json`; `install.sh` wraps its seed heredoc in `(umask 077; cat > … <<EOF)` so the file is never briefly world-readable
+- Bound every outbound HTTP body with `bounded_read(resp, max_bytes=...)` (from `src/collectors/base.py`). PyPI fetch in `map_server._serve_dependencies` uses a 2 MB cap + `threading.Lock` on the shared cache
+- Strings from untrusted broker payloads (MapReport `long_name`, `firmware_version`, `region`, `modem_preset`, etc.) are truncated to small per-field caps before persisting
+- WebSocket control frames (opcode ≥ 0x8, i.e. ping/pong/close) are capped at 125 bytes per RFC 6455 §5.5; data frames at 1 MB. Library `_ws.connect()` uses `open_timeout=10` so a stalled upgrade can't hang the coroutine
+- TUI stderr log is opened with `O_NOFOLLOW` + mode `0o600` — library output (paho-mqtt, meshtastic) can include MQTT credentials, so a planted symlink must not redirect the file and the log must not be world-readable
+- `meshtastic_api_proxy` has no authentication; it warns loudly on non-loopback bind since non-loopback exposes the full MQTT node store
+- CI gates (`ruff check`, security-scan `ruff --select S`, pytest 3.9+3.11, coverage ≥70%) run on every PR; failures post an extracted summary as a PR comment via the `tee /tmp/pytest.log` → `gh pr comment` pattern
 
 ## Anti-Patterns (from Code Reviews)
 
 - Don't monkey-patch attributes onto stdlib objects — use typed containers (`MapServerContext`)
 - Don't add tautological tests (`assert True`, `assert x == x`) — tests must verify real behavior
 - Don't duplicate validation logic — reuse `validate_coordinates()`, `validate_node_id()` from `src/collectors/base.py`
-- Don't swallow exceptions silently — log at minimum (`logger.error`)
+- Don't swallow exceptions silently — log at minimum (`logger.error`); in `try/except/pass` patterns, replace with `logger.debug("%s", exc)`
 - Don't add unnecessary abstraction layers — keep it stdlib-simple
 - Don't add docstrings/comments/type hints to code you didn't change
 - Don't create helpers or utilities for one-time operations
 - Don't use feature flags or backwards-compatibility shims — just change the code
 - Don't access `_lock` or `_conn` on `NodeHistoryDB` directly — use `execute_read()` for analytics queries
+- Don't call `socket.setdefaulttimeout()` — it mutates a process-global that concurrent threads inherit. Use per-socket timeout (`socket.create_connection((host, port), timeout=N)`) or the library's own timeout parameter
+- Don't use `0` as a cache-invalidation sentinel for values compared against `time.monotonic()` — fresh CI runners/containers can have small monotonic values, making `time.monotonic() - 0 < TTL` return stale cached data. Use `float("-inf")` instead
+- Don't `resp.read()` without a byte limit on third-party or public-internet HTTP responses — use `bounded_read()`
 
 ## Testing
 
 ```bash
-pytest tests/ -v    # 994 tests, no external deps needed
+pytest tests/ -v    # 1047 tests, no external deps needed
+ruff check src/ tests/     # matches CI's Lint & Security Check job
+ruff check src/ --select S --ignore S101,S310,S603,S607   # matches Security Scan job
 ```
 
 - Test files mirror source modules: `test_<module>.py`
@@ -92,6 +107,8 @@ pytest tests/ -v    # 994 tests, no external deps needed
 - All collectors tested with mock HTTP/MQTT responses (no network needed)
 - Integration tests: `test_integration_config_drift.py`, `test_alerting_delivery.py`
 - Hardening tests: `test_aredn_hardening.py`, `test_reliability.py`, `test_reliability_fixes.py`
+- Regression tests for security fixes: `TestIsNodeOnline` (clock-skew / unknown-network) and `TestBoundedRead` in `tests/test_base.py`
+- Ruff config lives in `pyproject.toml`: `S310` (urlopen audit, acknowledged stdlib HTTP pattern) and `S104` (bind-all, covered by dedicated config tests) are ignored globally; tests also ignore `S101`, `S106`, `S108`
 
 ## Known Gotchas
 
@@ -104,6 +121,9 @@ pytest tests/ -v    # 994 tests, no external deps needed
 - **Circuit breakers**: Per-source failure isolation via `ConnectionManager` — don't bypass for "reliability"
 - **Config keys in README**: `cors_allowed_origin`, `api_key`, `enable_noaa_alerts`, `noaa_alerts_area`, `noaa_alerts_severity` are all in `DEFAULT_CONFIG` — keep README config table in sync when adding/removing keys
 - **NodeHistoryDB.execute_read()**: Public API for read-only analytics queries — use this instead of accessing `_lock`/`_conn` directly
+- **time.monotonic() on fresh runners**: Starts small on fresh CI runners/containers — use `float("-inf")` as the stale-cache sentinel (see `NodeHistoryDB._count_cache_time`)
+- **Future timestamps are hostile input**: MQTT `last_heard` can be forged; `is_node_online()` rejects negative ages and unknown networks return `None`
+- **CI diagnostic scope**: The `tee /tmp/pytest.log` + PR-comment steps are scoped to `steps.pytest.outcome == 'failure'`. Keep pytest (including coverage) inside that one step — splitting into a second pytest invocation bypasses the diagnostic
 
 ## Commit Convention
 
