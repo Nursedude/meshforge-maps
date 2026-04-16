@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .base import MESHFORGE_DATA_DIR, BaseCollector, is_node_online, make_feature, make_feature_collection, validate_coordinates
+from .base import MESHFORGE_DATA_DIR, BaseCollector, bounded_read, is_node_online, make_feature, make_feature_collection, validate_coordinates
 from ..utils.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,7 @@ class MeshtasticCollector(BaseCollector):
                     try:
                         req = Request(url, headers={"Accept": "application/json"})
                         with urlopen(req, timeout=http_timeout) as resp:
-                            data = json.loads(resp.read().decode())
+                            data = json.loads(bounded_read(resp).decode())
 
                         nodes = data if isinstance(data, list) else data.get("nodes", [])
                         for node in nodes:
@@ -341,7 +341,7 @@ class MeshtasticCollector(BaseCollector):
                 },
             )
             with urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode())
+                data = json.loads(bounded_read(resp).decode())
 
             for num_id, node in data.items():
                 feature = self._parse_meshmap_node(num_id, node)
