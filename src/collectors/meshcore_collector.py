@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 
 from .base import (
     BaseCollector,
+    bounded_read,
     is_node_online,
     make_feature,
     make_feature_collection,
@@ -78,7 +79,7 @@ class MeshCoreCollector(BaseCollector):
             )
             with urlopen(req, timeout=30) as resp:
                 # API may redirect (307), urlopen follows by default for GET
-                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+                data = json.loads(bounded_read(resp).decode("utf-8", errors="replace"))
 
             if not isinstance(data, list):
                 logger.debug("MeshCore map: unexpected response format")
