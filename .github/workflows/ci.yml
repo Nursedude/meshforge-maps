@@ -58,7 +58,15 @@ jobs:
           # Tee full output to a file; the "Dump failure summary" step below
           # surfaces an extracted summary if this step exits non-zero, because
           # GitHub's lazy-loaded log viewer sometimes hides raw output.
-          python -m pytest tests/ -v --tb=short 2>&1 | tee /tmp/pytest.log
+          # Coverage is collected here so the diagnostic also catches
+          # coverage-threshold failures on 3.11.
+          if [ "${{ matrix.python-version }}" = "3.11" ]; then
+            python -m pytest tests/ -v --tb=short \
+              --cov=src --cov-report=xml --cov-fail-under=70 \
+              2>&1 | tee /tmp/pytest.log
+          else
+            python -m pytest tests/ -v --tb=short 2>&1 | tee /tmp/pytest.log
+          fi
         env:
           CI: true
           PYTHONUNBUFFERED: "1"
@@ -70,7 +78,7 @@ jobs:
           echo "============================================"
           echo "== PYTEST FAILURE SUMMARY (CI-EXTRACTED) =="
           echo "============================================"
-          grep -aE "^FAILED|^ERROR|^tests/.*FAIL|assert|Error:|^E +" /tmp/pytest.log | head -50 || true
+          grep -aE "^FAILED|^ERROR|^tests/.*FAIL|assert|Error:|^E +|Required test coverage" /tmp/pytest.log | head -50 || true
           echo "--- short test summary info ---"
           awk '/short test summary info/{flag=1} flag' /tmp/pytest.log | head -50 || true
           echo "============================================"
@@ -91,7 +99,7 @@ jobs:
             echo
             echo '```'
             echo "--- FAILED lines ---"
-            grep -aE "^FAILED|^ERROR|^tests/.*FAIL|AssertionError|^E +" /tmp/pytest.log | head -30 || true
+            grep -aE "^FAILED|^ERROR|^tests/.*FAIL|AssertionError|^E +|Required test coverage" /tmp/pytest.log | head -30 || true
             echo
             echo "--- short test summary info ---"
             awk '/short test summary info/{flag=1} flag' /tmp/pytest.log | head -30 || true
@@ -101,11 +109,6 @@ jobs:
           cat /tmp/comment.md
           echo "DEBUG: posting comment…"
           gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md --repo "$REPO" && echo "DEBUG: gh exit=$?" || echo "DEBUG: gh exit=$?"
-
-      - name: Run tests with coverage
-        if: matrix.python-version == '3.11'
-        run: |
-          python -m pytest tests/ --cov=src --cov-report=xml --cov-fail-under=70
 
   syntax-check:
     name: Syntax Check

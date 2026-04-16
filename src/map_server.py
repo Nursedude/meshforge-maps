@@ -1410,10 +1410,15 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "hardware": hardware,
         })
 
-    # Cache for PyPI latest version (avoid hammering PyPI on every request)
+    # Cache for PyPI latest version (avoid hammering PyPI on every request).
+    # Guarded by _pypi_cache_lock because multiple request threads can race
+    # into a cold-cache refresh simultaneously, otherwise each would issue
+    # its own PyPI request and overwrite the shared class attributes.
     _pypi_cache: Dict[str, Any] = {}
     _pypi_cache_time: float = 0.0
+    _pypi_cache_lock: threading.Lock = threading.Lock()
     _PYPI_CACHE_TTL = 300  # 5 minutes
+    _PYPI_MAX_BYTES = 2_000_000  # Cap PyPI response to 2 MB
 
     def _serve_dependencies(self) -> None:
         """Serve dependency version information for the System/Upgrade TUI tab."""
@@ -1440,26 +1445,38 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 "description": description,
             })
 
-        # Fetch latest meshtastic version from PyPI (cached)
+        # Fetch latest meshtastic version from PyPI (cached). Take the lock
+        # for the whole refresh so concurrent requests don't all race into
+        # their own PyPI fetch — one fetches, the rest pick up the cache.
         latest_meshtastic = None
         now = time.time()
-        if (now - MapRequestHandler._pypi_cache_time) > self._PYPI_CACHE_TTL:
-            try:
-                import urllib.request
-                req = urllib.request.Request(
-                    "https://pypi.org/pypi/meshtastic/json",
-                    headers={"Accept": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    pypi_data = json.loads(resp.read().decode("utf-8"))
-                latest_meshtastic = pypi_data.get("info", {}).get("version")
-                MapRequestHandler._pypi_cache = {"meshtastic": latest_meshtastic}
-                MapRequestHandler._pypi_cache_time = now
-            except Exception as e:
-                logger.debug("PyPI version check failed: %s", e)
+        with MapRequestHandler._pypi_cache_lock:
+            if (now - MapRequestHandler._pypi_cache_time) > self._PYPI_CACHE_TTL:
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(
+                        "https://pypi.org/pypi/meshtastic/json",
+                        headers={"Accept": "application/json"},
+                    )
+                    # Cap response size — a compromised mirror or MITM serving
+                    # a huge body would otherwise exhaust RAM on the HTTP worker.
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        raw = resp.read(self._PYPI_MAX_BYTES + 1)
+                    if len(raw) > self._PYPI_MAX_BYTES:
+                        raise ValueError(
+                            f"PyPI response exceeded {self._PYPI_MAX_BYTES} bytes"
+                        )
+                    pypi_data = json.loads(raw.decode("utf-8"))
+                    latest_meshtastic = pypi_data.get("info", {}).get("version")
+                    if latest_meshtastic is not None:
+                        latest_meshtastic = str(latest_meshtastic)[:32]
+                    MapRequestHandler._pypi_cache = {"meshtastic": latest_meshtastic}
+                    MapRequestHandler._pypi_cache_time = now
+                except Exception as e:
+                    logger.debug("PyPI version check failed: %s", e)
+                    latest_meshtastic = MapRequestHandler._pypi_cache.get("meshtastic")
+            else:
                 latest_meshtastic = MapRequestHandler._pypi_cache.get("meshtastic")
-        else:
-            latest_meshtastic = MapRequestHandler._pypi_cache.get("meshtastic")
 
         # Annotate meshtastic entry with latest version
         for entry in results:

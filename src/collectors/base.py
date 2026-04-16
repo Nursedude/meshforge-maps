@@ -40,7 +40,12 @@ def is_node_online(last_heard: Any, network: str = "") -> Optional[bool]:
     """Determine node online status using per-source thresholds.
 
     Returns True/False based on age vs. network-specific threshold,
-    or None if *last_heard* is missing/zero (unknown status).
+    or None if *last_heard* is missing/zero (unknown status) or the
+    network is unrecognised.
+
+    Guards against future timestamps (clock skew or a hostile broker
+    forging last_heard = far future to pin nodes "online") by treating
+    any negative age as out-of-range.
     """
     if not last_heard:
         return None
@@ -48,8 +53,33 @@ def is_node_online(last_heard: Any, network: str = "") -> Optional[bool]:
         age = time.time() - float(last_heard)
     except (ValueError, TypeError):
         return None
-    threshold = ONLINE_THRESHOLDS.get(network, DEFAULT_ONLINE_THRESHOLD)
-    return age < threshold
+    threshold = ONLINE_THRESHOLDS.get(network)
+    if threshold is None:
+        if not network:
+            threshold = DEFAULT_ONLINE_THRESHOLD
+        else:
+            return None
+    return 0 <= age < threshold
+
+
+# Default cap for HTTP bodies read from third-party/public endpoints.
+# A compromised mirror or on-path attacker otherwise has no upper bound
+# on the memory a single response can consume.
+DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+def bounded_read(resp: Any, max_bytes: int = DEFAULT_MAX_RESPONSE_BYTES) -> bytes:
+    """Read from an HTTP response with an upper-bound enforced.
+
+    Reads at most ``max_bytes`` bytes plus one sentinel byte so oversized
+    responses raise ``ValueError`` instead of being silently truncated.
+    """
+    data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(
+            f"HTTP response exceeded {max_bytes} bytes — refusing to buffer"
+        )
+    return data
 
 
 def validate_node_id(node_id: str) -> bool:

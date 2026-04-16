@@ -576,12 +576,15 @@ class MQTTSubscriber:
         last_cleanup = time.time()
         while self._running.is_set():
             try:
-                old_timeout = socket.getdefaulttimeout()
-                try:
-                    socket.setdefaulttimeout(30)
-                    self._client.connect(self._broker, self._port, keepalive=60)
-                finally:
-                    socket.setdefaulttimeout(old_timeout)
+                # Reachability probe with a bounded per-socket timeout so we
+                # fail fast on unreachable brokers without mutating the
+                # process-global socket default (which would affect concurrent
+                # HTTP collectors running in other threads).
+                with socket.create_connection(
+                    (self._broker, self._port), timeout=30,
+                ):
+                    pass
+                self._client.connect(self._broker, self._port, keepalive=60)
                 connect_time = time.time()
                 self._client.loop_forever()
                 # Only reset backoff if connection was stable (>30s)
@@ -948,13 +951,18 @@ class MQTTSubscriber:
             return  # MapReport not available in this protobuf version
         report.ParseFromString(payload)
 
-        long_name = getattr(report, "long_name", "")
-        short_name = getattr(report, "short_name", "")
-        hw_model = str(report.hw_model) if getattr(report, "hw_model", None) else ""
-        role = str(report.role) if getattr(report, "role", None) else ""
-        firmware_version = getattr(report, "firmware_version", "")
-        region = str(report.region) if getattr(report, "region", None) else ""
-        modem_preset = str(report.modem_preset) if getattr(report, "modem_preset", None) else ""
+        # Cap untrusted broker-supplied strings — a crafted oversize field
+        # would otherwise multiply across thousands of stored nodes.
+        def _cap(v: Any, n: int) -> str:
+            return (str(v) if v else "")[:n]
+
+        long_name = _cap(getattr(report, "long_name", ""), 40)
+        short_name = _cap(getattr(report, "short_name", ""), 8)
+        hw_model = _cap(getattr(report, "hw_model", None), 32)
+        role = _cap(getattr(report, "role", None), 16)
+        firmware_version = _cap(getattr(report, "firmware_version", ""), 32)
+        region = _cap(getattr(report, "region", None), 16)
+        modem_preset = _cap(getattr(report, "modem_preset", None), 16)
         num_online = _safe_int(getattr(report, "num_online_local_nodes", None), 0, 100000)
 
         # Extract position from MapReport (latitude_i/longitude_i integer format)
