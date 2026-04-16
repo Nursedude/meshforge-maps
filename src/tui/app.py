@@ -118,15 +118,23 @@ class TuiApp:
 
         # Redirect stderr to a log file so library output doesn't corrupt
         # the curses display (mirrors upstream meshforge TUI pattern).
+        # Open with O_NOFOLLOW + mode 0o600 so a pre-planted symlink can't
+        # redirect appends elsewhere and the file is not world-readable
+        # (library output may include MQTT credentials or tokens).
         original_stderr = sys.stderr
         stderr_file = None
         try:
             log_dir = get_real_home() / ".cache" / "meshforge"
             log_dir.mkdir(parents=True, exist_ok=True)
-            stderr_file = open(log_dir / "maps-tui-stderr.log", "a")
+            log_path = log_dir / "maps-tui-stderr.log"
+            flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(log_path, flags, 0o600)
+            stderr_file = os.fdopen(fd, "a")
             sys.stderr = stderr_file
-        except OSError:
-            pass  # If redirect fails, continue with original stderr
+        except OSError as e:
+            logger.warning("Could not redirect stderr to %s: %s", log_path, e)
 
         self._running = True
         self._stop_event.clear()
@@ -153,7 +161,14 @@ class TuiApp:
             if self._ws_thread:
                 self._ws_thread.join(timeout=2)
             sys.stderr = original_stderr
-            if stderr_file:
+            # Only close the log if no background thread can still be writing
+            # to it; otherwise leave it open and let the interpreter finalize
+            # it on exit. Closing a live file would raise "I/O on closed file"
+            # in the still-running daemon thread.
+            bg_alive = fetch_thread.is_alive() or (
+                self._ws_thread is not None and self._ws_thread.is_alive()
+            )
+            if stderr_file and not bg_alive:
                 stderr_file.close()
 
     def _fetch_loop(self) -> None:
@@ -419,8 +434,10 @@ class TuiApp:
         try:
             draw_fn(*args)
         except Exception as e:
-            logger.warning("Tab draw error in %s: %s",
-                           getattr(draw_fn, "__name__", repr(draw_fn)), e)
+            # Use logger.exception so the full traceback reaches the stderr
+            # log — otherwise intermittent curses bugs are unreproducible.
+            logger.exception("Tab draw error in %s",
+                             getattr(draw_fn, "__name__", repr(draw_fn)))
             safe_addstr(self._stdscr, 2, 2, f"Render error: {e}")
 
     def _draw(self) -> None:
@@ -603,9 +620,12 @@ class TuiApp:
 
     # ── WebSocket Client ──────────────────────────────────────────
 
-    # Maximum frame payload size to accept (16 MB) -- prevents OOM from
-    # malformed frame headers.
-    _WS_MAX_FRAME_SIZE = 16 * 1024 * 1024
+    # Maximum frame payload size to accept -- prevents OOM from malformed
+    # frame headers. The MapServer only pushes small JSON events so 1 MB is
+    # well above any legitimate message; RFC 6455 caps control frames at 125
+    # bytes, enforced separately below.
+    _WS_MAX_FRAME_SIZE = 1 * 1024 * 1024
+    _WS_MAX_CONTROL_FRAME = 125  # RFC 6455 §5.5
 
     # Maximum handshake response size (8 KB) -- a valid 101 Upgrade response
     # is well under 1 KB; this prevents unbounded memory growth if the server
@@ -665,6 +685,7 @@ class TuiApp:
                     async with _ws.connect(
                         uri,
                         max_size=self._WS_MAX_FRAME_SIZE,
+                        open_timeout=10,
                         close_timeout=5,
                     ) as conn:
                         strategy.reset()
@@ -782,8 +803,8 @@ class TuiApp:
                     length = struct.unpack("!H", _recv_exact(sock, 2))[0]
                 elif length == 127:
                     length = struct.unpack("!Q", _recv_exact(sock, 8))[0]
-                if length > self._WS_MAX_FRAME_SIZE:
-                    return None  # Reject oversized frames
+                if length > self._WS_MAX_CONTROL_FRAME:
+                    return None  # RFC 6455: control frames must be <= 125 bytes
                 payload = _recv_exact(sock, length) if length > 0 else b""
                 # Send masked pong (RFC 6455 requires client-to-server masking)
                 mask = os.urandom(4)
@@ -799,7 +820,11 @@ class TuiApp:
             elif length == 127:
                 length = struct.unpack("!Q", _recv_exact(sock, 8))[0]
 
-            if length > self._WS_MAX_FRAME_SIZE:
+            # RFC 6455 §5.5: control frames (opcode >= 0x8, e.g. pong 0xA)
+            # must be <= 125 bytes. Apply that tighter cap first.
+            is_control = (opcode & 0x08) != 0
+            cap = self._WS_MAX_CONTROL_FRAME if is_control else self._WS_MAX_FRAME_SIZE
+            if length > cap:
                 return None  # Reject oversized frames
 
             if masked:

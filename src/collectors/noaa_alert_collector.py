@@ -14,7 +14,7 @@ from urllib.error import URLError
 
 from datetime import datetime, timezone
 
-from .base import BaseCollector, make_feature_collection, make_geometry_feature
+from .base import BaseCollector, bounded_read, make_feature_collection, make_geometry_feature
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ class NOAAAlertCollector(BaseCollector):
                 "Accept": "application/geo+json",
             })
             with urlopen(req, timeout=15) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
+                raw = json.loads(bounded_read(resp).decode("utf-8"))
         except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
             logger.debug("NOAA alert fetch failed: %s", e)
             return make_feature_collection([], self.source_name)
