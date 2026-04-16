@@ -1,7 +1,6 @@
 """Tests for historical analytics: time-series aggregation, network growth, trends."""
 
 import time
-from pathlib import Path
 
 import pytest
 

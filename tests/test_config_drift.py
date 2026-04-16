@@ -1,6 +1,5 @@
 """Tests for ConfigDriftDetector — node configuration change detection."""
 
-import time
 import unittest
 
 from src.utils.config_drift import (
@@ -208,7 +207,7 @@ class TestConfigDriftDetector(unittest.TestCase):
 
     def test_tracked_fields_coverage(self):
         """All declared tracked fields have a severity."""
-        for field, severity in TRACKED_FIELDS.items():
+        for _field, severity in TRACKED_FIELDS.items():
             self.assertIsInstance(severity, DriftSeverity)
 
     def test_drift_severity_values(self):

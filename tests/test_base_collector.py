@@ -2,10 +2,8 @@
 
 import json
 import time
-from pathlib import Path
 from typing import Any, Dict
 
-import pytest
 
 from src.collectors.base import BaseCollector, make_feature_collection
 
@@ -108,7 +106,7 @@ class TestPersistentCacheSave:
             "test_source",
         )
         collector = _TestCollector(data=data, cache_ttl_seconds=0, persistent_cache=True)
-        result = collector.collect()
+        collector.collect()
 
         cache_file = tmp_path / "cache" / "test_source.json"
         assert cache_file.exists()

@@ -4,13 +4,10 @@ Verifies that NodeStateTracker.check_offline() + AlertEngine.evaluate_offline()
 work together correctly to detect and alert on offline nodes.
 """
 
-import time
-from unittest.mock import MagicMock, patch
 
-import pytest
 
-from src.utils.alert_engine import AlertEngine, DEFAULT_COOLDOWN
-from src.utils.node_state import NodeState, NodeStateTracker
+from src.utils.alert_engine import AlertEngine
+from src.utils.node_state import NodeStateTracker
 
 
 class TestOfflineAlertWiring:

@@ -1,6 +1,5 @@
 """Tests for OpenHamClock API compatibility layer."""
 
-import pytest
 
 from src.utils.openhamclock_compat import (
     detect_variant,

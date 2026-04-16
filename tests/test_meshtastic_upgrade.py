@@ -10,10 +10,8 @@ Tests cover:
   - Tab 7 keybinding in TUI app
 """
 
-import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 # ── MQTT Subscriber: New Telemetry Types ─────────────────────────
@@ -151,7 +149,7 @@ class TestMQTTMapReport:
         from src.collectors.mqtt_subscriber import MQTTSubscriber, MQTTNodeStore
 
         store = MQTTNodeStore()
-        sub = MQTTSubscriber(node_store=store)
+        MQTTSubscriber(node_store=store)
 
         # Simulate MapReport protobuf by calling store methods directly
         # (the actual protobuf parsing is tested by integration tests)
@@ -494,7 +492,6 @@ class TestTuiAppTab7:
 
     def test_tab7_key_switches_to_system(self):
         from src.tui.app import TuiApp
-        import curses
 
         app = TuiApp()
         app._running = True

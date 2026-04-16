@@ -131,8 +131,8 @@ class MapWebSocketServer:
         """Close the WebSocket server and stop the event loop."""
         try:
             server.close()
-        except Exception:
-            pass
+        except Exception as close_exc:
+            logger.debug("Error closing WebSocket server: %s", close_exc)
         loop.stop()
 
     def broadcast(self, message: Dict[str, Any]) -> None:
@@ -203,8 +203,8 @@ class MapWebSocketServer:
                     serve_kwargs["origins"] = self._LOCALHOST_ORIGINS
                 else:
                     serve_kwargs["origins"] = None  # Allow all origins
-            except Exception:
-                pass
+            except Exception as origins_exc:
+                logger.debug("Could not set origins whitelist: %s", origins_exc)
             self._server = await websockets.asyncio.server.serve(
                 self._handler,
                 self.host,
@@ -296,9 +296,9 @@ class MapWebSocketServer:
             try:
                 await client.send(text)
                 self._stats.record_message_sent()
-            except Exception:
+            except Exception as send_exc:
                 # Client will be cleaned up in _handler
-                pass
+                logger.debug("WebSocket send failed (client will be cleaned up): %s", send_exc)
 
 
 class _WSStats:

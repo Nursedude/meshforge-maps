@@ -18,7 +18,7 @@ This module normalizes responses from either variant into a consistent format.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 

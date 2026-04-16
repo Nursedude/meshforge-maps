@@ -114,7 +114,7 @@ def draw_topology(win: Any, top: int, height: int, cols: int,
         link_hdr = f"  {'Source':<14}{'Target':<14}{'SNR':>8}  {'Quality':<12}"
         lines.append((link_hdr, curses.color_pair(CP_HIGHLIGHT)))
 
-        sorted_links = sorted(links, key=lambda l: l.get("snr", 0),
+        sorted_links = sorted(links, key=lambda link: link.get("snr", 0),
                               reverse=True)
         for lk in sorted_links:
             src_name = node_names.get(lk["source"], lk["source"][:10])

@@ -29,7 +29,7 @@ import logging
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 from ..collectors.base import NODE_ID_RE

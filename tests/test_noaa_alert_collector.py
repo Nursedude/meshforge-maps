@@ -1,18 +1,15 @@
 """Tests for NOAA Weather Alert Collector."""
 
 import json
-import time
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.collectors.noaa_alert_collector import (
     NOAAAlertCollector,
     SEVERITY_COLORS,
     SEVERITY_ORDER,
 )
-from src.collectors.base import make_feature_collection
 
 
 def _make_noaa_feature(
