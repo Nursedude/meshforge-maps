@@ -35,6 +35,7 @@ from .base import (
     MESHFORGE_DATA_DIR,
     UNIFIED_CACHE_PATH,
     BaseCollector,
+    bounded_read,
     deduplicate_features,
     make_feature,
     make_feature_collection,
@@ -200,7 +201,7 @@ class ReticulumCollector(BaseCollector):
                     headers["X-API-Key"] = self._rch_api_key
                 req = Request(url, headers=headers)
                 with urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
+                    data = json.loads(bounded_read(resp).decode())
 
                 nodes = data if isinstance(data, list) else data.get("items", data.get("nodes", []))
                 for node in nodes:
@@ -282,7 +283,7 @@ class ReticulumCollector(BaseCollector):
                 ctx.verify_mode = ssl.CERT_NONE
                 logger.debug("RMAP.world: TLS verification disabled (rmap_verify_ssl=false)")
             with urlopen(req, timeout=15, context=ctx) as resp:
-                data = json.loads(resp.read().decode())
+                data = json.loads(bounded_read(resp).decode())
 
             nodes = data.get("nodes", []) if isinstance(data, dict) else []
             for node in nodes:

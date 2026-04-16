@@ -30,6 +30,7 @@ from .base import (
     MESHFORGE_DATA_DIR,
     UNIFIED_CACHE_PATH,
     BaseCollector,
+    bounded_read,
     is_node_online,
     make_feature,
     make_feature_collection,
@@ -172,7 +173,7 @@ class AREDNCollector(BaseCollector):
             try:
                 req = Request(url, headers=headers)
                 with urlopen(req, timeout=5) as resp:
-                    data = json.loads(resp.read().decode())
+                    data = json.loads(bounded_read(resp).decode())
                 break
             except (URLError, OSError, json.JSONDecodeError) as e:
                 last_err = e
@@ -352,7 +353,7 @@ class AREDNCollector(BaseCollector):
                 },
             )
             with urlopen(req, timeout=20) as resp:
-                text = resp.read().decode("utf-8", errors="replace")
+                text = bounded_read(resp).decode("utf-8", errors="replace")
 
             reader = csv.DictReader(io.StringIO(text))
             skipped_oob = 0

@@ -33,7 +33,7 @@ from typing import Any, Dict, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .base import BaseCollector, make_feature_collection
+from .base import BaseCollector, bounded_read, make_feature_collection
 from .. import __version__
 from ..utils.openhamclock_compat import (
     detect_variant,
@@ -554,7 +554,7 @@ class HamClockCollector(BaseCollector):
                 headers={"User-Agent": _USER_AGENT},
             )
             with urlopen(req, timeout=10) as resp:
-                return resp.read().decode("utf-8")
+                return bounded_read(resp).decode("utf-8")
         except (URLError, OSError, ValueError) as e:
             logger.debug("Failed to fetch %s: %s", url, e)
             return None
@@ -570,7 +570,7 @@ class HamClockCollector(BaseCollector):
                 },
             )
             with urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read().decode())
+                return json.loads(bounded_read(resp).decode())
         except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
             logger.debug("Failed to fetch %s: %s", url, e)
             return None
