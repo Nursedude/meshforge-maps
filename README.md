@@ -709,7 +709,7 @@ The HTTP and WebSocket servers bind to **127.0.0.1** (localhost) by default. Cha
 
 **Defense-in-depth hardening** (see PRs #70 and #71 for the full audit):
 
-- **Bounded HTTP reads.** Every third-party or public-internet response is read through `bounded_read(resp, max_bytes=...)` from `src/collectors/base.py`; the PyPI `/api/dependencies` fetch is capped at 2 MB. A compromised mirror or MITM cannot exhaust server RAM.
+- **Bounded HTTP reads.** Every outbound HTTP body in every collector is read through `bounded_read(resp, max_bytes=...)` from `src/collectors/base.py` (10 MB default cap); the PyPI `/api/dependencies` fetch is capped at 2 MB. A compromised mirror, trusted-but-misbehaving endpoint, or on-path attacker cannot exhaust server RAM.
 - **Clock-skew-resistant presence.** `is_node_online()` rejects negative ages, so a hostile broker cannot forge a future `last_heard` to pin nodes "online" indefinitely.
 - **Untrusted broker strings are truncated.** MapReport fields (`long_name`, `firmware_version`, `region`, `modem_preset`, `hw_model`, `role`) are capped per-field before being persisted to the node store.
 - **WebSocket limits per RFC 6455.** Control frames (ping/pong/close) are capped at 125 bytes; data frames at 1 MB. The library client sets `open_timeout=10` so a stalled upgrade cannot hang indefinitely.
