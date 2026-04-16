@@ -72,7 +72,7 @@ scripts/                     install.sh, verify.sh
 - HTTP responses include `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`
 - HTML responses include `Content-Security-Policy` header restricting script/style/image/connect sources
 - Config file written with restrictive umask (`0o077`) to protect MQTT credentials in `settings.json`; `install.sh` wraps its seed heredoc in `(umask 077; cat > … <<EOF)` so the file is never briefly world-readable
-- Bound every outbound HTTP body with `bounded_read(resp, max_bytes=...)` (from `src/collectors/base.py`). PyPI fetch in `map_server._serve_dependencies` uses a 2 MB cap + `threading.Lock` on the shared cache
+- Bound every outbound HTTP body with `bounded_read(resp, max_bytes=...)` (from `src/collectors/base.py`). All collector HTTP fetches go through this helper (10 MB default cap); the PyPI fetch in `map_server._serve_dependencies` uses a 2 MB cap + `threading.Lock` on the shared cache. Keep new fetches on this pattern — `grep "resp\.read()"` across `src/` should stay empty
 - Strings from untrusted broker payloads (MapReport `long_name`, `firmware_version`, `region`, `modem_preset`, etc.) are truncated to small per-field caps before persisting
 - WebSocket control frames (opcode ≥ 0x8, i.e. ping/pong/close) are capped at 125 bytes per RFC 6455 §5.5; data frames at 1 MB. Library `_ws.connect()` uses `open_timeout=10` so a stalled upgrade can't hang the coroutine
 - TUI stderr log is opened with `O_NOFOLLOW` + mode `0o600` — library output (paho-mqtt, meshtastic) can include MQTT credentials, so a planted symlink must not redirect the file and the log must not be world-readable
