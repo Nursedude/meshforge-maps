@@ -944,6 +944,102 @@ class TestDataAggregator:
 
 
 # ---------------------------------------------------------------------------
+# Region post-filter (aggregator-level)
+# ---------------------------------------------------------------------------
+
+class TestRegionPostFilter:
+    """Aggregator applies region_preset polygon/bbox filter across ALL sources.
+
+    Regression for the gap where Meshtastic (MQTT + meshmap.net) and any
+    collector-side leak bypassed the region scope. Filter is applied after
+    deduplicate_features so it covers every source uniformly.
+    """
+
+    # City fixtures: (id, lat, lon)
+    HONOLULU = ("hi-1", 21.3069, -157.8583)
+    SF       = ("us-1", 37.7749, -122.4194)
+    AUSTIN   = ("us-2", 30.2672, -97.7431)
+    ANCHORAGE = ("ak-1", 61.2181, -149.9003)
+    TIJUANA  = ("mx-1", 32.5149, -117.0382)
+    VANCOUVER = ("ca-1", 49.2827, -123.1207)
+    LONDON   = ("eu-1", 51.5074, -0.1278)
+
+    def _mock_all(self, mock_mesh, mock_ret, mock_ham, mock_aredn, cities):
+        """Seed Meshtastic with every city, others empty. Proves the filter
+        runs at the aggregator layer, not inside Meshtastic collector."""
+        features = [make_feature(cid, lat, lon, "meshtastic")
+                    for (cid, lat, lon) in cities]
+        mock_mesh.return_value = make_feature_collection(features, "meshtastic")
+        mock_ret.return_value = make_feature_collection([], "reticulum")
+        mock_ham.return_value = make_feature_collection([], "hamclock")
+        mock_aredn.return_value = make_feature_collection([], "aredn")
+
+    def _ids(self, result):
+        return {f["properties"]["id"] for f in result["features"]}
+
+    @patch.object(MeshtasticCollector, "collect")
+    @patch.object(ReticulumCollector, "collect")
+    @patch.object(HamClockCollector, "collect")
+    @patch.object(AREDNCollector, "collect")
+    def test_hawaii_drops_mainland_and_europe(
+        self, mock_aredn, mock_ham, mock_ret, mock_mesh,
+    ):
+        cities = [self.HONOLULU, self.SF, self.AUSTIN, self.LONDON]
+        self._mock_all(mock_mesh, mock_ret, mock_ham, mock_aredn, cities)
+        config = dict(DEFAULT_CONFIG_SUBSET)
+        config["region_preset"] = "hawaii"
+        agg = DataAggregator(config)
+        ids = self._ids(agg.collect_all())
+        assert "hi-1" in ids
+        assert {"us-1", "us-2", "eu-1"}.isdisjoint(ids)
+
+    @patch.object(MeshtasticCollector, "collect")
+    @patch.object(ReticulumCollector, "collect")
+    @patch.object(HamClockCollector, "collect")
+    @patch.object(AREDNCollector, "collect")
+    def test_us_keeps_conus_ak_hi_drops_bc_tijuana_europe(
+        self, mock_aredn, mock_ham, mock_ret, mock_mesh,
+    ):
+        cities = [self.AUSTIN, self.ANCHORAGE, self.HONOLULU,
+                  self.TIJUANA, self.VANCOUVER, self.LONDON]
+        self._mock_all(mock_mesh, mock_ret, mock_ham, mock_aredn, cities)
+        config = dict(DEFAULT_CONFIG_SUBSET)
+        config["region_preset"] = "us"
+        agg = DataAggregator(config)
+        ids = self._ids(agg.collect_all())
+        assert {"us-2", "ak-1", "hi-1"}.issubset(ids)
+        assert {"mx-1", "ca-1", "eu-1"}.isdisjoint(ids)
+
+    @patch.object(MeshtasticCollector, "collect")
+    @patch.object(ReticulumCollector, "collect")
+    @patch.object(HamClockCollector, "collect")
+    @patch.object(AREDNCollector, "collect")
+    def test_world_preset_keeps_everything(
+        self, mock_aredn, mock_ham, mock_ret, mock_mesh,
+    ):
+        cities = [self.HONOLULU, self.SF, self.TIJUANA, self.LONDON]
+        self._mock_all(mock_mesh, mock_ret, mock_ham, mock_aredn, cities)
+        config = dict(DEFAULT_CONFIG_SUBSET)
+        config["region_preset"] = "world"
+        agg = DataAggregator(config)
+        ids = self._ids(agg.collect_all())
+        assert ids == {"hi-1", "us-1", "mx-1", "eu-1"}
+
+    @patch.object(MeshtasticCollector, "collect")
+    @patch.object(ReticulumCollector, "collect")
+    @patch.object(HamClockCollector, "collect")
+    @patch.object(AREDNCollector, "collect")
+    def test_no_preset_keeps_everything(
+        self, mock_aredn, mock_ham, mock_ret, mock_mesh,
+    ):
+        cities = [self.HONOLULU, self.SF, self.LONDON]
+        self._mock_all(mock_mesh, mock_ret, mock_ham, mock_aredn, cities)
+        agg = DataAggregator(dict(DEFAULT_CONFIG_SUBSET))  # no region_preset
+        ids = self._ids(agg.collect_all())
+        assert ids == {"hi-1", "us-1", "eu-1"}
+
+
+# ---------------------------------------------------------------------------
 # HamClock thread safety
 # ---------------------------------------------------------------------------
 

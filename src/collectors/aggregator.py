@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .aredn_collector import AREDNCollector
 from .base import (
     deduplicate_features, make_feature_collection, make_geometry_feature,
-    make_link_feature, normalize_bboxes,
+    make_link_feature, normalize_bboxes, point_in_region,
 )
 from .hamclock_collector import HamClockCollector
 from .meshtastic_collector import MeshtasticCollector
@@ -122,6 +122,8 @@ class DataAggregator:
         preset_data = REGION_PRESETS.get(preset_key, {}) if preset_key else {}
         region_bboxes = normalize_bboxes(preset_data.get("bbox"))
         region_polygons = preset_data.get("polygons") or None
+        self._region_bboxes = region_bboxes or None
+        self._region_polygons = region_polygons
         # Safety: in lite mode with no region scope, keep meshcore + aredn_worldmap
         # off — fetching 34K global nodes on a Pi is the condition the 0.7.1 fix
         # was created to prevent.
@@ -316,6 +318,20 @@ class DataAggregator:
                     source_counts[name] = 0
 
             all_features = deduplicate_features(per_source_features, allow_no_id=True)
+            if self._region_bboxes or self._region_polygons:
+                before = len(all_features)
+                kept: List[Dict[str, Any]] = []
+                for feat in all_features:
+                    coords = feat.get("geometry", {}).get("coordinates", [])
+                    if len(coords) < 2:
+                        continue
+                    if point_in_region(coords[1], coords[0],
+                                       self._region_bboxes, self._region_polygons):
+                        kept.append(feat)
+                dropped = before - len(kept)
+                if dropped:
+                    logger.debug("Region post-filter dropped %d of %d features", dropped, before)
+                all_features = kept
             cycle_ctx.node_count = len(all_features)
 
         # Record observations in background thread (non-blocking)
