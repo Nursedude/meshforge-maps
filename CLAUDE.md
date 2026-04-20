@@ -124,6 +124,7 @@ ruff check src/ --select S --ignore S101,S310,S603,S607   # matches Security Sca
 - **time.monotonic() on fresh runners**: Starts small on fresh CI runners/containers — use `float("-inf")` as the stale-cache sentinel (see `NodeHistoryDB._count_cache_time`)
 - **Future timestamps are hostile input**: MQTT `last_heard` can be forged; `is_node_online()` rejects negative ages and unknown networks return `None`
 - **CI diagnostic scope**: The `tee /tmp/pytest.log` + PR-comment steps are scoped to `steps.pytest.outcome == 'failure'`. Keep pytest (including coverage) inside that one step — splitting into a second pytest invocation bypasses the diagnostic
+- **WAL bloat is distinct from main-DB bloat**: check `maps_node_history.db-wal` separately from `maps_node_history.db`. A blocked `wal_checkpoint(TRUNCATE)` can grow the WAL to multi-GB while the main `.db` looks fine, hanging startup via WAL replay and making any test that constructs `MapServer(config)` stall. Monitor with `ls -lh ~/.local/share/meshforge/maps_node_history.db*`
 
 ## Commit Convention
 
