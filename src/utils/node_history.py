@@ -143,10 +143,13 @@ class NodeHistoryDB:
             self._conn = conn
             logger.info("Node history DB initialized at %s", self._db_path)
 
-            # Startup compaction: prune + VACUUM if DB is bloated (>500 MB)
+            # Startup compaction: prune + VACUUM if DB is bloated (>300 MB).
+            # Lowered from 500 MB after observing a 463 MB main-DB + 157 MB WAL
+            # on the Pi deploy — 300 MB catches that case on the next restart
+            # and leaves headroom above the normal 3-day steady state.
             try:
                 db_size = self._db_path.stat().st_size
-                if db_size > 500_000_000:
+                if db_size > 300_000_000:
                     logger.info(
                         "DB is %.1f GB — running startup compaction",
                         db_size / 1e9,
@@ -189,6 +192,13 @@ class NodeHistoryDB:
             conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
+            # Cap the WAL file at 64 MB. Without this, a PASSIVE autocheckpoint
+            # (default every 1000 pages) moves pages into the main DB but never
+            # shrinks the -wal file itself; only a TRUNCATE checkpoint does, and
+            # that silently downgrades to PASSIVE when any reader holds an old
+            # snapshot. journal_size_limit forces the file to be truncated on
+            # every successful checkpoint regardless of mode.
+            conn.execute("PRAGMA journal_size_limit=67108864")
         except Exception:
             conn.close()
             raise
