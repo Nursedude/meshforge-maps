@@ -488,6 +488,24 @@ class TestAutoVacuum:
             assert result[0] == 2
         db.close()
 
+    def test_synchronous_pragma_is_normal(self, tmp_path):
+        """PRAGMA synchronous=NORMAL — telemetry workload doesn't need FULL.
+
+        Default sqlite is FULL (=2), which fsyncs on every commit. With the
+        120 s collect cadence × ~12 k inserts per cycle on a Pi-class SD card,
+        FULL is the wear path. NORMAL (=1) under WAL is durable across power
+        loss for most-recent commits — sufficient for trajectory data.
+        """
+        db = NodeHistoryDB(db_path=tmp_path / "sync.db", throttle_seconds=0)
+        if db._conn:
+            result = db._conn.execute("PRAGMA synchronous").fetchone()
+            assert result[0] == 1, (
+                f"synchronous={result[0]} (want 1=NORMAL). "
+                "Without this, every commit fsyncs — see node_history.py "
+                "_open_connection() comment."
+            )
+        db.close()
+
 
 class TestDBBackup:
     """Tests for SQLite backup creation (Step 16)."""
