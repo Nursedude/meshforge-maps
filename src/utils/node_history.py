@@ -191,6 +191,12 @@ class NodeHistoryDB:
             # initializes the DB and locks in the vacuum mode.
             conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
             conn.execute("PRAGMA journal_mode=WAL")
+            # synchronous=NORMAL: with WAL this is durable across power loss
+            # for most-recent commits; sufficient for telemetry. Per-connection,
+            # so the default FULL silently applied to every prior open of this
+            # DB — fsync on every commit at 120s collect cadence × ~12k inserts
+            # is the SD-card-wear path the Pi can't afford.
+            conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=5000")
             # Cap the WAL file at 64 MB. Without this, a PASSIVE autocheckpoint
             # (default every 1000 pages) moves pages into the main DB but never
