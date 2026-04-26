@@ -125,6 +125,7 @@ ruff check src/ --select S --ignore S101,S310,S603,S607   # matches Security Sca
 - **Future timestamps are hostile input**: MQTT `last_heard` can be forged; `is_node_online()` rejects negative ages and unknown networks return `None`
 - **CI diagnostic scope**: The `tee /tmp/pytest.log` + PR-comment steps are scoped to `steps.pytest.outcome == 'failure'`. Keep pytest (including coverage) inside that one step — splitting into a second pytest invocation bypasses the diagnostic
 - **WAL bloat is distinct from main-DB bloat**: check `maps_node_history.db-wal` separately from `maps_node_history.db`. A blocked `wal_checkpoint(TRUNCATE)` can grow the WAL to multi-GB while the main `.db` looks fine, hanging startup via WAL replay and making any test that constructs `MapServer(config)` stall. Monitor with `ls -lh ~/.local/share/meshforge/maps_node_history.db*`
+- **New SQLite DBs MUST go through `src.utils.db_helpers.connect_tuned`**: vendored from /opt/meshforge after the fleet-host 2026-04-26 wedge (1.95 GB rollback-journal-mode DB stalled the service 16+ minutes in `jbd2_log_wait_commit`). The helper sets WAL + synchronous=NORMAL + journal_size_limit=64MB. The existing `maps_node_history.db` opens its own connection because `auto_vacuum=INCREMENTAL` must be set BEFORE `journal_mode=WAL` — that hand-tuned ordering is preserved. Anything new starts with `connect_tuned`.
 
 ## Commit Convention
 
