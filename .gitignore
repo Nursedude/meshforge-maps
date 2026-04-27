@@ -14,3 +14,4 @@ venv/
 .coverage
 coverage.xml
 htmlcov/
+.claude/settings.local.json
