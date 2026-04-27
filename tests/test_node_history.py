@@ -132,6 +132,118 @@ class TestBatchRecording:
         assert self.db.record_observations_batch(obs) == 10
 
 
+class TestValueDedup:
+    """Heartbeat + value-change dedup. Stationary nodes must not flood the DB
+    with identical-position rows when the throttle window has elapsed."""
+
+    def test_skips_when_position_unchanged_within_heartbeat(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "value_dedup.db",
+            throttle_seconds=0,
+            heartbeat_seconds=3600,
+        )
+        try:
+            assert db.record_observation("!stationary", 35.0, 139.0, network="meshtastic")
+            assert db.record_observation("!stationary", 35.0, 139.0, network="meshtastic") is False
+            assert db.observation_count == 1
+        finally:
+            db.close()
+
+    def test_records_when_position_changes(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "value_dedup_move.db",
+            throttle_seconds=0,
+            heartbeat_seconds=3600,
+        )
+        try:
+            assert db.record_observation("!mobile", 35.0, 139.0, network="meshtastic")
+            assert db.record_observation("!mobile", 35.001, 139.0, network="meshtastic")
+            assert db.observation_count == 2
+        finally:
+            db.close()
+
+    def test_records_when_heartbeat_elapses_even_unchanged(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "value_dedup_heartbeat.db",
+            throttle_seconds=0,
+            heartbeat_seconds=60,
+        )
+        try:
+            assert db.record_observation(
+                "!s", 35.0, 139.0, network="meshtastic", timestamp=1000
+            )
+            assert db.record_observation(
+                "!s", 35.0, 139.0, network="meshtastic", timestamp=1000 + 30
+            ) is False
+            assert db.record_observation(
+                "!s", 35.0, 139.0, network="meshtastic", timestamp=1000 + 70
+            ) is True
+            assert db.observation_count == 2
+        finally:
+            db.close()
+
+    def test_first_observation_always_records(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "value_dedup_first.db",
+            throttle_seconds=0,
+            heartbeat_seconds=3600,
+        )
+        try:
+            assert db.record_observation("!fresh", 0.0, 0.0, network="aredn")
+            assert db.observation_count == 1
+        finally:
+            db.close()
+
+    def test_round_trip_at_6_decimals_is_treated_as_unchanged(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "value_dedup_roundtrip.db",
+            throttle_seconds=0,
+            heartbeat_seconds=3600,
+        )
+        try:
+            assert db.record_observation("!gpsnoise", 35.123456, 139.0, network="m")
+            # 1e-7 delta — below 6dp threshold — should NOT trigger a write.
+            assert db.record_observation(
+                "!gpsnoise", 35.1234561, 139.0, network="m"
+            ) is False
+            assert db.observation_count == 1
+        finally:
+            db.close()
+
+    def test_batch_path_applies_value_dedup(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "value_dedup_batch.db",
+            throttle_seconds=0,
+            heartbeat_seconds=3600,
+        )
+        try:
+            db.record_observation("!a", 35.0, 139.0, network="m")
+            db.record_observation("!b", 36.0, 140.0, network="m")
+            obs = [
+                {"node_id": "!a", "lat": 35.0, "lon": 139.0, "network": "m"},
+                {"node_id": "!b", "lat": 36.0, "lon": 140.0, "network": "m"},
+                {"node_id": "!c", "lat": 37.0, "lon": 141.0, "network": "m"},
+            ]
+            count = db.record_observations_batch(obs)
+            assert count == 1
+            assert db.observation_count == 3
+        finally:
+            db.close()
+
+    def test_heartbeat_zero_disables_value_dedup(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "value_dedup_off.db",
+            throttle_seconds=0,
+            heartbeat_seconds=0,
+        )
+        try:
+            assert db.record_observation("!s", 35.0, 139.0, network="m")
+            assert db.record_observation("!s", 35.0, 139.0, network="m")
+            assert db.observation_count == 2
+        finally:
+            db.close()
+
+
 class TestTrajectoryGeoJSON:
     """Tests for get_trajectory_geojson()."""
 

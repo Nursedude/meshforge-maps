@@ -31,6 +31,18 @@ DEFAULT_DB_PATH = get_data_dir() / "maps_node_history.db"
 # Minimum interval between observations for the same node (seconds)
 DEFAULT_THROTTLE_SECONDS = 300  # 5 min (was 60s; 42K nodes at 60s = 60M rows/day)
 
+# Heartbeat interval — when a stationary node's (lat, lon, network) match the
+# last record, skip the insert until this interval has elapsed. Mobile nodes
+# still write on every position change (subject to the throttle floor).
+# 1 h heartbeat for stationary nodes drops 988 MB → ~80 MB steady state on
+# moc1's 10K-node fleet.
+DEFAULT_HEARTBEAT_SECONDS = 3600
+
+# Lat/lon comparison precision (decimal degrees). 6 dp ≈ 11 cm — anything
+# tighter is GPS noise, anything looser would smear repeater stacks at the
+# same site into one. 6 is the sweet spot for "did the node actually move."
+_LAT_LON_PRECISION = 6
+
 # Default retention period (seconds)
 DEFAULT_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days (was 7; keeps DB under ~500 MB)
 
@@ -50,15 +62,23 @@ class NodeHistoryDB:
         db_path: Optional[Path] = None,
         throttle_seconds: int = DEFAULT_THROTTLE_SECONDS,
         retention_seconds: int = DEFAULT_RETENTION_SECONDS,
+        heartbeat_seconds: int = DEFAULT_HEARTBEAT_SECONDS,
     ):
         self._db_path = db_path or DEFAULT_DB_PATH
         self._throttle_seconds = throttle_seconds
         self._retention_seconds = retention_seconds
+        # heartbeat_seconds == 0 disables the value-dedup path (legacy
+        # time-only behavior). Negative is treated as 0.
+        self._heartbeat_seconds = max(0, heartbeat_seconds)
         self._MAX_THROTTLE_ENTRIES = 50000
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
         # In-memory throttle tracker: node_id -> last_recorded_timestamp
         self._last_recorded: Dict[str, float] = {}
+        # Last (lat, lon, network) per node. Used by the value-dedup path
+        # to skip writes when a stationary node reports the same position
+        # within the heartbeat window. Pruned in lockstep with _last_recorded.
+        self._last_value: Dict[str, Tuple[float, float, str]] = {}
         # Cached count queries (expensive on large DBs)
         self._cached_obs_count: int = 0
         self._cached_node_count: int = 0
@@ -249,6 +269,17 @@ class NodeHistoryDB:
             if (now - last) < self._throttle_seconds:
                 return False
 
+            # Value-dedup: skip when (lat, lon, network) match the last
+            # recorded value AND we're still inside the heartbeat window.
+            # Disabled when heartbeat_seconds == 0.
+            if self._heartbeat_seconds > 0:
+                rounded = (round(lat, _LAT_LON_PRECISION),
+                           round(lon, _LAT_LON_PRECISION),
+                           network)
+                last_value = self._last_value.get(node_id)
+                if last_value == rounded and (now - last) < self._heartbeat_seconds:
+                    return False
+
             try:
                 self._conn.execute(
                     """INSERT INTO observations
@@ -259,6 +290,12 @@ class NodeHistoryDB:
                 )
                 self._conn.commit()
                 self._last_recorded[node_id] = now
+                if self._heartbeat_seconds > 0:
+                    self._last_value[node_id] = (
+                        round(lat, _LAT_LON_PRECISION),
+                        round(lon, _LAT_LON_PRECISION),
+                        network,
+                    )
                 self._count_cache_time = float("-inf")
                 return True
             except Exception as e:
@@ -281,6 +318,8 @@ class NodeHistoryDB:
         rows = []
         recorded_ids = []
 
+        recorded_values: List[Tuple[float, float, str]] = []
+
         with self._lock:
             for obs in observations:
                 node_id = obs.get("node_id")
@@ -289,10 +328,28 @@ class NodeHistoryDB:
                 last = self._last_recorded.get(node_id, 0)
                 if (now - last) < self._throttle_seconds:
                     continue
+                lat = obs.get("lat")
+                lon = obs.get("lon")
+                network = obs.get("network", "")
+
+                # Value-dedup mirrors record_observation(). Skip when the
+                # (lat, lon, network) tuple is unchanged and we're still
+                # inside the heartbeat window.
+                if self._heartbeat_seconds > 0 and lat is not None and lon is not None:
+                    rounded = (round(lat, _LAT_LON_PRECISION),
+                               round(lon, _LAT_LON_PRECISION),
+                               network)
+                    last_value = self._last_value.get(node_id)
+                    if last_value == rounded and (now - last) < self._heartbeat_seconds:
+                        continue
+                    recorded_values.append(rounded)
+                else:
+                    recorded_values.append(None)  # type: ignore[arg-type]
+
                 rows.append((
                     node_id, now,
-                    obs.get("lat"), obs.get("lon"), obs.get("altitude"),
-                    obs.get("network", ""), obs.get("snr"), obs.get("battery"),
+                    lat, lon, obs.get("altitude"),
+                    network, obs.get("snr"), obs.get("battery"),
                     obs.get("name", ""),
                 ))
                 recorded_ids.append(node_id)
@@ -309,8 +366,10 @@ class NodeHistoryDB:
                     rows,
                 )
                 self._conn.commit()
-                for nid in recorded_ids:
+                for nid, val in zip(recorded_ids, recorded_values):
                     self._last_recorded[nid] = now
+                    if val is not None:
+                        self._last_value[nid] = val
                 self._count_cache_time = float("-inf")
                 return len(rows)
             except Exception as e:
@@ -563,6 +622,7 @@ class NodeHistoryDB:
                          if v < cutoff]
                 for k in stale:
                     del self._last_recorded[k]
+                    self._last_value.pop(k, None)
                 if stale:
                     logger.debug("Pruned %d stale throttle entries",
                                  len(stale))
@@ -573,6 +633,7 @@ class NodeHistoryDB:
                         self._last_recorded.items(), key=lambda x: x[1])
                     for k, _ in sorted_entries[:overflow]:
                         del self._last_recorded[k]
+                        self._last_value.pop(k, None)
                     logger.info("Evicted %d throttle entries (size cap)",
                                 overflow)
                 return deleted

@@ -42,6 +42,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "map_default_zoom": 4,
     "cache_ttl_minutes": 15,
     "node_history_throttle_seconds": 300,   # 5 min — min gap between observations per node
+    # Stationary-node heartbeat. When (lat, lon, network) match the last
+    # record, skip the insert until this interval has elapsed. Mobile nodes
+    # still write on every position change. Set to 0 to disable value-dedup
+    # (legacy time-only throttle).
+    "node_history_heartbeat_seconds": 3600,  # 1 h
     "node_history_retention_days": 3,       # keep last 3 days of observations
     "http_port": 8808,
     "http_host": "127.0.0.1",
@@ -291,6 +296,9 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
 _LITE_OVERRIDES: Dict[str, Any] = {
     "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 60, 60),
     "node_history_throttle_seconds": lambda v: max(v if isinstance(v, (int, float)) else 600, 600),
+    # Lite Pis don't need hourly heartbeats. 6 h floor: a stationary repeater
+    # writes 4 rows/day instead of the default 24.
+    "node_history_heartbeat_seconds": lambda v: max(v if isinstance(v, (int, float)) else 21600, 21600),
     "node_history_retention_days": lambda v: min(v if isinstance(v, (int, float)) else 1, 1),
     "enable_config_drift": lambda v: False,
     "enable_node_state": lambda v: False,
@@ -300,6 +308,7 @@ _LITE_OVERRIDES: Dict[str, Any] = {
 _MEDIUM_OVERRIDES: Dict[str, Any] = {
     "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 30, 30),
     "node_history_throttle_seconds": lambda v: max(v if isinstance(v, (int, float)) else 300, 300),
+    "node_history_heartbeat_seconds": lambda v: max(v if isinstance(v, (int, float)) else 3600, 3600),
     "node_history_retention_days": lambda v: min(v if isinstance(v, (int, float)) else 2, 2),
     # analytics/state/drift stay ON in medium — that's the point of the tier
 }
