@@ -203,7 +203,7 @@ class DataAggregator:
         if config.get("enable_aredn", True):
             aredn_worldmap = _get("enable_aredn_worldmap", True) and not lite_unscoped
             self._collectors["aredn"] = AREDNCollector(
-                node_targets=config.get("aredn_node_targets"),
+                node_targets=config.get("aredn_node_ips"),
                 enable_worldmap=aredn_worldmap,
                 cache_ttl_seconds=cache_ttl,
                 max_retries=retries,

@@ -74,8 +74,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # meshtasticd HTTP API connection
     "meshtasticd_host": "localhost",
     "meshtasticd_port": 4403,
-    # AREDN auto-discovery targets (queried on port 8080 for sysinfo.json)
-    "aredn_node_targets": ["localnode.local.mesh", "10.0.0.1", "localnode"],
+    # AREDN auto-discovery IPs (queried on port 8080 for sysinfo.json).
+    # Canonical key — matches `aredn_node_ips` in meshforge core's
+    # ~/.config/meshforge/map_settings.json so operators see the same
+    # name in both `:5000` and `:8808` configs.
+    "aredn_node_ips": ["localnode.local.mesh", "10.0.0.1", "localnode"],
+    # DEPRECATED — legacy key kept only for one-cycle compat. Operators
+    # with this set in their saved settings.json will see a one-shot
+    # warning at MapsConfig.load(); the value is copied into
+    # aredn_node_ips for the running process. Remove after fleet rename
+    # (planned post-Phase B audit).
+    "aredn_node_targets": None,
     # Reticulum Community Hub (RCH) API
     "rch_host": "localhost",
     "rch_port": 8000,
@@ -344,6 +353,7 @@ class MapsConfig:
             try:
                 with open(self._config_path, "r") as f:
                     saved = json.load(f)
+                saved_keys: set = set()
                 with self._lock:
                     for key, value in saved.items():
                         if key not in DEFAULT_CONFIG:
@@ -353,11 +363,35 @@ class MapsConfig:
                         if value is None and DEFAULT_CONFIG[key] is not None:
                             continue
                         self._settings[key] = value
+                        saved_keys.add(key)
+                    self._migrate_legacy_aredn(saved_keys)
                 logger.info("Loaded settings from %s", self._config_path)
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Failed to load settings: %s, using defaults", e)
         else:
             logger.info("No settings file found, using defaults")
+
+    def _migrate_legacy_aredn(self, saved_keys: set) -> None:
+        """One-cycle compat: legacy aredn_node_targets → aredn_node_ips.
+
+        If the saved config sets only the deprecated key, copy its value
+        into aredn_node_ips for the running process and emit a one-shot
+        warning so operators know to rename. Caller holds self._lock.
+        """
+        legacy_set = "aredn_node_targets" in saved_keys
+        canonical_set = "aredn_node_ips" in saved_keys
+        if legacy_set and not canonical_set:
+            legacy_value = self._settings.get("aredn_node_targets")
+            if legacy_value:
+                self._settings["aredn_node_ips"] = legacy_value
+            logger.warning(
+                "Config %s uses deprecated key 'aredn_node_targets'; "
+                "rename to 'aredn_node_ips' (matches meshforge core). "
+                "Legacy key will stop being read in a future release. "
+                "Run /opt/meshforge/scripts/aredn_config_audit.sh for a "
+                "fleet-wide check.",
+                self._config_path,
+            )
 
     def save(self) -> None:
         """Persist current settings to disk with atomic write."""
