@@ -119,8 +119,24 @@ else
         info "Installing to $INSTALL_DIR"
     fi
     mkdir -p "$INSTALL_DIR"
-    rsync -a --exclude='.git' --exclude='venv' --exclude='__pycache__' \
+    # Include .git/ so fleet_sync.sh's `git pull --ff-only` works on the
+    # installed location. Older versions of this script excluded it,
+    # which made every fresh install a `no_repo` skip in fleet sync.
+    rsync -a --exclude='venv' --exclude='__pycache__' \
         --exclude='.pytest_cache' "$REPO_DIR/" "$INSTALL_DIR/"
+    # If the source was a non-git directory (e.g. tarball download),
+    # initialize the install dir as a tracking checkout so fleet_sync
+    # can reach it. Idempotent — no-op when source already had .git/.
+    if [[ ! -d "$INSTALL_DIR/.git" ]]; then
+        info "Initializing $INSTALL_DIR as a git checkout (for fleet_sync)..."
+        ( cd "$INSTALL_DIR" && \
+          git init -q && \
+          git remote add origin https://github.com/Nursedude/meshforge-maps.git && \
+          git fetch -q origin main && \
+          git reset --hard origin/main >/dev/null 2>&1 && \
+          git checkout -q main 2>/dev/null || git checkout -q -b main ) || \
+            warn "Git checkout init failed — fleet_sync will report no_repo"
+    fi
     ok "Files copied to $INSTALL_DIR"
 fi
 

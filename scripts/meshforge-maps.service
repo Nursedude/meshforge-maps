@@ -25,8 +25,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=wh6gxz
-Group=wh6gxz
+User=pi
+Group=pi
 WorkingDirectory=/opt/meshforge-maps
 ExecStart=/opt/meshforge-maps/venv/bin/python -m src.main --host 0.0.0.0
 Restart=on-failure
@@ -48,9 +48,10 @@ ProtectHome=read-only
 PrivateTmp=true
 
 # Allow writes to user data/config/cache directories
-ReadWritePaths=/home/<user>/.config/meshforge
-ReadWritePaths=/home/<user>/.local/share/meshforge
-ReadWritePaths=/home/<user>/.cache/meshforge
+# install.sh substitutes /home/pi -> $REAL_HOME at deploy time
+ReadWritePaths=/home/pi/.config/meshforge
+ReadWritePaths=/home/pi/.local/share/meshforge
+ReadWritePaths=/home/pi/.cache/meshforge
 
 [Install]
 WantedBy=multi-user.target
