@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .global_config import load_global_overrides
 from .paths import get_real_home
 
 logger = logging.getLogger(__name__)
@@ -345,6 +346,17 @@ class MapsConfig:
             )
         self._lock = threading.Lock()
         self._settings: Dict[str, Any] = dict(DEFAULT_CONFIG)
+
+        # MeshForge ecosystem-wide shared identity layer.
+        # ~/.config/meshforge/global.ini is read AFTER DEFAULT_CONFIG and
+        # BEFORE settings.json, so per-plugin saved values still take
+        # precedence. Layering: DEFAULT_CONFIG < global.ini < settings.json.
+        # See contract spec at meshing_around_meshforge/docs/global_config.md.
+        global_overrides = load_global_overrides()
+        for key, value in global_overrides.items():
+            if key in DEFAULT_CONFIG:
+                self._settings[key] = value
+
         self.load()
 
     def load(self) -> None:
