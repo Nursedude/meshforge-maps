@@ -405,6 +405,20 @@ When running as a MeshForge extension:
 - The extension operates independently — MeshForge core is **not** required at runtime
 - MeshForge provides the NOC framework; meshforge-maps provides the map visualization
 
+### Shared identity (`~/.config/meshforge/global.ini`)
+
+Maps reads `~/.config/meshforge/global.ini` as a fallback before its own
+`settings.json` loads.  Values shared with the rest of the ecosystem (MQTT
+broker, region preset, operator home coordinates) only need to be set
+once.  Per-plugin `settings.json` still wins when present — global is
+purely additive.
+
+Layering: `DEFAULT_CONFIG < global.ini < settings.json`.
+
+The canonical schema lives in the meshing_around_meshforge repo at
+[`docs/global_config.md`](https://github.com/Nursedude/meshing_around_meshforge/blob/main/docs/global_config.md).
+Missing or malformed file → no-op, never raises.
+
 You do **not** need MeshForge installed to use meshforge-maps. It runs fully standalone with its own HTTP server. MeshForge integration simply adds plugin lifecycle management and a unified settings path.
 
 ### Scripted Install (Raspberry Pi / Linux)
