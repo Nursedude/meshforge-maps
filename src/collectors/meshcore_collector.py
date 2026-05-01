@@ -5,7 +5,8 @@ Collects node data from the MeshCore mesh network via the public map API.
 MeshCore is an intelligent-routing LoRa mesh protocol (separate from Meshtastic).
 
 Data source: https://map.meshcore.dev/api/v1/nodes
-  - ~30,000 nodes with GPS positions
+  - 307 redirect to https://map.meshcore.io/api/v1/nodes (followed by urlopen)
+  - 40,000+ nodes with GPS positions, ~30+ MB JSON response and growing
   - Node types: client (1), repeater (2), room server (3)
   - RF params: frequency, spreading factor, coding rate, bandwidth
   - No authentication required
@@ -33,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 # MeshCore public map API
 MESHCORE_MAP_URL = "https://map.meshcore.dev/api/v1/nodes"
+
+# Upstream JSON is ~30 MB (40K+ nodes) and growing. The bounded_read default
+# (10 MB) silently truncates and the catch below would swallow the resulting
+# JSON parse error — leaving the map with zero MeshCore nodes. 64 MB gives
+# ~2x headroom; raise again if the upstream keeps growing.
+MESHCORE_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 
 # Node type mapping (from MeshCore protocol)
 MESHCORE_NODE_TYPES = {
@@ -78,11 +85,14 @@ class MeshCoreCollector(BaseCollector):
                 },
             )
             with urlopen(req, timeout=30) as resp:
-                # API may redirect (307), urlopen follows by default for GET
-                data = json.loads(bounded_read(resp).decode("utf-8", errors="replace"))
+                # API may redirect (307 .dev -> .io), urlopen follows by default for GET
+                data = json.loads(
+                    bounded_read(resp, max_bytes=MESHCORE_MAX_RESPONSE_BYTES)
+                    .decode("utf-8", errors="replace")
+                )
 
             if not isinstance(data, list):
-                logger.debug("MeshCore map: unexpected response format")
+                logger.warning("MeshCore map: unexpected response format")
                 return features
 
             skipped_oob = 0
@@ -102,7 +112,12 @@ class MeshCoreCollector(BaseCollector):
 
             if features:
                 logger.debug("MeshCore map returned %d nodes", len(features))
-        except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError) as e:
+            # Response-shape / size-cap failures must surface — these are how
+            # the prior silent-zero-nodes bug hid (10 MB cap raised ValueError,
+            # caught at debug, /api/status reported total_errors=0 forever).
+            logger.warning("MeshCore map: response error: %s", e)
+        except (URLError, OSError) as e:
             logger.debug("MeshCore map unavailable: %s", e)
         return features
 

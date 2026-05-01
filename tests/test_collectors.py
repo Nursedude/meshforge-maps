@@ -1079,6 +1079,57 @@ class TestHamClockThreadSafety:
         assert isinstance(c._detection_lock, type(threading.Lock()))
 
 
+# ==========================================================================
+# MeshCore Collector — bounded_read cap regression
+# ==========================================================================
+
+class TestMeshCoreBoundedReadCap:
+    """Regression: the upstream MeshCore JSON is ~30+ MB (40K+ nodes). The
+    bounded_read default cap of 10 MB raised ValueError, which the collector
+    swallowed at logger.debug — leaving the map with zero MeshCore nodes
+    and total_errors=0 in /api/status (silent failure)."""
+
+    def test_meshcore_passes_explicit_max_bytes(self):
+        """Source-level contract: bounded_read must be called with an
+        explicit max_bytes large enough for the MeshCore upstream size."""
+        from pathlib import Path
+        src_path = (
+            Path(__file__).resolve().parent.parent
+            / "src" / "collectors" / "meshcore_collector.py"
+        )
+        src = src_path.read_text()
+        assert "bounded_read(resp, max_bytes=" in src, (
+            "MeshCore must pass explicit max_bytes to bounded_read() — "
+            "default 10 MB silently truncates the 30+ MB upstream response"
+        )
+        assert "MESHCORE_MAX_RESPONSE_BYTES" in src, (
+            "Cap should be a named constant so future bumps are obvious"
+        )
+
+    def test_bounded_read_with_explicit_cap_accepts_meshcore_size(self):
+        """Functional check that bounded_read with the new cap actually
+        accepts a body larger than the 10 MB default."""
+        from src.collectors.base import bounded_read, DEFAULT_MAX_RESPONSE_BYTES
+
+        oversized = b"x" * (15 * 1024 * 1024)  # 15 MB
+        # Default cap rejects
+        resp_default = MagicMock()
+        resp_default.read.return_value = oversized
+        try:
+            bounded_read(resp_default)
+            default_rejected = False
+        except ValueError:
+            default_rejected = True
+        assert default_rejected, "10 MB default should reject 15 MB body"
+        assert DEFAULT_MAX_RESPONSE_BYTES == 10 * 1024 * 1024
+
+        # Explicit larger cap accepts
+        resp_big = MagicMock()
+        resp_big.read.return_value = oversized
+        accepted = bounded_read(resp_big, max_bytes=64 * 1024 * 1024)
+        assert accepted == oversized
+
+
 # Helper config for aggregator tests
 DEFAULT_CONFIG_SUBSET = {
     "enable_meshtastic": True,
