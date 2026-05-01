@@ -63,6 +63,25 @@ def _parse_key_value(data: str) -> Dict[str, str]:
     return result
 
 
+def _is_hamclock_sys_response(raw: Optional[str]) -> bool:
+    """True only if `raw` looks like a real HamClock get_sys.txt response.
+
+    Why: another service on the candidate port (e.g. Grafana on :3000) can
+    return HTTP 200 with HTML for any path, which the original probe accepted
+    as OpenHamClock. HamClock's get_sys.txt is key=value text and always
+    includes a `Version=...` line — require that, and reject HTML.
+    """
+    if not raw:
+        return False
+    stripped = raw.lstrip()
+    if stripped.startswith("<"):
+        return False
+    for line in raw.splitlines():
+        if line.strip().lower().startswith("version="):
+            return True
+    return False
+
+
 class HamClockCollector(BaseCollector):
     """Collects space weather and propagation data for map overlays.
 
@@ -114,7 +133,7 @@ class HamClockCollector(BaseCollector):
             if self._openhamclock_port != self._hamclock_port:
                 openhamclock_url = f"http://{self._hamclock_host}:{self._openhamclock_port}"
                 raw = self._fetch_text(f"{openhamclock_url}/get_sys.txt")
-                if raw is not None and len(raw) > 0:
+                if _is_hamclock_sys_response(raw):
                     self._hamclock_api = openhamclock_url
                     self._hamclock_available = True
                     self._detected_variant = detect_variant(raw)
@@ -124,7 +143,7 @@ class HamClockCollector(BaseCollector):
             # Fall back to HamClock legacy port
             legacy_url = f"http://{self._hamclock_host}:{self._hamclock_port}"
             raw = self._fetch_text(f"{legacy_url}/get_sys.txt")
-            if raw is not None and len(raw) > 0:
+            if _is_hamclock_sys_response(raw):
                 self._hamclock_api = legacy_url
                 self._hamclock_available = True
                 self._detected_variant = detect_variant(raw)

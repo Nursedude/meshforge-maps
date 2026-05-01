@@ -422,6 +422,32 @@ class TestHamClockCollector:
         assert c.is_hamclock_available() is False
         assert mock_fetch.call_count == 1  # Only tried once
 
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_html_response_rejected(self, mock_fetch):
+        """A non-HamClock service on the candidate port (e.g. Grafana on :3000
+        returning its login HTML for /get_sys.txt) must NOT be accepted as
+        OpenHamClock — otherwise space weather silently fails and NOAA SWPC
+        fallback never fires.
+        """
+        # Grafana-style: 200 with HTML body, no Version= line
+        grafana_html = '<a href="/login?redirectTo=%2Fget_sys.txt">Found</a>.'
+        mock_fetch.return_value = grafana_html
+        c = HamClockCollector()
+        assert c.is_hamclock_available() is False
+        assert c._detected_variant is None
+        # Both ports probed (neither responded with HamClock signature)
+        assert mock_fetch.call_count == 2
+
+    @patch.object(HamClockCollector, "_fetch_text")
+    def test_keyvalue_response_without_version_rejected(self, mock_fetch):
+        """key=value text without a Version= line is not enough — a future
+        unrelated service that happens to return key=value would otherwise
+        re-introduce the same false positive.
+        """
+        mock_fetch.return_value = "Foo=bar\nBaz=qux"
+        c = HamClockCollector()
+        assert c.is_hamclock_available() is False
+
     @patch.object(HamClockCollector, "is_hamclock_available", return_value=True)
     @patch.object(HamClockCollector, "_fetch_space_weather_hamclock")
     @patch.object(HamClockCollector, "_fetch_band_conditions_hamclock")
