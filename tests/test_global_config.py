@@ -1,8 +1,6 @@
 """Tests for the MeshForge ecosystem-wide global config layer (read side)."""
 
 import textwrap
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -57,7 +55,7 @@ def test_full_config_maps_to_flat_keys(tmp_path):
     assert overrides["mqtt_port"] == 8883
     assert overrides["mqtt_use_tls"] is True
     assert overrides["mqtt_username"] == "wh6gxz"
-    assert overrides["mqtt_password"] == "secret123"
+    assert overrides["mqtt_password"] == "secret123"  # noqa: S105 — test fixture
     # Topic root gets the v2 wildcard appended
     assert overrides["mqtt_topic"] == "msh/US/HI/2/e/#"
     assert overrides["region_preset"] == "hawaii"

@@ -6,8 +6,8 @@ import importlib.util
 import sqlite3
 from pathlib import Path
 
-import pytest
-
+from src.utils.db_inventory import DBSpec
+from src.utils.db_helpers import connect_tuned
 
 _SCRIPT_PATH = (
     Path(__file__).resolve().parent.parent / "scripts" / "db_audit.py"
@@ -16,10 +16,6 @@ _spec = importlib.util.spec_from_file_location("db_audit", _SCRIPT_PATH)
 _db_audit = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_db_audit)
 audit_db = _db_audit.audit_db
-
-
-from src.utils.db_inventory import DBSpec
-from src.utils.db_helpers import connect_tuned
 
 
 def _make_spec(name: str, path: Path) -> DBSpec:

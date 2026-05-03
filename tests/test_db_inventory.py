@@ -6,9 +6,8 @@ import re
 from pathlib import Path
 from typing import Set
 
-import pytest
 
-from src.utils.db_inventory import INVENTORY, DBSpec, find_spec
+from src.utils.db_inventory import INVENTORY, find_spec
 
 
 REPO_SRC = Path(__file__).resolve().parent.parent / "src"
