@@ -66,6 +66,35 @@ class TestMapDataClient:
         client = MapDataClient(host="10.0.0.1", port=9999)
         assert client.base_url == "http://10.0.0.1:9999"
 
+    def test_init_https_scheme(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(host="map.example.org", port=443, scheme="https")
+        assert client.base_url == "https://map.example.org:443"
+
+    def test_get_returns_none_on_oversize_response(self):
+        """A remote MapServer pushing more than MAX_RESPONSE_BYTES must not
+        be buffered into TUI memory. bounded_read raises ValueError, which
+        _get catches and converts to None."""
+        from src.tui.data_client import MapDataClient, MAX_RESPONSE_BYTES
+
+        class _OversizeResp:
+            def read(self, n):
+                return b"x" * n
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with patch("urllib.request.urlopen", return_value=_OversizeResp()):
+            client = MapDataClient()
+            result = client._get("/api/nodes/geojson")
+        assert result is None
+        # Sanity: ensure the cap is the documented value, so future tuning
+        # is a deliberate code change rather than silent drift.
+        assert MAX_RESPONSE_BYTES == 64 * 1024 * 1024
+
     def test_get_returns_none_on_connection_error(self):
         from src.tui.data_client import MapDataClient
         client = MapDataClient(port=1)  # port 1 should not have a server

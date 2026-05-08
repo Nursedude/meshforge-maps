@@ -11,16 +11,29 @@ import urllib.request
 import urllib.error
 from typing import Any, Dict, Optional
 
+from src.collectors.base import bounded_read
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 3  # seconds
+
+# Aggregate GeoJSON across all sources can rival the largest single upstream
+# (meshcore ~31 MB at ~40K nodes). 64 MB matches MESHCORE_MAX_RESPONSE_BYTES
+# and bounds memory if the TUI ever points at a hostile/buggy remote MapServer
+# (cloud deploy, post-May 17 demo).
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 
 
 class MapDataClient:
     """Lightweight HTTP client for the MeshForge Maps REST API."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8808):
-        self._base = f"http://{host}:{port}"
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8808,
+        scheme: str = "http",
+    ):
+        self._base = f"{scheme}://{host}:{port}"
 
     @property
     def base_url(self) -> str:
@@ -32,7 +45,7 @@ class MapDataClient:
         try:
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                return json.loads(bounded_read(resp, max_bytes=MAX_RESPONSE_BYTES).decode("utf-8"))
         except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
             logger.warning("API fetch failed %s: %s", path, e)
             return None
