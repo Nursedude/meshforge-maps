@@ -14,6 +14,46 @@ def _disable_meshcore_http():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _isolate_data_dir(tmp_path, monkeypatch, request):
+    # Without this, tests that construct MapServer / NodeHistoryDB with default
+    # args open the live ~/.local/share/meshforge/maps_node_history.db. On any
+    # host where meshforge-maps.service is running (every fleet member), the
+    # second connection blocks production prune (which calls wal_checkpoint
+    # TRUNCATE), and the WAL grows unbounded.
+    #
+    # Reproduced 2026-05-07: pytest collided with VolcanoAI's production prune
+    # cycle, blocked checkpoints for 2.5h, grew the WAL to 45 GB.
+    fake_data = tmp_path / ".local" / "share" / "meshforge"
+    fake_config = tmp_path / ".config" / "meshforge"
+    fake_cache = tmp_path / ".cache" / "meshforge"
+
+    # Consumer-side: already-bound module constants. These are the production
+    # hazard — patch them unconditionally.
+    monkeypatch.setattr(
+        "src.utils.node_history.DEFAULT_DB_PATH",
+        fake_data / "maps_node_history.db",
+    )
+    monkeypatch.setattr("src.collectors.base.MESHFORGE_DATA_DIR", fake_data)
+    monkeypatch.setattr(
+        "src.collectors.base.UNIFIED_CACHE_PATH",
+        fake_data / "node_cache.json",
+    )
+    monkeypatch.setattr("src.collectors.base.get_data_dir", lambda: fake_data)
+
+    # Source-side: paths module helpers. test_paths.py verifies the real
+    # implementation by importing these names directly — patching the source
+    # creates a mixed view (its `get_real_home` is the original, but
+    # `get_data_dir` body resolves `get_real_home` via the patched module
+    # global). Skip the source patch for that file.
+    if request.node.fspath.basename == "test_paths.py":
+        return
+    monkeypatch.setattr("src.utils.paths.get_real_home", lambda: tmp_path)
+    monkeypatch.setattr("src.utils.paths.get_data_dir", lambda: fake_data)
+    monkeypatch.setattr("src.utils.paths.get_config_dir", lambda: fake_config)
+    monkeypatch.setattr("src.utils.paths.get_cache_dir", lambda: fake_cache)
+
+
 @pytest.fixture
 def tmp_config(tmp_path):
     """Provide a temporary config file path."""
