@@ -708,18 +708,25 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `enable_noaa_alerts` | bool | `true` | Enable NOAA weather alerts |
 | `noaa_alerts_area` | string | `null` | State code filter (e.g. `"TX"`, `"CA"`); null = all US |
 | `noaa_alerts_severity` | list | `null` | Severity filter (e.g. `["Extreme","Severe"]`); null = all |
-| `api_key` | string | `null` | API key for `/api/*` endpoints (sent via `X-MeshForge-Key` header) |
-| `cors_allowed_origin` | string | `null` | CORS origin; null = same-origin (disabled), `"*"` = allow all |
+| `api_key` | string | `null` | API key for `/api/*` POST endpoints (sent via `X-MeshForge-Key` header) |
+| `cors_allowed_origin` | string | `null` | CORS origin; `null` = same-origin (disabled). Must be a concrete origin like `"https://maps.example.com"` — wildcards (`"*"`) are rejected |
+| `rate_limit_per_minute` | number | `60` | Per-IP token-bucket budget on all HTTP requests; `0` disables it |
+| `enable_hsts` | bool | `false` | Send `Strict-Transport-Security` header; turn on only behind an HTTPS reverse proxy |
+| `ws_allowed_origins` | list | `[]` | WebSocket browser origin allowlist when bound to a non-loopback host. Empty list denies all browser handshakes |
 
 ## Security
 
-The HTTP and WebSocket servers bind to **127.0.0.1** (localhost) by default. Changing `http_host` or `ws_host` to `0.0.0.0` exposes the server to the network -- use a reverse proxy with TLS in front when doing so.
+The HTTP and WebSocket servers bind to **127.0.0.1** (localhost) by default. Changing `http_host` or `ws_host` to `0.0.0.0` exposes the server to the network -- use a reverse proxy with TLS in front when doing so. For non-loopback binds, you must also populate `ws_allowed_origins` (e.g. `["http://moc:8808", "http://192.168.86.38:8808"]`) or browser clients will be refused at the WebSocket handshake.
 
-**API authentication:** Set `api_key` in settings.json to require authentication on all `/api/*` endpoints. Clients send the key via the `X-MeshForge-Key` HTTP header. When no key is configured, all API requests are allowed.
+**API authentication:** Set `api_key` in settings.json to require authentication on all `/api/*` write endpoints. Clients send the key via the `X-MeshForge-Key` HTTP header. When no key is configured, all API requests are allowed. Rejected keys are logged at `WARNING` with the source IP and target path.
+
+**Rate limiting:** `rate_limit_per_minute` (default `60`) applies a per-IP token bucket to every HTTP request. Denied requests get `429 Too Many Requests` with `Retry-After`. Set to `0` to disable.
+
+**HSTS:** `enable_hsts` (default `false`) sends `Strict-Transport-Security: max-age=15552000; includeSubDomains` on every response. Enable only when the service is fronted by HTTPS — HSTS pins browsers to HTTPS even after the cloud session ends.
 
 **MQTT credentials:** `mqtt_username` and `mqtt_password` are stored in `settings.json` (protected by umask `0o077`). The default credentials are the Meshtastic public broker's well-known values. The `/api/config` endpoint redacts passwords in responses. Set `mqtt_use_tls: true` and `mqtt_port: 8883` for encrypted connections.
 
-**CORS:** Disabled by default (no CORS headers sent). Set `cors_allowed_origin` to a specific origin or `"*"` to enable cross-origin access.
+**CORS:** Disabled by default (no CORS headers sent). Set `cors_allowed_origin` to a specific origin (e.g. `"https://maps.example.com"`) to enable cross-origin access. Wildcards are explicitly rejected — they would expose admin writes to any cross-origin page once a browser holds the API key.
 
 **Defense-in-depth hardening** (see PRs #70 and #71 for the full audit):
 

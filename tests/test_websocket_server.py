@@ -330,6 +330,61 @@ class TestOriginValidation:
         # Arbitrary types should NOT be allowed
         assert "exec" not in server._ALLOWED_MSG_TYPES
 
+    def test_non_loopback_bind_with_empty_allowlist_rejects_browser_origin(self, caplog):
+        """When bound to a non-loopback host with no ws_allowed_origins set,
+        a browser handshake (Origin header present) must be rejected and a
+        single startup WARNING must point operators at the config knob."""
+        import logging
+        port = _free_port()
+        server = MapWebSocketServer(host="0.0.0.0", port=port, allowed_origins=[])
+        with caplog.at_level(logging.WARNING, logger="src.utils.websocket_server"):
+            assert server.start()
+        try:
+            # Startup warning is emitted
+            assert any(
+                "ws_allowed_origins" in rec.message for rec in caplog.records
+            )
+
+            async def _connect_with_origin():
+                # websockets raises InvalidStatus when the server's `origins`
+                # list rejects this Origin header (HTTP 403 on the upgrade).
+                with pytest.raises(
+                    (
+                        websockets.exceptions.InvalidStatus,
+                        websockets.exceptions.InvalidHandshake,
+                    ),
+                ):
+                    async with websockets.connect(
+                        f"ws://127.0.0.1:{port}",
+                        origin="http://evil.example.com",
+                    ):
+                        pass
+
+            asyncio.run(asyncio.wait_for(_connect_with_origin(), timeout=2.0))
+        finally:
+            server.shutdown()
+
+    def test_non_loopback_bind_with_configured_allowlist_accepts_match(self):
+        """When ws_allowed_origins lists a host, that origin handshake works."""
+        port = _free_port()
+        server = MapWebSocketServer(
+            host="0.0.0.0", port=port,
+            allowed_origins=["http://allowed.example.com"],
+        )
+        assert server.start()
+        try:
+            async def _connect_with_origin():
+                async with websockets.connect(
+                    f"ws://127.0.0.1:{port}",
+                    origin="http://allowed.example.com",
+                ) as ws:
+                    # Just confirm the handshake succeeded
+                    assert ws.state.name == "OPEN"
+
+            asyncio.run(asyncio.wait_for(_connect_with_origin(), timeout=2.0))
+        finally:
+            server.shutdown()
+
 
 class TestOptionalDependency:
     def test_start_without_websockets_returns_false(self):

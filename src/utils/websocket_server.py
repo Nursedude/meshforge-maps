@@ -19,7 +19,7 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -41,22 +41,32 @@ class MapWebSocketServer:
         history_size: Number of recent messages to replay to new clients.
     """
 
-    # Allowed WebSocket origin prefixes (localhost only when bound to 127.0.0.1)
+    # Allowed WebSocket origin prefixes when bound to a loopback address.
+    # Preserved unchanged for the LAN/dev case; non-loopback binds use the
+    # explicit ``allowed_origins`` argument so the operator chooses who can
+    # connect from a browser.
     _LOCALHOST_ORIGINS = [
         "http://localhost", "https://localhost",
         "http://127.0.0.1", "https://127.0.0.1",
         None,  # Allow connections without Origin header (non-browser clients)
     ]
 
+    _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
     # Allowed client message types
     _ALLOWED_MSG_TYPES = frozenset({"ping", "get_history", "get_stats"})
 
     def __init__(self, host: str = "127.0.0.1", port: int = 8809,
-                 history_size: int = 50, max_clients: int = 100) -> None:
+                 history_size: int = 50, max_clients: int = 100,
+                 allowed_origins: Optional[Sequence[str]] = None) -> None:
         self.host = host
         self.port = port
         self.history_size = history_size
         self.max_clients = max_clients
+        # Caller-supplied browser origin allowlist for non-loopback binds.
+        # Empty list / None means deny all browser handshakes; non-browser
+        # clients (no Origin header) are always permitted.
+        self.allowed_origins: List[str] = list(allowed_origins or [])
 
         self._clients: set = set()
         self._lock = threading.Lock()
@@ -195,14 +205,27 @@ class MapWebSocketServer:
         """Start serving and signal readiness."""
         try:
             serve_kwargs: Dict[str, Any] = {}
-            # When bound to localhost, restrict origins (prevents cross-site
-            # WebSocket hijacking). When bound to 0.0.0.0 (network-accessible),
-            # allow all origins so LAN clients can connect.
+            # Origin policy:
+            #   * Loopback bind (127.0.0.1/localhost/::1): keep the curated
+            #     localhost allowlist so dev/LAN workflows continue to work.
+            #   * Non-loopback bind: use the caller-supplied allowed_origins
+            #     list, plus ``None`` so non-browser clients (no Origin
+            #     header) can still connect. An empty allowlist denies all
+            #     browser handshakes — surfaces a single startup warning
+            #     telling the operator how to opt in.
             try:
-                if self.host in ("127.0.0.1", "localhost", "::1"):
+                if self.host in self._LOOPBACK_HOSTS:
                     serve_kwargs["origins"] = self._LOCALHOST_ORIGINS
                 else:
-                    serve_kwargs["origins"] = None  # Allow all origins
+                    serve_kwargs["origins"] = [*self.allowed_origins, None]
+                    if not self.allowed_origins:
+                        logger.warning(
+                            "WebSocket bound to %s with empty ws_allowed_origins -- "
+                            "browser handshakes will be rejected. Add origins to "
+                            "settings.json, e.g. "
+                            '"ws_allowed_origins": ["http://%s:8808"]',
+                            self.host, self.host,
+                        )
             except Exception as origins_exc:
                 logger.debug("Could not set origins whitelist: %s", origins_exc)
             self._server = await websockets.asyncio.server.serve(

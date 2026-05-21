@@ -375,3 +375,89 @@ class TestMqttStoreCap:
         cfg = MapsConfig(config_path=tmp_config)
         cfg.set("deployment_profile", "something-else")
         assert _mqtt_store_cap(cfg) == 10000
+
+
+class TestCloudHardeningDefaults:
+    """New cloud-hardening keys ship with safe defaults."""
+
+    def test_rate_limit_default_is_60(self):
+        assert DEFAULT_CONFIG["rate_limit_per_minute"] == 60
+
+    def test_hsts_off_by_default(self):
+        assert DEFAULT_CONFIG["enable_hsts"] is False
+
+    def test_ws_allowed_origins_empty_by_default(self):
+        assert DEFAULT_CONFIG["ws_allowed_origins"] == []
+
+
+class TestCorsWildcardRejection:
+    """validate_update must refuse wildcard CORS origins."""
+
+    def test_star_rejected(self):
+        validated, errors = MapsConfig.validate_update({"cors_allowed_origin": "*"})
+        assert "cors_allowed_origin" not in validated
+        assert any("must not contain '*'" in e for e in errors)
+
+    def test_partial_wildcard_rejected(self):
+        validated, errors = MapsConfig.validate_update(
+            {"cors_allowed_origin": "https://*.example.com"}
+        )
+        assert "cors_allowed_origin" not in validated
+        assert errors
+
+    def test_concrete_origin_accepted(self):
+        validated, errors = MapsConfig.validate_update(
+            {"cors_allowed_origin": "https://maps.example.com"}
+        )
+        assert errors == []
+        assert validated["cors_allowed_origin"] == "https://maps.example.com"
+
+    def test_null_clears_cors(self):
+        validated, errors = MapsConfig.validate_update({"cors_allowed_origin": None})
+        assert errors == []
+        assert validated["cors_allowed_origin"] is None
+
+
+class TestCloudHardeningValidation:
+    """Validators for rate_limit_per_minute, enable_hsts, ws_allowed_origins."""
+
+    def test_rate_limit_negative_rejected(self):
+        validated, errors = MapsConfig.validate_update({"rate_limit_per_minute": -1})
+        assert "rate_limit_per_minute" not in validated
+        assert errors
+
+    def test_rate_limit_zero_accepted_as_disabled(self):
+        validated, errors = MapsConfig.validate_update({"rate_limit_per_minute": 0})
+        assert errors == []
+        assert validated["rate_limit_per_minute"] == 0
+
+    def test_rate_limit_positive_accepted(self):
+        validated, errors = MapsConfig.validate_update({"rate_limit_per_minute": 120})
+        assert errors == []
+        assert validated["rate_limit_per_minute"] == 120
+
+    def test_hsts_non_bool_rejected(self):
+        validated, errors = MapsConfig.validate_update({"enable_hsts": "yes"})
+        assert "enable_hsts" not in validated
+        assert errors
+
+    def test_ws_allowed_origins_must_be_list(self):
+        validated, errors = MapsConfig.validate_update(
+            {"ws_allowed_origins": "http://x"},
+        )
+        assert "ws_allowed_origins" not in validated
+        assert errors
+
+    def test_ws_allowed_origins_empty_strings_rejected(self):
+        validated, errors = MapsConfig.validate_update(
+            {"ws_allowed_origins": ["http://ok", ""]},
+        )
+        assert "ws_allowed_origins" not in validated
+        assert errors
+
+    def test_ws_allowed_origins_strips_whitespace(self):
+        validated, errors = MapsConfig.validate_update(
+            {"ws_allowed_origins": ["  http://moc:8808  "]},
+        )
+        assert errors == []
+        assert validated["ws_allowed_origins"] == ["http://moc:8808"]

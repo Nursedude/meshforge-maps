@@ -37,6 +37,7 @@ from .utils.health_scoring import NodeHealthScorer
 from .utils.meshtastic_api_proxy import MeshtasticApiProxy
 from .utils.node_history import NodeHistoryDB
 from .utils.node_state import NodeStateTracker
+from .utils.rate_limiter import RateLimiter
 from .utils.shared_health_state import SharedHealthStateReader
 from .utils.websocket_server import MapWebSocketServer
 
@@ -120,6 +121,8 @@ class MapServerContext:
     proxy: Optional[MeshtasticApiProxy] = None
     ws_server: Optional[MapWebSocketServer] = None
     api_key: Optional[str] = None
+    rate_limiter: Optional[RateLimiter] = None
+    enable_hsts: bool = False
 
 
 class MeshForgeHTTPServer(ThreadingHTTPServer):
@@ -197,6 +200,33 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     # Valid source names for /api/nodes/<source> endpoint
     _VALID_SOURCES = {"meshtastic", "reticulum", "aredn", "hamclock", "mqtt"}
 
+    def _client_ip(self) -> str:
+        """Best-effort client IP for rate-limit and audit logging."""
+        try:
+            return self.client_address[0]
+        except (AttributeError, IndexError, TypeError):
+            return "unknown"
+
+    def _check_rate_limit(self) -> bool:
+        """Consume one token; on deny, send 429 + Retry-After and return False."""
+        limiter = self._ctx.rate_limiter
+        if limiter is None:
+            return True
+        allowed, retry_after = limiter.allow(self._client_ip())
+        if allowed:
+            return True
+        body = b'{"error": "rate limit exceeded"}'
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Retry-After", str(retry_after))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        return False
+
     def _check_api_key(self) -> bool:
         """Validate API key if one is configured. Returns True if authorized."""
         api_key = self._ctx.api_key
@@ -205,6 +235,13 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         provided = self.headers.get("X-MeshForge-Key", "")
         if hmac.compare_digest(provided, api_key):
             return True
+        # Audit failed write attempts. Per the no-silent-failure rule across
+        # the MeshForge domain, surface every rejected key with its source IP
+        # and target path so brute-force attempts are visible in journalctl.
+        logger.warning(
+            "auth: rejected X-MeshForge-Key from %s for %s %s",
+            self._client_ip(), self.command, self.path,
+        )
         self._send_json({"error": "Unauthorized"}, 401)
         return False
 
@@ -226,6 +263,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         })
 
     def do_GET(self) -> None:
+        if not self._check_rate_limit():
+            return
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         query = parse_qs(parsed.query)
@@ -310,7 +349,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 pass
 
     def end_headers(self) -> None:
-        """Inject Cache-Control + ETag for static JS/CSS."""
+        """Inject Cache-Control + ETag for static JS/CSS, plus optional HSTS."""
         raw_path = getattr(self, "path", "").split("?")[0]
         if raw_path.endswith((".js", ".css")):
             self.send_header("Cache-Control", "public, max-age=86400")
@@ -323,6 +362,14 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                     self.send_header("ETag", f'"{int(mtime)}"')
             except (OSError, AttributeError):
                 pass
+        if getattr(self._ctx, "enable_hsts", False):
+            # 6 months, include subdomains. Operator must opt in (default off)
+            # because the service speaks plaintext HTTP on the LAN and HSTS
+            # would pin browsers to HTTPS even after the cloud session ends.
+            self.send_header(
+                "Strict-Transport-Security",
+                "max-age=15552000; includeSubDomains",
+            )
         super().end_headers()
 
     def _get_cors_origin(self) -> Optional[str]:
@@ -346,6 +393,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """Handle POST requests (config update, backup creation)."""
+        if not self._check_rate_limit():
+            return
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
@@ -1659,6 +1708,8 @@ class MapServer:
         http_host = self._config.get("http_host", "127.0.0.1")
         last_error: Optional[Exception] = None
 
+        rpm = int(self._config.get("rate_limit_per_minute") or 0)
+        rate_limiter = RateLimiter(requests_per_minute=rpm) if rpm > 0 else None
         for offset in range(5):
             port = base_port + offset
             try:
@@ -1676,6 +1727,8 @@ class MapServer:
                     analytics=self._analytics,
                     proxy=self._proxy,
                     api_key=self._config.get("api_key"),
+                    rate_limiter=rate_limiter,
+                    enable_hsts=bool(self._config.get("enable_hsts", False)),
                 )
                 self._server = MeshForgeHTTPServer(
                     (http_host, port), MapRequestHandler, context=ctx,
@@ -1894,12 +1947,14 @@ class MapServer:
         (matching the HTTP server fallback pattern).
         """
         ws_host = self._config.get("ws_host", "127.0.0.1")
+        ws_allowed_origins = self._config.get("ws_allowed_origins", []) or []
         for offset in range(5):
             port = ws_port + offset
             self._ws_server = MapWebSocketServer(
                 host=ws_host,
                 port=port,
                 history_size=50,
+                allowed_origins=ws_allowed_origins,
             )
             if self._ws_server.start():
                 self._ws_port = port

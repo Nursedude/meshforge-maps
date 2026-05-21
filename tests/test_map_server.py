@@ -381,3 +381,123 @@ class TestHeatmapNormalization:
         assert points[0][2] == 1.0   # 10/10
         assert points[1][2] == 0.5   # 5/10
         assert points[2][2] == 0.1   # 1/10
+
+
+class TestRateLimitingIntegration:
+    """Integration tests for the per-IP rate limit on the live HTTP server."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_server(self, tmp_path):
+        from urllib.request import urlopen
+        self.urlopen = urlopen
+        config = MapsConfig(config_path=tmp_path / "settings.json")
+        config.set("http_port", 18860)
+        config.set("enable_meshtastic", False)
+        config.set("enable_reticulum", False)
+        config.set("enable_hamclock", False)
+        config.set("enable_aredn", False)
+        config.set("enable_meshcore", False)
+        # Tight budget so the test can exhaust it in a handful of calls.
+        config.set("rate_limit_per_minute", 3)
+        self.server = MapServer(config)
+        assert self.server.start() is True
+        self.base = f"http://127.0.0.1:{self.server.port}"
+        time.sleep(0.1)
+        yield
+        self.server.stop()
+
+    def test_429_with_retry_after_after_budget_exhausted(self):
+        from urllib.error import HTTPError
+        # First 3 succeed
+        for _ in range(3):
+            with self.urlopen(self.base + "/api/status", timeout=5) as resp:
+                assert resp.status == 200
+        # Next one is rate-limited
+        try:
+            self.urlopen(self.base + "/api/status", timeout=5)
+            raise AssertionError("Expected 429")
+        except HTTPError as e:
+            assert e.code == 429
+            assert e.headers.get("Retry-After") is not None
+            assert int(e.headers["Retry-After"]) >= 1
+
+
+class TestSecurityHeaders:
+    """HSTS is opt-in via enable_hsts; default is no header."""
+
+    def _start_server(self, tmp_path, enable_hsts):
+        config = MapsConfig(config_path=tmp_path / "settings.json")
+        config.set("http_port", 18870)
+        config.set("enable_meshtastic", False)
+        config.set("enable_reticulum", False)
+        config.set("enable_hamclock", False)
+        config.set("enable_aredn", False)
+        config.set("enable_meshcore", False)
+        config.set("enable_hsts", enable_hsts)
+        srv = MapServer(config)
+        assert srv.start() is True
+        time.sleep(0.1)
+        return srv
+
+    def test_hsts_absent_by_default(self, tmp_path):
+        from urllib.request import urlopen
+        srv = self._start_server(tmp_path, enable_hsts=False)
+        try:
+            with urlopen(f"http://127.0.0.1:{srv.port}/api/status", timeout=5) as r:
+                assert r.headers.get("Strict-Transport-Security") is None
+        finally:
+            srv.stop()
+
+    def test_hsts_present_when_enabled(self, tmp_path):
+        from urllib.request import urlopen
+        srv = self._start_server(tmp_path, enable_hsts=True)
+        try:
+            with urlopen(f"http://127.0.0.1:{srv.port}/api/status", timeout=5) as r:
+                hsts = r.headers.get("Strict-Transport-Security")
+                assert hsts is not None
+                assert "max-age=" in hsts
+        finally:
+            srv.stop()
+
+
+class TestAuthFailureLogging:
+    """Failed API-key auth must surface a WARNING with client IP."""
+
+    def test_failed_post_logs_warning_with_ip(self, tmp_path, caplog):
+        import logging
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+        config = MapsConfig(config_path=tmp_path / "settings.json")
+        config.set("http_port", 18880)
+        config.set("enable_meshtastic", False)
+        config.set("enable_reticulum", False)
+        config.set("enable_hamclock", False)
+        config.set("enable_aredn", False)
+        config.set("enable_meshcore", False)
+        config.set("api_key", "correct-key")
+        srv = MapServer(config)
+        assert srv.start() is True
+        time.sleep(0.1)
+        try:
+            req = Request(
+                f"http://127.0.0.1:{srv.port}/api/config",
+                data=b'{"http_port": 8808}',
+                headers={
+                    "Content-Type": "application/json",
+                    "X-MeshForge-Key": "wrong-key",
+                },
+                method="POST",
+            )
+            with caplog.at_level(logging.WARNING, logger="src.map_server"):
+                try:
+                    urlopen(req, timeout=5)
+                    raise AssertionError("Expected 401")
+                except HTTPError as e:
+                    assert e.code == 401
+            assert any(
+                "auth: rejected X-MeshForge-Key from" in rec.message
+                and "/api/config" in rec.message
+                for rec in caplog.records
+            )
+        finally:
+            srv.stop()
