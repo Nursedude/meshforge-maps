@@ -79,3 +79,34 @@ class TestConnectTuned:
             assert mode.lower() in ("wal", "delete")
         finally:
             c2.close()
+
+
+class TestReadOnlyParameter:
+    def test_read_only_rejects_writes(self, db_path: Path):
+        import sqlite3
+        # Seed the file via a normal connection.
+        w = connect_tuned(db_path)
+        w.execute("CREATE TABLE t (id INTEGER)")
+        w.execute("INSERT INTO t VALUES (1)")
+        w.commit()
+        w.close()
+
+        ro = connect_tuned(db_path, read_only=True, check_same_thread=False)
+        try:
+            # Reads work.
+            rows = ro.execute("SELECT id FROM t").fetchall()
+            assert rows == [(1,)]
+            # Writes fail with an OperationalError on a read-only DB.
+            with pytest.raises(sqlite3.OperationalError):
+                ro.execute("INSERT INTO t VALUES (2)")
+        finally:
+            ro.close()
+
+    def test_read_only_missing_file_raises(self, tmp_path):
+        import sqlite3
+        with pytest.raises(sqlite3.OperationalError):
+            connect_tuned(
+                tmp_path / "does-not-exist.db",
+                read_only=True,
+                check_same_thread=False,
+            )

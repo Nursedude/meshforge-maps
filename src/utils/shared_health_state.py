@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .db_helpers import connect_tuned
 from .paths import get_config_dir
 
 logger = logging.getLogger(__name__)
@@ -62,17 +63,23 @@ class SharedHealthStateReader:
             return
 
         try:
-            # Open in read-only mode using URI
-            uri = f"file:{self._db_path}?mode=ro"
-            conn = sqlite3.connect(
-                uri, uri=True, check_same_thread=False,
+            # Read-only URI mode via the shared helper — keeps every new
+            # SQLite consumer on a single connection pattern (per CLAUDE.md
+            # "anything new starts with connect_tuned"). 1 s busy timeout
+            # is the historical knob for this DB; tighter than the 30 s
+            # default so a stalled writer in core doesn't lock the request
+            # path here.
+            conn = connect_tuned(
+                self._db_path,
+                check_same_thread=False,
+                read_only=True,
+                busy_timeout_seconds=1.0,
             )
-            conn.execute("PRAGMA busy_timeout=1000")
             with self._lock:
                 self._conn = conn
                 self._available = True
             logger.info("Connected to shared health DB at %s", self._db_path)
-        except Exception as e:
+        except sqlite3.Error as e:
             logger.debug("Failed to open shared health DB: %s", e)
             with self._lock:
                 self._conn = None

@@ -643,3 +643,75 @@ class TestDBBackup:
         db = NodeHistoryDB(db_path=tmp_path / "closed.db", throttle_seconds=0)
         db.close()
         assert db.create_backup(tmp_path / "backup.db") is False
+
+
+class TestWriteErrorSurfacing:
+    """Disk-fatal write errors must be visible to the health endpoint."""
+
+    def test_initial_state_clean(self, tmp_path):
+        db = NodeHistoryDB(db_path=tmp_path / "clean.db", throttle_seconds=0)
+        try:
+            state = db.write_error_state()
+            assert state["last_write_error_at"] is None
+            assert state["last_write_error_msg"] is None
+        finally:
+            db.close()
+
+    def test_successful_write_clears_error(self, tmp_path):
+        db = NodeHistoryDB(db_path=tmp_path / "ok.db", throttle_seconds=0)
+        try:
+            # Pretend a prior write failed.
+            db._last_write_error_at = 12345
+            db._last_write_error_msg = "stale"
+            assert db.record_observation("!ok", 35.0, 139.0) is True
+            state = db.write_error_state()
+            assert state["last_write_error_at"] is None
+            assert state["last_write_error_msg"] is None
+        finally:
+            db.close()
+
+    def test_disk_full_error_is_recorded(self, tmp_path):
+        """An OperationalError naming 'disk' must flip the error fields."""
+        # sqlite3.Connection.execute is a read-only C slot, so we exercise the
+        # classifier directly rather than monkey-patching the connection.
+        import sqlite3
+        db = NodeHistoryDB(db_path=tmp_path / "full.db", throttle_seconds=0)
+        try:
+            db._record_write_error(
+                sqlite3.OperationalError("database or disk is full"),
+                "!stuck",
+            )
+            state = db.write_error_state()
+            assert state["last_write_error_at"] is not None
+            assert "disk is full" in (state["last_write_error_msg"] or "")
+        finally:
+            db.close()
+
+    def test_non_disk_error_does_not_set_disk_state(self, tmp_path):
+        """A non-disk sqlite error logs at warning but doesn't claim disk-full."""
+        import sqlite3
+        db = NodeHistoryDB(db_path=tmp_path / "other.db", throttle_seconds=0)
+        try:
+            db._record_write_error(
+                sqlite3.OperationalError("table observations is locked"),
+                "!nope",
+            )
+            state = db.write_error_state()
+            assert state["last_write_error_at"] is None
+            assert state["last_write_error_msg"] is None
+        finally:
+            db.close()
+
+    def test_disk_io_error_message_variant_is_recorded(self, tmp_path):
+        import sqlite3
+        db = NodeHistoryDB(db_path=tmp_path / "io.db", throttle_seconds=0)
+        try:
+            db._record_write_error(
+                sqlite3.OperationalError("disk I/O error"),
+                "!io",
+            )
+            state = db.write_error_state()
+            assert state["last_write_error_at"] is not None
+            assert "I/O error" in (state["last_write_error_msg"] or "")
+        finally:
+            db.close()
