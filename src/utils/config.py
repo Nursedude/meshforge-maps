@@ -66,10 +66,26 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # "password": str, "use_tls": bool, "label": str}. If empty, only the scalar
     # mqtt_* keys above are used.
     "mqtt_brokers": [],
-    # CORS: None = same-origin (no CORS headers sent); set to "*" or a specific origin to enable
+    # CORS: None = same-origin (no CORS headers sent). Set to a concrete
+    # origin like "https://maps.example.com" to enable. Wildcards ("*") are
+    # rejected by validate_config_update — they would expose admin POSTs to
+    # any web page once a browser holds the API key.
     "cors_allowed_origin": None,
-    # API key for protecting /api/ endpoints (None = no auth required)
+    # API key for protecting /api/ POST endpoints (None = no auth required)
     "api_key": None,
+    # Per-IP token-bucket rate limit on every HTTP request. 60/min comfortably
+    # covers a normal browser session (a page load is ~5-10 API calls) while
+    # blocking unauthenticated scraping. Set to 0 to disable.
+    "rate_limit_per_minute": 60,
+    # Strict-Transport-Security header. Off by default because the service
+    # serves plaintext HTTP on the LAN; enable only when fronted by an HTTPS
+    # reverse proxy on a public deployment.
+    "enable_hsts": False,
+    # WebSocket origin allowlist. Loopback binds (127.0.0.1/::1) auto-allow
+    # localhost-prefix origins. Non-loopback binds (0.0.0.0, LAN IP) consult
+    # this list — empty means deny all browser origins, so set it explicitly
+    # for your deployment, e.g. ["http://moc:8808", "http://192.168.86.38:8808"].
+    "ws_allowed_origins": [],
     # Meshtastic API proxy port (meshtasticd-compatible JSON proxy)
     "meshtastic_proxy_port": 4404,
     # meshtasticd HTTP API connection
@@ -509,6 +525,43 @@ class MapsConfig:
                     errors.append(f"region_preset must be one of: {', '.join(REGION_PRESETS)}, custom, or null")
                     continue
                 validated[key] = value
+            elif key == "cors_allowed_origin":
+                if value is None or value == "":
+                    validated[key] = None
+                    continue
+                if not isinstance(value, str):
+                    errors.append("cors_allowed_origin must be a string or null")
+                    continue
+                # Wildcards would expose admin POSTs to any cross-origin page
+                # once a browser holds the API key. Require a concrete origin.
+                if "*" in value:
+                    errors.append("cors_allowed_origin must not contain '*'; use a concrete origin like 'https://maps.example.com'")
+                    continue
+                validated[key] = value.strip()
+            elif key == "rate_limit_per_minute":
+                try:
+                    rpm = int(value)
+                except (ValueError, TypeError):
+                    errors.append("rate_limit_per_minute must be an integer")
+                    continue
+                if rpm < 0:
+                    errors.append("rate_limit_per_minute must be 0 (disabled) or positive")
+                    continue
+                validated[key] = rpm
+            elif key == "enable_hsts":
+                if not isinstance(value, bool):
+                    errors.append("enable_hsts must be a boolean")
+                    continue
+                validated[key] = value
+            elif key == "ws_allowed_origins":
+                if not isinstance(value, list):
+                    errors.append("ws_allowed_origins must be a list of origin strings")
+                    continue
+                bad = [v for v in value if not isinstance(v, str) or not v.strip()]
+                if bad:
+                    errors.append("ws_allowed_origins entries must be non-empty strings")
+                    continue
+                validated[key] = [v.strip() for v in value]
             else:
                 validated[key] = value
         return validated, errors

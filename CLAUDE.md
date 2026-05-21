@@ -67,7 +67,11 @@ scripts/                     install.sh, verify.sh
 - Network bindings default to `127.0.0.1` — `0.0.0.0` only when user explicitly configures it
 - Validate all user inputs; node IDs validated with `NODE_ID_RE` regex (`^!?[0-9a-fA-F]{1,16}$`) from `src/collectors/base.py`
 - No secrets in code — MQTT credentials come from settings.json only
-- CORS disabled by default (`cors_allowed_origin: None` in config)
+- CORS disabled by default (`cors_allowed_origin: None` in config). `validate_update` rejects any value containing `*` — wildcards would expose admin POSTs to any cross-origin page once a browser holds the API key
+- Per-IP token-bucket rate limit on every HTTP request via `src/utils/rate_limiter.py:RateLimiter` (default 60/min, `rate_limit_per_minute` in config; set to `0` to disable). 429 + `Retry-After` on deny. Buckets prune after 10 min idle so memory stays bounded under hostile traffic
+- WebSocket origin allowlist via `ws_allowed_origins` in config. Loopback binds keep the curated localhost list. Non-loopback binds use the allowlist; an empty list denies all browser handshakes and surfaces a single startup `WARNING` showing the operator the exact line to add
+- `Strict-Transport-Security` is sent only when `enable_hsts: true` (default off). Turn it on only when fronted by HTTPS — HSTS pins browsers to HTTPS even after the cloud session ends
+- Failed API-key auth is logged at `WARNING` with the client IP and target path (no silent 401s — see the `feedback_no_silent_failure` cross-repo rule)
 - Query parameters extracted via `_safe_query_param()` helper — never access raw query dicts
 - HTTP responses include `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`
 - HTML responses include `Content-Security-Policy` header restricting script/style/image/connect sources
@@ -119,7 +123,7 @@ ruff check src/ --select S --ignore S101,S310,S603,S607   # matches Security Sca
 - **pyopenssl pinning**: Must be `>=25.3.0` with `cryptography>=45.0.7,<47` to avoid SSL conflicts
 - **Graceful degradation**: All optional imports must be try/except guarded — feature disabled, never crash
 - **Circuit breakers**: Per-source failure isolation via `ConnectionManager` — don't bypass for "reliability"
-- **Config keys in README**: `cors_allowed_origin`, `api_key`, `enable_noaa_alerts`, `noaa_alerts_area`, `noaa_alerts_severity` are all in `DEFAULT_CONFIG` — keep README config table in sync when adding/removing keys
+- **Config keys in README**: `cors_allowed_origin`, `api_key`, `enable_noaa_alerts`, `noaa_alerts_area`, `noaa_alerts_severity`, `rate_limit_per_minute`, `enable_hsts`, `ws_allowed_origins` are all in `DEFAULT_CONFIG` — keep README config table in sync when adding/removing keys
 - **NodeHistoryDB.execute_read()**: Public API for read-only analytics queries — use this instead of accessing `_lock`/`_conn` directly
 - **time.monotonic() on fresh runners**: Starts small on fresh CI runners/containers — use `float("-inf")` as the stale-cache sentinel (see `NodeHistoryDB._count_cache_time`)
 - **Future timestamps are hostile input**: MQTT `last_heard` can be forged; `is_node_online()` rejects negative ages and unknown networks return `None`
