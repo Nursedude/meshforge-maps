@@ -562,6 +562,46 @@ class MapsConfig:
                     errors.append("ws_allowed_origins entries must be non-empty strings")
                     continue
                 validated[key] = [v.strip() for v in value]
+            elif key == "aredn_node_ips":
+                if not isinstance(value, list):
+                    errors.append("aredn_node_ips must be a list of host strings")
+                    continue
+                cleaned: List[str] = []
+                bad = False
+                for entry in value:
+                    if not isinstance(entry, str):
+                        errors.append("aredn_node_ips entries must be strings")
+                        bad = True
+                        break
+                    stripped = entry.strip()
+                    if not stripped:
+                        errors.append("aredn_node_ips entries must be non-empty")
+                        bad = True
+                        break
+                    if "://" in stripped or " " in stripped:
+                        # The collector concatenates "http://{host}:8080/..." —
+                        # a scheme or whitespace in the entry would produce a
+                        # malformed URL and a confusing 1-line error in logs.
+                        errors.append(
+                            f"aredn_node_ips entry '{stripped}' must be a host (no scheme, no spaces)",
+                        )
+                        bad = True
+                        break
+                    if stripped.startswith("169.254."):
+                        # Cloud IMDS endpoints (e.g. 169.254.169.254) are the
+                        # canonical "are we on AWS/GCP?" probe; warning, not
+                        # rejecting, since some operators legitimately point
+                        # the collector at link-local AREDN devices on a wired
+                        # subnet.
+                        logger.warning(
+                            "aredn_node_ips: %s is in the link-local / IMDS "
+                            "range; double-check this isn't a cloud metadata IP",
+                            stripped,
+                        )
+                    cleaned.append(stripped)
+                if bad:
+                    continue
+                validated[key] = cleaned
             else:
                 validated[key] = value
         return validated, errors

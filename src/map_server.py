@@ -848,7 +848,18 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             sources_with_data = sum(1 for c in source_counts.values() if c > 0)
             source_score = 50.0 * (sources_with_data / enabled_count)
 
-        total_score = int(freshness_score + source_score)
+        # Surface the most recent disk-fatal write error from the history DB
+        # so an out-of-space backlog doesn't sit invisibly behind a green
+        # score. Penalty is large enough to drop status at least one tier
+        # when a write is actively failing.
+        write_error_state = (
+            self._ctx.node_history.write_error_state()
+            if self._ctx.node_history else
+            {"last_write_error_at": None, "last_write_error_msg": None}
+        )
+        write_error_penalty = 25 if write_error_state["last_write_error_at"] else 0
+
+        total_score = int(freshness_score + source_score) - write_error_penalty
         total_score = max(0, min(100, total_score))
 
         # Map score to status string
@@ -870,6 +881,8 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             },
             "data_age_seconds": int(data_age) if data_age is not None else None,
             "sources_reporting": source_counts,
+            "node_history_write_error_at": write_error_state["last_write_error_at"],
+            "node_history_write_error_msg": write_error_state["last_write_error_msg"],
         })
 
     def _serve_config_drift(self) -> None:

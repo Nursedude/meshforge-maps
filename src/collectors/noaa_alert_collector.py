@@ -20,6 +20,34 @@ logger = logging.getLogger(__name__)
 
 _USER_AGENT = "MeshForge-Maps/1.0 (mesh network mapping tool)"
 
+# Hard cap on polygon complexity. A misbehaving upstream (or a corrupted
+# cached response) with millions of vertices per polygon would lock the
+# Leaflet renderer on the client side; reject anything beyond this and log
+# the alert id so the operator can see what was dropped. NOAA polygons in
+# the wild top out at a few hundred vertices, so 50k leaves a wide margin.
+MAX_POLYGON_VERTICES = 50_000
+
+
+def _polygon_vertex_count(geom: Dict[str, Any]) -> int:
+    """Return the total number of [lon, lat] coordinates in a GeoJSON geometry.
+
+    Handles Polygon (list of rings) and MultiPolygon (list of polygons).
+    Returns 0 for unknown geometry types so they're treated as "no risk".
+    """
+    coords = geom.get("coordinates")
+    if not isinstance(coords, list):
+        return 0
+    gtype = geom.get("type")
+    if gtype == "Polygon":
+        return sum(len(ring) for ring in coords if isinstance(ring, list))
+    if gtype == "MultiPolygon":
+        return sum(
+            len(ring)
+            for poly in coords if isinstance(poly, list)
+            for ring in poly if isinstance(ring, list)
+        )
+    return 0
+
 # NOAA severity → display color mapping
 SEVERITY_COLORS: Dict[str, str] = {
     "Extreme": "#d32f2f",
@@ -120,6 +148,14 @@ class NOAAAlertCollector(BaseCollector):
             if alert_id in seen_ids:
                 continue
             seen_ids.add(alert_id)
+
+            vertex_count = _polygon_vertex_count(geom)
+            if vertex_count > MAX_POLYGON_VERTICES:
+                logger.warning(
+                    "NOAA alert %s dropped: polygon has %d vertices (cap %d)",
+                    alert_id or "<no-id>", vertex_count, MAX_POLYGON_VERTICES,
+                )
+                continue
 
             severity = props.get("severity", "Unknown")
             color = SEVERITY_COLORS.get(severity, SEVERITY_COLORS["Unknown"])

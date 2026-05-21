@@ -252,6 +252,63 @@ class TestProcessFeatures:
         assert result[0]["properties"]["color"] == SEVERITY_COLORS["Unknown"]
 
 
+class TestPolygonVertexCap:
+    """Polygons with absurd vertex counts must be dropped, not rendered."""
+
+    def test_polygon_under_cap_is_kept(self):
+        from src.collectors.noaa_alert_collector import MAX_POLYGON_VERTICES
+        ring = [[float(i) / 1000, 30.0] for i in range(MAX_POLYGON_VERTICES // 2)]
+        feature = _make_noaa_feature(
+            alert_id="urn:test:small",
+            geometry={"type": "Polygon", "coordinates": [ring]},
+        )
+        c = NOAAAlertCollector()
+        result = c._process_features([feature])
+        assert len(result) == 1
+
+    def test_polygon_over_cap_is_dropped(self, caplog):
+        import logging
+        from src.collectors.noaa_alert_collector import MAX_POLYGON_VERTICES
+        # One ring exceeds the cap on its own.
+        ring = [[float(i) / 1000, 30.0] for i in range(MAX_POLYGON_VERTICES + 10)]
+        feature = _make_noaa_feature(
+            alert_id="urn:test:huge",
+            geometry={"type": "Polygon", "coordinates": [ring]},
+        )
+        c = NOAAAlertCollector()
+        with caplog.at_level(logging.WARNING, logger="src.collectors.noaa_alert_collector"):
+            result = c._process_features([feature])
+        assert result == []
+        assert any(
+            "polygon has" in rec.message and "urn:test:huge" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_multipolygon_total_vertex_count_is_summed(self):
+        from src.collectors.noaa_alert_collector import MAX_POLYGON_VERTICES
+        # Two polygons that individually fit, but together exceed the cap.
+        half_plus = MAX_POLYGON_VERTICES // 2 + 100
+        poly1 = [[[float(i) / 1000, 30.0] for i in range(half_plus)]]
+        poly2 = [[[float(i) / 1000, 31.0] for i in range(half_plus)]]
+        feature = _make_noaa_feature(
+            alert_id="urn:test:multi",
+            geometry={"type": "MultiPolygon", "coordinates": [poly1, poly2]},
+        )
+        c = NOAAAlertCollector()
+        result = c._process_features([feature])
+        assert result == []
+
+    def test_non_polygon_geometry_not_rejected_by_cap(self):
+        """A Point geometry has zero polygon vertices — must not be dropped."""
+        feature = _make_noaa_feature(
+            alert_id="urn:test:point",
+            geometry={"type": "Point", "coordinates": [-97.0, 32.0]},
+        )
+        c = NOAAAlertCollector()
+        result = c._process_features([feature])
+        assert len(result) == 1
+
+
 class TestSeverityConstants:
     """Tests for severity color and order constants."""
 

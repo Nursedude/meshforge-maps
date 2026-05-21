@@ -87,6 +87,11 @@ class NodeHistoryDB:
         # report monotonic < TTL, making a plain `= 0` sentinel ineffective.)
         self._count_cache_time: float = float("-inf")
         self._COUNT_CACHE_TTL = 300  # 5 minutes
+        # Last fatal write error (disk full / IO error). When set, the health
+        # endpoint surfaces it and knocks points off the score so the operator
+        # sees the silent backlog instead of having to grep journalctl.
+        self._last_write_error_at: Optional[int] = None
+        self._last_write_error_msg: Optional[str] = None
         self._init_db()
 
     def _init_db(self) -> None:
@@ -297,9 +302,12 @@ class NodeHistoryDB:
                         network,
                     )
                 self._count_cache_time = float("-inf")
+                # Successful write clears any stale error state.
+                self._last_write_error_at = None
+                self._last_write_error_msg = None
                 return True
-            except Exception as e:
-                logger.debug("Failed to record observation for %s: %s", node_id, e)
+            except sqlite3.Error as e:
+                self._record_write_error(e, node_id)
                 return False
 
     def record_observations_batch(
@@ -371,10 +379,43 @@ class NodeHistoryDB:
                     if val is not None:
                         self._last_value[nid] = val
                 self._count_cache_time = float("-inf")
+                self._last_write_error_at = None
+                self._last_write_error_msg = None
                 return len(rows)
-            except Exception as e:
-                logger.debug("Batch recording failed: %s", e)
+            except sqlite3.Error as e:
+                self._record_write_error(e, f"batch x{len(rows)}")
                 return 0
+
+    # Used by the lock-holding write paths above. Disk-full / I/O errors get
+    # logged at ERROR and remembered so the /api/health endpoint can surface
+    # them; other sqlite errors stay at WARNING. Must be called under self._lock.
+    _DISK_FULL_SIGNALS = ("disk i/o error", "database or disk is full", "no space left")
+
+    def _record_write_error(self, exc: Exception, context: str) -> None:
+        msg = str(exc).lower()
+        is_disk_problem = (
+            isinstance(exc, sqlite3.OperationalError)
+            and any(sig in msg for sig in self._DISK_FULL_SIGNALS)
+        )
+        if is_disk_problem:
+            logger.error(
+                "node_history disk-full / IO error while recording %s: %s",
+                context, exc,
+            )
+            self._last_write_error_at = int(time.time())
+            self._last_write_error_msg = str(exc)
+        else:
+            logger.warning(
+                "node_history failed to record %s: %s", context, exc,
+            )
+
+    def write_error_state(self) -> Dict[str, Any]:
+        """Snapshot of the last disk-fatal write error, for /api/health."""
+        with self._lock:
+            return {
+                "last_write_error_at": self._last_write_error_at,
+                "last_write_error_msg": self._last_write_error_msg,
+            }
 
     def get_trajectory_geojson(
         self,

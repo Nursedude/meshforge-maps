@@ -245,3 +245,34 @@ class TestSharedHealthStateReader:
 
         assert not errors, f"Concurrent close raised: {errors}"
         assert reader.available is False
+
+
+class TestConnectTunedIntegration:
+    """Confirm the reader routes through db_helpers.connect_tuned per CLAUDE.md
+    ("anything new starts with connect_tuned"), not a hand-rolled sqlite3.connect."""
+
+    def test_uses_connect_tuned(self, tmp_path):
+        from unittest.mock import patch
+        db_path = tmp_path / "health.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE dummy (id INTEGER)")
+        conn.commit()
+        conn.close()
+
+        with patch(
+            "src.utils.shared_health_state.connect_tuned",
+            wraps=__import__(
+                "src.utils.db_helpers", fromlist=["connect_tuned"],
+            ).connect_tuned,
+        ) as spy:
+            reader = SharedHealthStateReader(db_path=db_path)
+            try:
+                assert reader.available is True
+                spy.assert_called_once()
+                # read_only=True and a small busy_timeout
+                _, kwargs = spy.call_args
+                assert kwargs.get("read_only") is True
+                assert kwargs.get("check_same_thread") is False
+                assert kwargs.get("busy_timeout_seconds") == 1.0
+            finally:
+                reader.close()

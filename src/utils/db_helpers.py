@@ -53,6 +53,7 @@ def connect_tuned(
     check_same_thread: bool = True,
     isolation_level=_DEFAULT_ISOLATION,
     uri: bool = False,
+    read_only: bool = False,
 ) -> sqlite3.Connection:
     """Open a SQLite connection with the MeshForge-standard pragmas.
 
@@ -73,10 +74,25 @@ def connect_tuned(
         check_same_thread: Pass-through to sqlite3.connect.
         isolation_level: Pass-through. Default keeps sqlite3's default.
         uri: Pass-through. Set True for "file:/.../db?mode=ro" URIs.
+        read_only: Open the DB in read-only mode via the SQLite URI form
+            (``file:.../db?mode=ro``). Skips write-only pragmas; the caller
+            can't write so journal_mode and synchronous would be no-ops
+            anyway. ``uri`` is ignored when set; ``read_only`` wins.
 
     Returns:
         A tuned sqlite3.Connection. Caller owns lifecycle (close it).
     """
+    if read_only:
+        target = f"file:{path}?mode=ro"
+        kwargs = dict(
+            timeout=busy_timeout_seconds,
+            check_same_thread=check_same_thread,
+            uri=True,
+        )
+        if isolation_level is not _DEFAULT_ISOLATION:
+            kwargs["isolation_level"] = isolation_level
+        return sqlite3.connect(target, **kwargs)
+
     kwargs = dict(
         timeout=busy_timeout_seconds,
         check_same_thread=check_same_thread,

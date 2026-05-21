@@ -461,3 +461,60 @@ class TestCloudHardeningValidation:
         )
         assert errors == []
         assert validated["ws_allowed_origins"] == ["http://moc:8808"]
+
+
+class TestArednNodeIpsValidation:
+    """validate_update guards aredn_node_ips so a config push can't introduce
+    SSRF-friendly strings (URLs with schemes, embedded spaces, IMDS hosts)."""
+
+    def test_list_of_hosts_accepted(self):
+        validated, errors = MapsConfig.validate_update(
+            {"aredn_node_ips": ["localnode.local.mesh", "10.0.0.1"]},
+        )
+        assert errors == []
+        assert validated["aredn_node_ips"] == ["localnode.local.mesh", "10.0.0.1"]
+
+    def test_non_list_rejected(self):
+        validated, errors = MapsConfig.validate_update(
+            {"aredn_node_ips": "localnode"},
+        )
+        assert "aredn_node_ips" not in validated
+        assert errors
+
+    def test_non_string_entry_rejected(self):
+        validated, errors = MapsConfig.validate_update(
+            {"aredn_node_ips": ["10.0.0.1", 8080]},
+        )
+        assert "aredn_node_ips" not in validated
+        assert errors
+
+    def test_empty_entry_rejected(self):
+        validated, errors = MapsConfig.validate_update(
+            {"aredn_node_ips": ["10.0.0.1", "  "]},
+        )
+        assert "aredn_node_ips" not in validated
+        assert errors
+
+    def test_scheme_in_entry_rejected(self):
+        validated, errors = MapsConfig.validate_update(
+            {"aredn_node_ips": ["http://10.0.0.1"]},
+        )
+        assert "aredn_node_ips" not in validated
+        assert any("no scheme" in e for e in errors)
+
+    def test_space_in_entry_rejected(self):
+        validated, errors = MapsConfig.validate_update(
+            {"aredn_node_ips": ["10.0.0.1 ; rm -rf"]},
+        )
+        assert "aredn_node_ips" not in validated
+        assert errors
+
+    def test_imds_entry_warns_but_accepts(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING, logger="src.utils.config"):
+            validated, errors = MapsConfig.validate_update(
+                {"aredn_node_ips": ["169.254.169.254"]},
+            )
+        assert errors == []
+        assert validated["aredn_node_ips"] == ["169.254.169.254"]
+        assert any("169.254" in rec.message for rec in caplog.records)
