@@ -2129,7 +2129,7 @@ async function showAnalyticsDiagnostic(container, label) {
         } else if (nh.observation_count === 0) {
             container.innerHTML = '<div style="color:#ffa726;font-size:11px;text-align:center;padding:24px">Recording started &mdash; analytics data will appear after a few collection cycles.</div>';
         } else {
-            container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No ' + esc(label) + ' in the selected time range (' + nh.observation_count + ' observations in database).</div>';
+            container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No ' + esc(label) + ' in the selected time range (' + nh.observation_count + ' movements in database).</div>';
         }
     } catch (e) {
         container.innerHTML = '<div style="color:#546e7a;font-size:11px;text-align:center;padding:24px">No ' + esc(label) + ' available</div>';
@@ -2154,7 +2154,7 @@ function renderGrowthChart(data, container) {
     var html = '<div class="analytics-summary-grid">' +
         '<div class="analytics-stat"><div class="analytics-stat-value">' + latestNodes + '</div><div class="analytics-stat-label">Current Nodes</div></div>' +
         '<div class="analytics-stat"><div class="analytics-stat-value">' + maxNodes + '</div><div class="analytics-stat-label">Peak Nodes</div></div>' +
-        '<div class="analytics-stat"><div class="analytics-stat-value">' + totalObs + '</div><div class="analytics-stat-label">Observations</div></div>' +
+        '<div class="analytics-stat"><div class="analytics-stat-value">' + totalObs + '</div><div class="analytics-stat-label">Movements</div></div>' +
         '</div>';
 
     // SVG sparkline
@@ -2206,12 +2206,12 @@ function renderActivityHeatmap(data, container) {
     var peakHour = data.peak_hour;
 
     var html = '<div class="analytics-summary-grid">' +
-        '<div class="analytics-stat"><div class="analytics-stat-value">' + totalObs + '</div><div class="analytics-stat-label">Total Obs.</div></div>' +
+        '<div class="analytics-stat"><div class="analytics-stat-value">' + totalObs + '</div><div class="analytics-stat-label">Total Moves</div></div>' +
         '<div class="analytics-stat"><div class="analytics-stat-value">' + (peakHour != null ? peakHour + ':00' : '--') + '</div><div class="analytics-stat-label">Peak Hour</div></div>' +
         '<div class="analytics-stat"><div class="analytics-stat-value">' + Math.round(totalObs / 24) + '</div><div class="analytics-stat-label">Avg / Hour</div></div>' +
         '</div>';
 
-    html += '<div style="font-size:10px;color:#78909c;margin-bottom:6px">Activity by Hour of Day (UTC)</div>';
+    html += '<div style="font-size:10px;color:#78909c;margin-bottom:6px">Movement by Hour of Day (UTC)</div>';
     html += '<div class="heatmap-grid">';
     for (var h = 0; h < 24; h++) {
         var intensity = hours[h] / maxVal;
@@ -2219,7 +2219,7 @@ function renderActivityHeatmap(data, container) {
         var g = Math.round(195 * intensity);
         var b = Math.round(247 * intensity);
         var bgColor = 'rgba(' + r + ',' + g + ',' + b + ',' + (0.15 + intensity * 0.7) + ')';
-        html += '<div class="heatmap-cell" style="background:' + bgColor + '" data-tip="' + h + ':00 — ' + hours[h] + ' obs"></div>';
+        html += '<div class="heatmap-cell" style="background:' + bgColor + '" data-tip="' + h + ':00 — ' + hours[h] + ' moves"></div>';
     }
     html += '</div>';
 
@@ -2254,7 +2254,7 @@ function renderRankingTable(data, container) {
     }
 
     var html = '<table class="ranking-table"><thead><tr>' +
-        '<th>#</th><th>Node</th><th>Network</th><th style="text-align:right">Obs</th><th style="text-align:right">Active</th>' +
+        '<th>#</th><th>Node</th><th>Network</th><th style="text-align:right">Moves</th><th style="text-align:right">Active</th>' +
         '</tr></thead><tbody>';
 
     for (var i = 0; i < nodes.length; i++) {

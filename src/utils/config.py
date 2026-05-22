@@ -42,12 +42,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "map_center_lon": -100.0,
     "map_default_zoom": 4,
     "cache_ttl_minutes": 15,
-    "node_history_throttle_seconds": 300,   # 5 min — min gap between observations per node
-    # Stationary-node heartbeat. When (lat, lon, network) match the last
-    # record, skip the insert until this interval has elapsed. Mobile nodes
-    # still write on every position change. Set to 0 to disable value-dedup
-    # (legacy time-only throttle).
-    "node_history_heartbeat_seconds": 3600,  # 1 h
     # 1-day retention is the fleet default after the 2026-05-21 moc1 incident
     # — a 2.4 GB history DB blocked startup for 1h18m on Pi 4B SD while the
     # built-in compaction ran. Operators on dense regions hit this cliff with
@@ -334,10 +328,6 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
 # A missing profile (e.g. "full") receives no overrides.
 _LITE_OVERRIDES: Dict[str, Any] = {
     "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 60, 60),
-    "node_history_throttle_seconds": lambda v: max(v if isinstance(v, (int, float)) else 600, 600),
-    # Lite Pis don't need hourly heartbeats. 6 h floor: a stationary repeater
-    # writes 4 rows/day instead of the default 24.
-    "node_history_heartbeat_seconds": lambda v: max(v if isinstance(v, (int, float)) else 21600, 21600),
     "node_history_retention_days": lambda v: min(v if isinstance(v, (int, float)) else 1, 1),
     "enable_config_drift": lambda v: False,
     "enable_node_state": lambda v: False,
@@ -346,8 +336,6 @@ _LITE_OVERRIDES: Dict[str, Any] = {
 
 _MEDIUM_OVERRIDES: Dict[str, Any] = {
     "cache_ttl_minutes": lambda v: max(v if isinstance(v, (int, float)) else 30, 30),
-    "node_history_throttle_seconds": lambda v: max(v if isinstance(v, (int, float)) else 300, 300),
-    "node_history_heartbeat_seconds": lambda v: max(v if isinstance(v, (int, float)) else 3600, 3600),
     "node_history_retention_days": lambda v: min(v if isinstance(v, (int, float)) else 2, 2),
     # analytics/state/drift stay ON in medium — that's the point of the tier
 }

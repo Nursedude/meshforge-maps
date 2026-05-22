@@ -89,27 +89,11 @@ class NodeHistoryDB:
         retention_seconds: int = DEFAULT_RETENTION_SECONDS,
         move_threshold_meters: float = DEFAULT_MOVE_THRESHOLD_METERS,
         trajectory_rows_per_node: int = DEFAULT_TRAJECTORY_ROWS_PER_NODE,
-        # Deprecated v1 constructor params — accepted and ignored for one
-        # cycle so MapServer doesn't break on stale config. The v2 writer
-        # doesn't throttle (UPSERT is cheap) or heartbeat-dedupe (movement
-        # is the trigger).
-        throttle_seconds: Optional[int] = None,
-        heartbeat_seconds: Optional[int] = None,
     ):
         self._db_path = db_path or DEFAULT_DB_PATH
         self._retention_seconds = retention_seconds
         self._move_threshold_meters = max(0.0, float(move_threshold_meters))
         self._trajectory_rows_per_node = max(1, int(trajectory_rows_per_node))
-        if throttle_seconds is not None:
-            logger.debug(
-                "NodeHistoryDB v2 ignores throttle_seconds=%s (deprecated)",
-                throttle_seconds,
-            )
-        if heartbeat_seconds is not None:
-            logger.debug(
-                "NodeHistoryDB v2 ignores heartbeat_seconds=%s (deprecated)",
-                heartbeat_seconds,
-            )
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
         # In-memory per-node trajectory state — lazily populated on first
