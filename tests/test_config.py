@@ -337,6 +337,7 @@ class TestDeploymentProfiles:
         cfg = MapsConfig(config_path=tmp_config)
         cfg.set("deployment_profile", "medium")
         cfg.set("cache_ttl_minutes", 15)  # should be raised to 30
+        cfg.set("node_history_retention_days", 5)  # cap below tests min(5, 2) → 2
         assert cfg.is_medium is True
         assert cfg.is_lite is False
         assert cfg.get_effective("cache_ttl_minutes") == 30

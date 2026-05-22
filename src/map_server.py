@@ -1637,7 +1637,7 @@ class MapServer:
         self._node_history: Optional[NodeHistoryDB] = None
         try:
             _throttle = int(config.get_effective("node_history_throttle_seconds", 300))
-            _retention_days = int(config.get_effective("node_history_retention_days", 3))
+            _retention_days = int(config.get_effective("node_history_retention_days", 1))
             _heartbeat = int(config.get_effective("node_history_heartbeat_seconds", 3600))
             self._node_history = NodeHistoryDB(
                 throttle_seconds=_throttle,

@@ -48,7 +48,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # still write on every position change. Set to 0 to disable value-dedup
     # (legacy time-only throttle).
     "node_history_heartbeat_seconds": 3600,  # 1 h
-    "node_history_retention_days": 3,       # keep last 3 days of observations
+    # 1-day retention is the fleet default after the 2026-05-21 moc1 incident
+    # — a 2.4 GB history DB blocked startup for 1h18m on Pi 4B SD while the
+    # built-in compaction ran. Operators on dense regions hit this cliff with
+    # 3-day retention. Bump explicitly per-host (or use lite profile) for a
+    # shorter window; raise it on hosts that need longer history.
+    "node_history_retention_days": 1,
     "http_port": 8808,
     "http_host": "127.0.0.1",
     "ws_host": "127.0.0.1",
