@@ -194,13 +194,6 @@ class TestLiteModeOverrides:
         config.set("node_history_retention_days", 7)
         assert config.get_effective("node_history_retention_days") == 1
 
-    def test_lite_raises_history_throttle(self, tmp_config):
-        # Lite forces at least 600s between observations per node
-        config = MapsConfig(config_path=tmp_config)
-        config.set("deployment_profile", "lite")
-        config.set("node_history_throttle_seconds", 60)
-        assert config.get_effective("node_history_throttle_seconds") == 600
-
     def test_full_profile_preserves_retention(self, tmp_config):
         config = MapsConfig(config_path=tmp_config)
         config.set("deployment_profile", "full")
@@ -327,7 +320,6 @@ class TestDeploymentProfiles:
         assert cfg.is_lite is True
         assert cfg.is_medium is False
         assert cfg.get_effective("cache_ttl_minutes") == 60
-        assert cfg.get_effective("node_history_throttle_seconds", 0) == 600
         assert cfg.get_effective("node_history_retention_days", 10) == 1
         assert cfg.get_effective("enable_analytics", True) is False
         assert cfg.get_effective("enable_node_state", True) is False
@@ -341,7 +333,6 @@ class TestDeploymentProfiles:
         assert cfg.is_medium is True
         assert cfg.is_lite is False
         assert cfg.get_effective("cache_ttl_minutes") == 30
-        assert cfg.get_effective("node_history_throttle_seconds", 100) == 300
         assert cfg.get_effective("node_history_retention_days", 10) == 2
         # Medium keeps heavy features enabled
         assert cfg.get_effective("enable_analytics", True) is True

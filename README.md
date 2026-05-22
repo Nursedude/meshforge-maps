@@ -81,9 +81,9 @@ A full curses-based terminal interface launched with `--tui` (alongside the serv
 
 ### Historical Analytics
 - **Network growth time-series** -- unique nodes per time bucket showing mesh expansion over time
-- **Activity heatmap** -- observation counts by hour of day (0-23) with peak activity detection
-- **Node activity ranking** -- most active nodes ranked by observation count with uptime duration
-- **Network summary** -- per-network breakdown of nodes and observations with averages
+- **Movement heatmap** -- node-movement counts by hour of day (0-23) with peak activity detection (movement = haversine distance from previous trajectory row exceeds `trajectory_move_threshold_meters`)
+- **Most-mobile node ranking** -- nodes ranked by trajectory-row count (movement events) with active duration
+- **Network summary** -- per-network breakdown of currently-tracked nodes
 - **Alert trend aggregation** -- alerts bucketed over time with per-severity counts (critical/warning/info)
 
 ### Operations
@@ -779,8 +779,8 @@ See [SECURITY.md](SECURITY.md) for the full security audit report, findings, and
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/analytics/growth` | GET | Network growth time-series (`?since=`, `?until=`, `?bucket=` in seconds) |
-| `/api/analytics/activity` | GET | Activity heatmap by hour of day (`?since=`, `?until=`) |
-| `/api/analytics/ranking` | GET | Most active nodes (`?since=`, `?limit=`) |
+| `/api/analytics/activity` | GET | Movement heatmap by hour of day (`?since=`, `?until=`) |
+| `/api/analytics/ranking` | GET | Most-mobile nodes by trajectory-row count (`?since=`, `?limit=`) |
 | `/api/analytics/summary` | GET | High-level network statistics (`?since=`) |
 | `/api/analytics/alert-trends` | GET | Alert trend aggregation (`?bucket=` in seconds) |
 

@@ -846,7 +846,7 @@ class TestDataAggregator:
             [make_feature("a1", 51.0, -0.1, "aredn")], "aredn",
         )
 
-        db = NodeHistoryDB(db_path=tmp_path / "obs_test.db", throttle_seconds=0)
+        db = NodeHistoryDB(db_path=tmp_path / "obs_test.db")
         try:
             agg = DataAggregator(dict(DEFAULT_CONFIG_SUBSET))
             agg.set_node_history(db)

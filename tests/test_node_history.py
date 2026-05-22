@@ -600,21 +600,3 @@ class TestDBBackup:
         assert db.create_backup(tmp_path / "backup.db") is False
 
 
-class TestDeprecatedConstructorArgs:
-    """v1 throttle_seconds / heartbeat_seconds should be accepted and ignored."""
-
-    def test_throttle_seconds_ignored(self, tmp_path):
-        db = NodeHistoryDB(
-            db_path=tmp_path / "compat.db",
-            throttle_seconds=300,
-            heartbeat_seconds=3600,
-        )
-        try:
-            # Behavior is v2: first append always lands
-            assert db.record_observation("!a", 35.0, 139.0) is True
-            count = db._conn.execute(
-                "SELECT COUNT(*) FROM trajectory"
-            ).fetchone()[0]
-            assert count == 1
-        finally:
-            db.close()
