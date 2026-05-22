@@ -13,29 +13,34 @@ from src.utils.node_history import NodeHistoryDB
 def db(tmp_path):
     """Create a temporary NodeHistoryDB with test data."""
     db_path = tmp_path / "test_history.db"
-    history = NodeHistoryDB(db_path=db_path, throttle_seconds=0)
+    history = NodeHistoryDB(db_path=db_path)
     yield history
     history.close()
 
 
 @pytest.fixture
 def populated_db(db):
-    """NodeHistoryDB pre-populated with test observations."""
+    """NodeHistoryDB pre-populated with hourly *movement events* for 3 nodes.
+
+    v2 semantics: each `record_observation` produces a trajectory row only
+    when the node has moved beyond the move threshold. The fixture steps
+    each node by 0.01° (~1.1 km) per hour so every call appends.
+    """
     now = int(time.time())
-    # 24 hours of data, one observation per hour for 3 nodes
+    # 24 hours of data, one movement per hour for 3 nodes
     for hour in range(24):
         ts = now - (23 - hour) * 3600
         db.record_observation(
-            "!node_a", lat=40.0, lon=-105.0, network="meshtastic",
+            "!node_a", lat=40.0 + 0.01 * hour, lon=-105.0, network="meshtastic",
             timestamp=ts,
         )
         db.record_observation(
-            "!node_b", lat=41.0, lon=-104.0, network="meshtastic",
+            "!node_b", lat=41.0 + 0.01 * hour, lon=-104.0, network="meshtastic",
             timestamp=ts,
         )
         if hour >= 12:  # Node C only appears in last 12 hours
             db.record_observation(
-                "!node_c", lat=42.0, lon=-103.0, network="reticulum",
+                "!node_c", lat=42.0 + 0.01 * hour, lon=-103.0, network="reticulum",
                 timestamp=ts,
             )
     return db

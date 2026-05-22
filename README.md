@@ -713,6 +713,8 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 | `rate_limit_per_minute` | number | `60` | Per-IP token-bucket budget on all HTTP requests; `0` disables it |
 | `enable_hsts` | bool | `false` | Send `Strict-Transport-Security` header; turn on only behind an HTTPS reverse proxy |
 | `ws_allowed_origins` | list | `[]` | WebSocket browser origin allowlist when bound to a non-loopback host. Empty list denies all browser handshakes |
+| `trajectory_move_threshold_meters` | number | `50` | Movement threshold for appending to the trajectory table. Below this many meters of haversine distance from the node's previous trajectory row, the position update touches `nodes_current` only |
+| `trajectory_rows_per_node` | number | `500` | Per-node cap on trajectory rows. When a new append would exceed the cap, the oldest row for that node is deleted in the same transaction. DB size is bounded by (`node_count` × this) |
 
 ## Security
 

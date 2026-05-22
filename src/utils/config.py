@@ -54,6 +54,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 3-day retention. Bump explicitly per-host (or use lite profile) for a
     # shorter window; raise it on hosts that need longer history.
     "node_history_retention_days": 1,
+    # NodeHistoryDB v2 knobs (PR-A 2026-05-22). Trajectory append is
+    # movement-triggered: a position update writes a row only when the
+    # node has moved this many meters since its last trajectory row. 50 m
+    # skips GPS noise (~5-15 m on consumer hardware) while catching real
+    # motion. Per-node cap evicts oldest in the same transaction so DB
+    # size is bounded by (node_count × cap × ~150 bytes).
+    "trajectory_move_threshold_meters": 50,
+    "trajectory_rows_per_node": 500,
     "http_port": 8808,
     "http_host": "127.0.0.1",
     "ws_host": "127.0.0.1",
