@@ -34,7 +34,7 @@ INVENTORY: List[DBSpec] = [
         path_factory=lambda: get_data_dir() / "maps_node_history.db",
         creator_module="utils.node_history",
         has_auto_prune=True,
-        retention_days=3,
+        retention_days=1,
         # auto_vacuum=INCREMENTAL must be set BEFORE journal_mode=WAL
         # initializes the DB (order-sensitive). Hand-tuned in
         # _open_connection at src/utils/node_history.py:184–205. The
@@ -42,7 +42,7 @@ INVENTORY: List[DBSpec] = [
         # owns the actual ordering.
         pragma_overrides={"auto_vacuum": "incremental"},
         notes=(
-            "Per-node trajectory observations. 3-day retention with "
+            "Per-node trajectory observations. 1-day retention with "
             "120s prune cadence. Hand-tuned PRAGMAs (commit 222265e); "
             "deliberately NOT routed through utils.db_helpers because "
             "auto_vacuum=INCREMENTAL must be set before journal_mode=WAL."
