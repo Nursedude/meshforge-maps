@@ -42,10 +42,13 @@ INVENTORY: List[DBSpec] = [
         # owns the actual ordering.
         pragma_overrides={"auto_vacuum": "incremental"},
         notes=(
-            "Per-node trajectory observations. 1-day retention with "
-            "120s prune cadence. Hand-tuned PRAGMAs (commit 222265e); "
-            "deliberately NOT routed through utils.db_helpers because "
-            "auto_vacuum=INCREMENTAL must be set before journal_mode=WAL."
+            "v2 schema (PR-A 2026-05-22): nodes_current (UPSERT per "
+            "message, one row per node) + trajectory (append-only, "
+            "movement-triggered with per-node cap). 1-day retention on "
+            "trajectory with 120s prune cadence. Hand-tuned PRAGMAs "
+            "(commit 222265e); deliberately NOT routed through "
+            "utils.db_helpers because auto_vacuum=INCREMENTAL must be set "
+            "before journal_mode=WAL."
         ),
     ),
 ]

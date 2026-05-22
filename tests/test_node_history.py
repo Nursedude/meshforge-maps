@@ -1,258 +1,336 @@
-"""Tests for NodeHistoryDB - SQLite node position history tracking."""
+"""Tests for NodeHistoryDB v2 — movement-triggered trajectory + per-node cap."""
 
+import sqlite3
 import time
+
 import pytest
 
-from src.utils.node_history import NodeHistoryDB
+from src.utils.node_history import (
+    NodeHistoryDB,
+    _haversine_meters,
+    _USER_VERSION,
+)
 
 
-class TestNodeHistoryDB:
-    """Core NodeHistoryDB functionality."""
+class TestHaversineHelper:
+    def test_zero_distance(self):
+        assert _haversine_meters(35.0, 139.0, 35.0, 139.0) == 0.0
 
-    @pytest.fixture(autouse=True)
-    def _setup(self, tmp_path):
-        self.db = NodeHistoryDB(
-            db_path=tmp_path / "test_history.db",
-            throttle_seconds=0,  # No throttle for tests
-        )
-        yield
-        self.db.close()
+    def test_known_short_distance(self):
+        # ~111 meters at the equator per 0.001° of latitude
+        d = _haversine_meters(0.0, 0.0, 0.001, 0.0)
+        assert 110 < d < 112
 
-    def test_record_and_count(self):
-        assert self.db.observation_count == 0
-        assert self.db.record_observation("!abc123", 35.0, 139.0)
-        assert self.db.observation_count == 1
+    def test_symmetric(self):
+        d1 = _haversine_meters(35.0, 139.0, 36.0, 140.0)
+        d2 = _haversine_meters(36.0, 140.0, 35.0, 139.0)
+        assert d1 == pytest.approx(d2)
 
-    def test_record_multiple_nodes(self):
-        self.db.record_observation("!node1", 35.0, 139.0, network="meshtastic")
-        self.db.record_observation("!node2", 40.0, -74.0, network="meshtastic")
-        self.db.record_observation("!node3", 51.0, -0.1, network="reticulum")
-        assert self.db.observation_count == 3
-        assert self.db.node_count == 3
+    def test_long_distance_within_one_percent(self):
+        # San Francisco (37.7749, -122.4194) to New York (40.7128, -74.0060)
+        # Reference: ~4,129 km
+        d = _haversine_meters(37.7749, -122.4194, 40.7128, -74.0060)
+        assert 4_080_000 < d < 4_180_000
 
-    def test_record_with_all_fields(self):
-        result = self.db.record_observation(
-            node_id="!full",
-            lat=35.6895,
-            lon=139.6917,
-            altitude=40.0,
-            network="meshtastic",
-            snr=9.5,
-            battery=87,
-            name="TestNode-Alpha",
-        )
-        assert result is True
-        history = self.db.get_node_history("!full")
-        assert len(history) == 1
-        obs = history[0]
-        assert obs["latitude"] == 35.6895
-        assert obs["longitude"] == 139.6917
-        assert obs["altitude"] == 40.0
-        assert obs["network"] == "meshtastic"
-        assert obs["snr"] == 9.5
-        assert obs["battery"] == 87
-        assert obs["name"] == "TestNode-Alpha"
 
-    def test_throttle_prevents_rapid_recording(self, tmp_path):
-        db = NodeHistoryDB(
-            db_path=tmp_path / "throttle.db",
-            throttle_seconds=60,
-        )
+class TestSchemaAndMigration:
+    def test_fresh_db_creates_v2_schema(self, tmp_path):
+        db_path = tmp_path / "fresh.db"
+        db = NodeHistoryDB(db_path=db_path)
         try:
-            assert db.record_observation("!node", 35.0, 139.0)
-            # Second immediate record should be throttled
-            assert db.record_observation("!node", 35.0, 139.0) is False
-            assert db.observation_count == 1
+            tables = {row[0] for row in db._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+            assert "nodes_current" in tables
+            assert "trajectory" in tables
+            assert "observations" not in tables
+            version = db._conn.execute("PRAGMA user_version").fetchone()[0]
+            assert version == _USER_VERSION
         finally:
             db.close()
 
-    def test_throttle_allows_different_nodes(self, tmp_path):
+    def test_migration_from_v1_seeds_nodes_current(self, tmp_path):
+        # Build a v1-style DB by hand.
+        db_path = tmp_path / "v1.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                altitude REAL,
+                network TEXT,
+                snr REAL,
+                battery INTEGER,
+                name TEXT
+            )
+        """)
+        # Two nodes, multiple rows each.
+        conn.executemany(
+            "INSERT INTO observations (node_id, timestamp, latitude, longitude, network) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                ("!a", 1000, 35.0, 139.0, "meshtastic"),
+                ("!a", 2000, 35.1, 139.1, "meshtastic"),
+                ("!a", 3000, 35.2, 139.2, "meshtastic"),
+                ("!b", 1500, 40.0, -74.0, "reticulum"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        db = NodeHistoryDB(db_path=db_path)
+        try:
+            tables = {row[0] for row in db._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+            assert "observations" not in tables, "v1 table should be dropped"
+            assert "nodes_current" in tables
+            assert "trajectory" in tables
+            rows = db._conn.execute(
+                "SELECT node_id, timestamp, latitude, longitude, network "
+                "FROM nodes_current ORDER BY node_id"
+            ).fetchall()
+            assert rows == [
+                ("!a", 3000, 35.2, 139.2, "meshtastic"),
+                ("!b", 1500, 40.0, -74.0, "reticulum"),
+            ]
+            # trajectory starts empty in the fresh-start migration
+            traj_count = db._conn.execute(
+                "SELECT COUNT(*) FROM trajectory"
+            ).fetchone()[0]
+            assert traj_count == 0
+            version = db._conn.execute("PRAGMA user_version").fetchone()[0]
+            assert version == _USER_VERSION
+        finally:
+            db.close()
+
+    def test_migration_idempotent(self, tmp_path):
+        db_path = tmp_path / "idem.db"
+        db1 = NodeHistoryDB(db_path=db_path)
+        db1.record_observation("!a", 35.0, 139.0)
+        db1.close()
+        # Second open should not re-run migration or wipe state
+        db2 = NodeHistoryDB(db_path=db_path)
+        try:
+            rows = db2._conn.execute(
+                "SELECT node_id FROM nodes_current"
+            ).fetchall()
+            assert rows == [("!a",)]
+        finally:
+            db2.close()
+
+
+class TestUpsertCurrent:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
+        self.db = NodeHistoryDB(db_path=tmp_path / "upsert.db")
+        yield
+        self.db.close()
+
+    def test_first_observation_creates_nodes_current_row(self):
+        assert self.db.record_observation(
+            "!a", 35.0, 139.0, network="meshtastic", timestamp=1000,
+        )
+        row = self.db._conn.execute(
+            "SELECT node_id, timestamp, latitude, longitude, network FROM nodes_current"
+        ).fetchone()
+        assert row == ("!a", 1000, 35.0, 139.0, "meshtastic")
+
+    def test_second_observation_overwrites_previous(self):
+        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
+        self.db.record_observation("!a", 35.0001, 139.0001, timestamp=2000)
+        rows = self.db._conn.execute(
+            "SELECT node_id, timestamp, latitude, longitude FROM nodes_current"
+        ).fetchall()
+        # One row only; the new timestamp wins
+        assert len(rows) == 1
+        assert rows[0] == ("!a", 2000, 35.0001, 139.0001)
+
+    def test_multiple_nodes_each_get_one_row(self):
+        self.db.record_observation("!a", 35.0, 139.0)
+        self.db.record_observation("!b", 40.0, -74.0)
+        self.db.record_observation("!a", 35.001, 139.001)
+        count = self.db._conn.execute(
+            "SELECT COUNT(*) FROM nodes_current"
+        ).fetchone()[0]
+        assert count == 2
+
+    def test_node_count_matches_nodes_current(self):
+        for i in range(5):
+            self.db.record_observation(f"!n{i}", 35.0 + i, 139.0 + i)
+        assert self.db.node_count == 5
+
+
+class TestMovementThreshold:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
+        # 50 m default threshold
+        self.db = NodeHistoryDB(db_path=tmp_path / "movement.db")
+        yield
+        self.db.close()
+
+    def test_first_observation_always_appends_trajectory(self):
+        self.db.record_observation("!a", 35.0, 139.0)
+        count = self.db._conn.execute(
+            "SELECT COUNT(*) FROM trajectory WHERE node_id = '!a'"
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_jitter_below_threshold_is_skipped(self):
+        # ~1 m apart (under 50 m threshold)
+        self.db.record_observation("!a", 35.0, 139.0)
+        self.db.record_observation("!a", 35.00001, 139.00001)
+        self.db.record_observation("!a", 35.00002, 139.00002)
+        count = self.db._conn.execute(
+            "SELECT COUNT(*) FROM trajectory WHERE node_id = '!a'"
+        ).fetchone()[0]
+        assert count == 1, "Sub-threshold jitter must not write trajectory rows"
+
+    def test_movement_above_threshold_appends(self):
+        # ~1110 m apart (well past 50 m)
+        self.db.record_observation("!a", 35.0, 139.0)
+        self.db.record_observation("!a", 35.01, 139.0)
+        count = self.db._conn.execute(
+            "SELECT COUNT(*) FROM trajectory WHERE node_id = '!a'"
+        ).fetchone()[0]
+        assert count == 2
+
+    def test_configurable_threshold(self, tmp_path):
+        # Tight 5 m threshold catches the jitter that the default skips
         db = NodeHistoryDB(
-            db_path=tmp_path / "throttle2.db",
-            throttle_seconds=60,
+            db_path=tmp_path / "tight.db",
+            move_threshold_meters=5.0,
         )
         try:
-            assert db.record_observation("!node1", 35.0, 139.0)
-            assert db.record_observation("!node2", 40.0, -74.0)
-            assert db.observation_count == 2
+            db.record_observation("!a", 35.0, 139.0)
+            # ~11 m at 0.0001°
+            db.record_observation("!a", 35.0001, 139.0001)
+            count = db._conn.execute(
+                "SELECT COUNT(*) FROM trajectory WHERE node_id = '!a'"
+            ).fetchone()[0]
+            assert count == 2
+        finally:
+            db.close()
+
+    def test_upsert_still_runs_even_when_trajectory_skipped(self):
+        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
+        # Below threshold — trajectory skipped, but nodes_current must still
+        # advance the timestamp so the snapshot stays fresh.
+        self.db.record_observation("!a", 35.00001, 139.00001, timestamp=2000)
+        ts = self.db._conn.execute(
+            "SELECT timestamp FROM nodes_current WHERE node_id = '!a'"
+        ).fetchone()[0]
+        assert ts == 2000
+        traj_count = self.db._conn.execute(
+            "SELECT COUNT(*) FROM trajectory WHERE node_id = '!a'"
+        ).fetchone()[0]
+        assert traj_count == 1  # only the first one
+
+
+class TestPerNodeCap:
+    def test_cap_evicts_oldest_row_for_that_node(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "cap.db",
+            trajectory_rows_per_node=3,
+        )
+        try:
+            # 5 distinct positions, all > 50 m apart
+            for i in range(5):
+                db.record_observation("!a", 35.0 + 0.01 * i, 139.0)
+            count = db._conn.execute(
+                "SELECT COUNT(*) FROM trajectory WHERE node_id = '!a'"
+            ).fetchone()[0]
+            assert count == 3, "Per-node cap must hold"
+            # Oldest two (35.0, 35.01) evicted; newest three (35.02, 35.03, 35.04) kept
+            lats = [r[0] for r in db._conn.execute(
+                "SELECT latitude FROM trajectory WHERE node_id = '!a' ORDER BY id ASC"
+            ).fetchall()]
+            assert lats == [pytest.approx(35.02), pytest.approx(35.03), pytest.approx(35.04)]
+        finally:
+            db.close()
+
+    def test_cap_is_per_node(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "cap_per_node.db",
+            trajectory_rows_per_node=2,
+        )
+        try:
+            for i in range(3):
+                db.record_observation("!a", 35.0 + 0.01 * i, 139.0)
+            for i in range(3):
+                db.record_observation("!b", 40.0 + 0.01 * i, -74.0)
+            count_a = db._conn.execute(
+                "SELECT COUNT(*) FROM trajectory WHERE node_id = '!a'"
+            ).fetchone()[0]
+            count_b = db._conn.execute(
+                "SELECT COUNT(*) FROM trajectory WHERE node_id = '!b'"
+            ).fetchone()[0]
+            assert count_a == 2
+            assert count_b == 2
         finally:
             db.close()
 
 
 class TestBatchRecording:
-    """Tests for record_observations_batch()."""
-
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
-        self.db = NodeHistoryDB(
-            db_path=tmp_path / "batch_test.db",
-            throttle_seconds=0,
-        )
+        self.db = NodeHistoryDB(db_path=tmp_path / "batch.db")
         yield
         self.db.close()
 
-    def test_batch_records_multiple_nodes(self):
-        obs = [
-            {"node_id": "!a1", "lat": 35.0, "lon": 139.0, "network": "aredn"},
-            {"node_id": "!b2", "lat": 40.0, "lon": -74.0, "network": "meshcore"},
-            {"node_id": "!c3", "lat": 51.0, "lon": -0.1, "network": "reticulum"},
-        ]
-        count = self.db.record_observations_batch(obs)
+    def test_batch_upserts_all_nodes_current(self):
+        self.db.record_observations_batch([
+            {"node_id": "!a", "lat": 35.0, "lon": 139.0, "network": "m"},
+            {"node_id": "!b", "lat": 40.0, "lon": -74.0, "network": "m"},
+            {"node_id": "!c", "lat": 51.0, "lon": -0.1, "network": "r"},
+        ])
+        count = self.db._conn.execute(
+            "SELECT COUNT(*) FROM nodes_current"
+        ).fetchone()[0]
         assert count == 3
-        assert self.db.observation_count == 3
-        assert self.db.node_count == 3
 
-    def test_batch_empty_list(self):
+    def test_batch_empty_list_returns_zero(self):
         assert self.db.record_observations_batch([]) == 0
 
     def test_batch_skips_missing_node_id(self):
-        obs = [
-            {"lat": 35.0, "lon": 139.0, "network": "aredn"},
-            {"node_id": "!ok", "lat": 40.0, "lon": -74.0, "network": "meshcore"},
-        ]
-        count = self.db.record_observations_batch(obs)
-        assert count == 1
+        appended = self.db.record_observations_batch([
+            {"node_id": "!a", "lat": 35.0, "lon": 139.0},
+            {"lat": 40.0, "lon": -74.0},  # missing node_id
+            {"node_id": "!c", "lat": 51.0, "lon": -0.1},
+        ])
+        assert appended == 2
 
-    def test_batch_throttle_filters(self, tmp_path):
-        db = NodeHistoryDB(db_path=tmp_path / "batch_throttle.db", throttle_seconds=60)
-        try:
-            db.record_observation("!existing", 35.0, 139.0, network="mqtt")
-            obs = [
-                {"node_id": "!existing", "lat": 35.1, "lon": 139.1, "network": "aredn"},
-                {"node_id": "!new", "lat": 40.0, "lon": -74.0, "network": "meshcore"},
-            ]
-            count = db.record_observations_batch(obs)
-            assert count == 1  # !existing throttled, !new recorded
-            assert db.observation_count == 2
-        finally:
-            db.close()
+    def test_batch_returns_trajectory_append_count(self):
+        # All three are first-sightings, all append trajectory
+        appended = self.db.record_observations_batch([
+            {"node_id": f"!n{i}", "lat": 35.0 + i, "lon": 139.0 + i}
+            for i in range(3)
+        ])
+        assert appended == 3
 
-    def test_batch_returns_count(self):
-        obs = [{"node_id": f"!n{i}", "lat": 35.0 + i, "lon": 139.0, "network": "aredn"} for i in range(10)]
-        assert self.db.record_observations_batch(obs) == 10
-
-
-class TestValueDedup:
-    """Heartbeat + value-change dedup. Stationary nodes must not flood the DB
-    with identical-position rows when the throttle window has elapsed."""
-
-    def test_skips_when_position_unchanged_within_heartbeat(self, tmp_path):
-        db = NodeHistoryDB(
-            db_path=tmp_path / "value_dedup.db",
-            throttle_seconds=0,
-            heartbeat_seconds=3600,
-        )
-        try:
-            assert db.record_observation("!stationary", 35.0, 139.0, network="meshtastic")
-            assert db.record_observation("!stationary", 35.0, 139.0, network="meshtastic") is False
-            assert db.observation_count == 1
-        finally:
-            db.close()
-
-    def test_records_when_position_changes(self, tmp_path):
-        db = NodeHistoryDB(
-            db_path=tmp_path / "value_dedup_move.db",
-            throttle_seconds=0,
-            heartbeat_seconds=3600,
-        )
-        try:
-            assert db.record_observation("!mobile", 35.0, 139.0, network="meshtastic")
-            assert db.record_observation("!mobile", 35.001, 139.0, network="meshtastic")
-            assert db.observation_count == 2
-        finally:
-            db.close()
-
-    def test_records_when_heartbeat_elapses_even_unchanged(self, tmp_path):
-        db = NodeHistoryDB(
-            db_path=tmp_path / "value_dedup_heartbeat.db",
-            throttle_seconds=0,
-            heartbeat_seconds=60,
-        )
-        try:
-            assert db.record_observation(
-                "!s", 35.0, 139.0, network="meshtastic", timestamp=1000
-            )
-            assert db.record_observation(
-                "!s", 35.0, 139.0, network="meshtastic", timestamp=1000 + 30
-            ) is False
-            assert db.record_observation(
-                "!s", 35.0, 139.0, network="meshtastic", timestamp=1000 + 70
-            ) is True
-            assert db.observation_count == 2
-        finally:
-            db.close()
-
-    def test_first_observation_always_records(self, tmp_path):
-        db = NodeHistoryDB(
-            db_path=tmp_path / "value_dedup_first.db",
-            throttle_seconds=0,
-            heartbeat_seconds=3600,
-        )
-        try:
-            assert db.record_observation("!fresh", 0.0, 0.0, network="aredn")
-            assert db.observation_count == 1
-        finally:
-            db.close()
-
-    def test_round_trip_at_6_decimals_is_treated_as_unchanged(self, tmp_path):
-        db = NodeHistoryDB(
-            db_path=tmp_path / "value_dedup_roundtrip.db",
-            throttle_seconds=0,
-            heartbeat_seconds=3600,
-        )
-        try:
-            assert db.record_observation("!gpsnoise", 35.123456, 139.0, network="m")
-            # 1e-7 delta — below 6dp threshold — should NOT trigger a write.
-            assert db.record_observation(
-                "!gpsnoise", 35.1234561, 139.0, network="m"
-            ) is False
-            assert db.observation_count == 1
-        finally:
-            db.close()
-
-    def test_batch_path_applies_value_dedup(self, tmp_path):
-        db = NodeHistoryDB(
-            db_path=tmp_path / "value_dedup_batch.db",
-            throttle_seconds=0,
-            heartbeat_seconds=3600,
-        )
-        try:
-            db.record_observation("!a", 35.0, 139.0, network="m")
-            db.record_observation("!b", 36.0, 140.0, network="m")
-            obs = [
-                {"node_id": "!a", "lat": 35.0, "lon": 139.0, "network": "m"},
-                {"node_id": "!b", "lat": 36.0, "lon": 140.0, "network": "m"},
-                {"node_id": "!c", "lat": 37.0, "lon": 141.0, "network": "m"},
-            ]
-            count = db.record_observations_batch(obs)
-            assert count == 1
-            assert db.observation_count == 3
-        finally:
-            db.close()
-
-    def test_heartbeat_zero_disables_value_dedup(self, tmp_path):
-        db = NodeHistoryDB(
-            db_path=tmp_path / "value_dedup_off.db",
-            throttle_seconds=0,
-            heartbeat_seconds=0,
-        )
-        try:
-            assert db.record_observation("!s", 35.0, 139.0, network="m")
-            assert db.record_observation("!s", 35.0, 139.0, network="m")
-            assert db.observation_count == 2
-        finally:
-            db.close()
+    def test_batch_applies_move_threshold(self):
+        # First batch: all first-sightings → all 3 trajectory rows
+        self.db.record_observations_batch([
+            {"node_id": "!a", "lat": 35.0, "lon": 139.0},
+            {"node_id": "!b", "lat": 40.0, "lon": -74.0},
+            {"node_id": "!c", "lat": 51.0, "lon": -0.1},
+        ])
+        # Second batch: same positions ± jitter → all under threshold, zero appends
+        appended = self.db.record_observations_batch([
+            {"node_id": "!a", "lat": 35.00001, "lon": 139.00001},
+            {"node_id": "!b", "lat": 40.00001, "lon": -74.00001},
+            {"node_id": "!c", "lat": 51.00001, "lon": -0.10001},
+        ])
+        assert appended == 0
 
 
 class TestTrajectoryGeoJSON:
-    """Tests for get_trajectory_geojson()."""
-
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
-        self.db = NodeHistoryDB(
-            db_path=tmp_path / "trajectory.db",
-            throttle_seconds=0,
-        )
+        self.db = NodeHistoryDB(db_path=tmp_path / "trajectory.db")
         yield
         self.db.close()
 
@@ -277,7 +355,6 @@ class TestTrajectoryGeoJSON:
         self.db.record_observation("!moving", 35.1, 139.1, timestamp=2000)
         self.db.record_observation("!moving", 35.2, 139.2, timestamp=3000)
         result = self.db.get_trajectory_geojson("!moving")
-        assert len(result["features"]) == 1
         feature = result["features"][0]
         assert feature["geometry"]["type"] == "LineString"
         coords = feature["geometry"]["coordinates"]
@@ -318,14 +395,9 @@ class TestTrajectoryGeoJSON:
 
 
 class TestSnapshot:
-    """Tests for get_snapshot() point-in-time queries."""
-
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
-        self.db = NodeHistoryDB(
-            db_path=tmp_path / "snapshot.db",
-            throttle_seconds=0,
-        )
+        self.db = NodeHistoryDB(db_path=tmp_path / "snapshot.db")
         yield
         self.db.close()
 
@@ -334,109 +406,101 @@ class TestSnapshot:
         assert result["type"] == "FeatureCollection"
         assert result["features"] == []
 
-    def test_snapshot_returns_most_recent(self):
-        self.db.record_observation("!node", 35.0, 139.0, network="meshtastic", timestamp=1000)
-        self.db.record_observation("!node", 35.5, 139.5, network="meshtastic", timestamp=2000)
-        result = self.db.get_snapshot(2000)
+    def test_current_snapshot_uses_nodes_current(self):
+        self.db.record_observation("!a", 35.0, 139.0, network="meshtastic", timestamp=1000)
+        # Future timestamp → reads nodes_current
+        result = self.db.get_snapshot(int(time.time()) + 3600)
         assert len(result["features"]) == 1
-        feature = result["features"][0]
-        coords = feature["geometry"]["coordinates"]
-        # Should return the position at timestamp 2000
-        assert coords[0] == 139.5
-        assert coords[1] == 35.5
+        coords = result["features"][0]["geometry"]["coordinates"]
+        assert coords == [139.0, 35.0]
 
-    def test_snapshot_excludes_future_data(self):
+    def test_past_snapshot_uses_trajectory(self):
         self.db.record_observation("!node", 35.0, 139.0, timestamp=1000)
         self.db.record_observation("!node", 35.5, 139.5, timestamp=3000)
         # Snapshot at timestamp 2000 should only see the first observation
         result = self.db.get_snapshot(2000)
         assert len(result["features"]) == 1
-        feature = result["features"][0]
-        coords = feature["geometry"]["coordinates"]
+        coords = result["features"][0]["geometry"]["coordinates"]
         assert coords[0] == 139.0
+        assert coords[1] == 35.0
 
     def test_snapshot_multiple_nodes(self):
+        # Distant positions so both trajectory writes happen
         self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
         self.db.record_observation("!b", 40.0, -74.0, timestamp=1500)
-        result = self.db.get_snapshot(2000)
+        result = self.db.get_snapshot(int(time.time()) + 3600)
         assert len(result["features"]) == 2
         assert result["properties"]["node_count"] == 2
 
 
 class TestTrackedNodes:
-    """Tests for get_tracked_nodes()."""
-
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
-        self.db = NodeHistoryDB(
-            db_path=tmp_path / "tracked.db",
-            throttle_seconds=0,
-        )
+        self.db = NodeHistoryDB(db_path=tmp_path / "tracked.db")
         yield
         self.db.close()
 
     def test_empty_tracked(self):
         assert self.db.get_tracked_nodes() == []
 
-    def test_tracked_nodes_with_counts(self):
+    def test_tracked_counts_trajectory_appends_not_messages(self):
+        # 1st append (first sighting) + 1 movement above threshold = 2 trajectory rows
         self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
-        self.db.record_observation("!a", 35.1, 139.1, timestamp=2000)
+        self.db.record_observation("!a", 35.00001, 139.00001, timestamp=1500)  # jitter, skipped
+        self.db.record_observation("!a", 35.1, 139.1, timestamp=2000)         # movement
+        # Static node — only first sighting → 1 trajectory row
         self.db.record_observation("!b", 40.0, -74.0, timestamp=1500)
         nodes = self.db.get_tracked_nodes()
         assert len(nodes) == 2
-        # Find node !a
-        node_a = next(n for n in nodes if n["node_id"] == "!a")
-        assert node_a["observation_count"] == 2
-        assert node_a["first_seen"] == 1000
-        assert node_a["last_seen"] == 2000
+        a = next(n for n in nodes if n["node_id"] == "!a")
+        b = next(n for n in nodes if n["node_id"] == "!b")
+        assert a["observation_count"] == 2
+        assert b["observation_count"] == 1
 
 
 class TestPruning:
-    """Tests for prune_old_data()."""
-
-    @pytest.fixture(autouse=True)
-    def _setup(self, tmp_path):
-        self.db = NodeHistoryDB(
+    def test_prune_removes_old_trajectory_rows(self, tmp_path):
+        db = NodeHistoryDB(
             db_path=tmp_path / "prune.db",
-            throttle_seconds=0,
             retention_seconds=3600,
         )
-        yield
-        self.db.close()
+        try:
+            db.record_observation("!old", 35.0, 139.0, timestamp=100)
+            db.record_observation("!new", 40.0, -74.0, timestamp=int(time.time()))
+            deleted = db.prune_old_data()
+            assert deleted == 1
+            # nodes_current is NOT pruned by time — both rows remain
+            assert db.node_count == 2
+            # trajectory has only the recent row
+            assert db.observation_count == 1
+        finally:
+            db.close()
 
-    def test_prune_removes_old_data(self):
-        self.db.record_observation("!old", 35.0, 139.0, timestamp=100)
-        self.db.record_observation("!new", 40.0, -74.0, timestamp=int(time.time()))
-        deleted = self.db.prune_old_data()
-        assert deleted == 1
-        assert self.db.observation_count == 1
-
-    def test_prune_with_custom_timestamp(self):
-        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
-        self.db.record_observation("!b", 40.0, -74.0, timestamp=2000)
-        self.db.record_observation("!c", 51.0, -0.1, timestamp=3000)
-        deleted = self.db.prune_old_data(before_timestamp=2500)
-        assert deleted == 2
-        assert self.db.observation_count == 1
+    def test_prune_with_custom_timestamp(self, tmp_path):
+        db = NodeHistoryDB(db_path=tmp_path / "prune_custom.db")
+        try:
+            db.record_observation("!a", 35.0, 139.0, timestamp=1000)
+            db.record_observation("!b", 40.0, -74.0, timestamp=2000)
+            db.record_observation("!c", 51.0, -0.1, timestamp=3000)
+            deleted = db.prune_old_data(before_timestamp=2500)
+            assert deleted == 2
+            assert db.observation_count == 1
+        finally:
+            db.close()
 
 
 class TestDensityPoints:
-    """Tests for get_density_points() coverage heatmap data."""
-
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
-        self.db = NodeHistoryDB(
-            db_path=tmp_path / "density.db",
-            throttle_seconds=0,
-        )
+        self.db = NodeHistoryDB(db_path=tmp_path / "density.db")
         yield
         self.db.close()
 
     def test_empty_returns_empty(self):
         assert self.db.get_density_points() == []
 
-    def test_single_observation(self):
-        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
+    def test_first_observation_counts(self):
+        self.db.record_observation("!a", 35.0, 139.0)
         points = self.db.get_density_points()
         assert len(points) == 1
         lat, lon, count = points[0]
@@ -444,212 +508,18 @@ class TestDensityPoints:
         assert lon == 139.0
         assert count == 1
 
-    def test_multiple_observations_same_cell(self):
-        self.db.record_observation("!a", 35.00001, 139.00001, timestamp=1000)
-        self.db.record_observation("!b", 35.00002, 139.00002, timestamp=2000)
-        self.db.record_observation("!c", 35.00003, 139.00003, timestamp=3000)
-        # With precision=4, these round to the same cell (35.0, 139.0)
-        points = self.db.get_density_points(precision=4)
-        assert len(points) == 1
-        assert points[0][2] == 3
-
-    def test_different_cells(self):
-        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
-        self.db.record_observation("!b", 40.0, -74.0, timestamp=2000)
+    def test_movements_at_different_cells(self):
+        self.db.record_observation("!a", 35.0, 139.0)
+        self.db.record_observation("!b", 40.0, -74.0)
         points = self.db.get_density_points()
         assert len(points) == 2
-
-    def test_sorted_descending_by_count(self):
-        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
-        self.db.record_observation("!b", 35.0, 139.0, timestamp=2000)
-        self.db.record_observation("!c", 40.0, -74.0, timestamp=3000)
-        points = self.db.get_density_points()
-        assert points[0][2] >= points[1][2]
-
-    def test_since_filter(self):
-        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
-        self.db.record_observation("!b", 35.0, 139.0, timestamp=2000)
-        self.db.record_observation("!c", 35.0, 139.0, timestamp=3000)
-        points = self.db.get_density_points(since=2000)
-        assert len(points) == 1
-        assert points[0][2] == 2  # Only observations at 2000 and 3000
-
-    def test_until_filter(self):
-        self.db.record_observation("!a", 35.0, 139.0, timestamp=1000)
-        self.db.record_observation("!b", 35.0, 139.0, timestamp=2000)
-        self.db.record_observation("!c", 35.0, 139.0, timestamp=3000)
-        points = self.db.get_density_points(until=2000)
-        assert len(points) == 1
-        assert points[0][2] == 2  # Only observations at 1000 and 2000
-
-    def test_network_filter(self):
-        self.db.record_observation("!a", 35.0, 139.0, network="meshtastic", timestamp=1000)
-        self.db.record_observation("!b", 35.0, 139.0, network="reticulum", timestamp=2000)
-        self.db.record_observation("!c", 40.0, -74.0, network="meshtastic", timestamp=3000)
-        points = self.db.get_density_points(network="meshtastic")
-        assert len(points) == 2
-        total = sum(p[2] for p in points)
-        assert total == 2  # Only meshtastic observations
-
-    def test_precision_coarser(self):
-        # With precision=2, 35.001 and 35.004 both round to 35.0
-        self.db.record_observation("!a", 35.001, 139.001, timestamp=1000)
-        self.db.record_observation("!b", 35.004, 139.004, timestamp=2000)
-        points = self.db.get_density_points(precision=2)
-        assert len(points) == 1
-        assert points[0][2] == 2
-
-    def test_returns_empty_when_closed(self, tmp_path):
-        db = NodeHistoryDB(db_path=tmp_path / "closed_density.db", throttle_seconds=0)
-        db.close()
-        assert db.get_density_points() == []
-
-
-class TestDBClosed:
-    """Tests that operations return safely when DB is closed or unavailable."""
-
-    def test_record_returns_false_when_closed(self, tmp_path):
-        db = NodeHistoryDB(db_path=tmp_path / "closed.db", throttle_seconds=0)
-        db.close()
-        assert db.record_observation("!node", 35.0, 139.0) is False
-
-    def test_trajectory_returns_empty_when_closed(self, tmp_path):
-        db = NodeHistoryDB(db_path=tmp_path / "closed.db", throttle_seconds=0)
-        db.close()
-        result = db.get_trajectory_geojson("!node")
-        assert result["type"] == "FeatureCollection"
-        assert result["features"] == []
-
-    def test_snapshot_returns_empty_when_closed(self, tmp_path):
-        db = NodeHistoryDB(db_path=tmp_path / "closed.db", throttle_seconds=0)
-        db.close()
-        result = db.get_snapshot(int(time.time()))
-        assert result["features"] == []
-
-    def test_counts_zero_when_closed(self, tmp_path):
-        db = NodeHistoryDB(db_path=tmp_path / "closed.db", throttle_seconds=0)
-        db.close()
-        assert db.observation_count == 0
-        assert db.node_count == 0
-
-
-class TestDBIntegrity:
-    """Tests for database integrity check on startup (Step 9)."""
-
-    def test_normal_startup_passes_integrity(self, tmp_path):
-        """A fresh DB passes integrity check."""
-        db = NodeHistoryDB(db_path=tmp_path / "good.db", throttle_seconds=0)
-        assert db._conn is not None
-        db.record_observation("!node1", 35.0, 139.0)
-        assert db.observation_count == 1
-        db.close()
-
-    def test_corrupt_db_triggers_recovery(self, tmp_path):
-        """A corrupt DB file is rotated and a fresh DB is created."""
-        db_path = tmp_path / "corrupt.db"
-        # Write garbage to simulate a corrupt DB
-        db_path.write_bytes(b"THIS IS NOT A VALID SQLITE DATABASE FILE!!!")
-
-        db = NodeHistoryDB(db_path=db_path, throttle_seconds=0)
-        # Should recover: either creates a new DB or handles gracefully
-        # The corrupt file should be renamed
-        corrupt_files = list(tmp_path.glob("corrupt.db.corrupt.*"))
-        if db._conn is not None:
-            # Recovery succeeded — fresh DB works
-            assert db.record_observation("!node1", 35.0, 139.0)
-            assert len(corrupt_files) >= 1
-        db.close()
-
-    def test_reopened_db_retains_data(self, tmp_path):
-        """Data persists across close/reopen cycles."""
-        db_path = tmp_path / "persist.db"
-        db = NodeHistoryDB(db_path=db_path, throttle_seconds=0)
-        db.record_observation("!node1", 35.0, 139.0)
-        db.record_observation("!node2", 40.0, -74.0)
-        assert db.observation_count == 2
-        db.close()
-
-        db2 = NodeHistoryDB(db_path=db_path, throttle_seconds=0)
-        assert db2.observation_count == 2
-        db2.close()
-
-
-class TestAutoVacuum:
-    """Tests for auto-vacuum after pruning (Step 15)."""
-
-    def test_prune_triggers_vacuum(self, tmp_path):
-        """Pruning old data should not error (vacuum runs internally)."""
-        db = NodeHistoryDB(db_path=tmp_path / "vacuum.db", throttle_seconds=0)
-        now = int(time.time())
-        for i in range(20):
-            db.record_observation(
-                f"!node{i}", 35.0 + i * 0.01, 139.0,
-                timestamp=now - 100000 + i,
-            )
-        deleted = db.prune_old_data(before_timestamp=now)
-        assert deleted == 20
-        assert db.observation_count == 0
-        db.close()
-
-    def test_auto_vacuum_pragma_set(self, tmp_path):
-        """PRAGMA auto_vacuum should be set on new databases."""
-        db = NodeHistoryDB(db_path=tmp_path / "av.db", throttle_seconds=0)
-        if db._conn:
-            result = db._conn.execute("PRAGMA auto_vacuum").fetchone()
-            # INCREMENTAL = 2
-            assert result[0] == 2
-        db.close()
-
-    def test_synchronous_pragma_is_normal(self, tmp_path):
-        """PRAGMA synchronous=NORMAL — telemetry workload doesn't need FULL.
-
-        Default sqlite is FULL (=2), which fsyncs on every commit. With the
-        120 s collect cadence × ~12 k inserts per cycle on a Pi-class SD card,
-        FULL is the wear path. NORMAL (=1) under WAL is durable across power
-        loss for most-recent commits — sufficient for trajectory data.
-        """
-        db = NodeHistoryDB(db_path=tmp_path / "sync.db", throttle_seconds=0)
-        if db._conn:
-            result = db._conn.execute("PRAGMA synchronous").fetchone()
-            assert result[0] == 1, (
-                f"synchronous={result[0]} (want 1=NORMAL). "
-                "Without this, every commit fsyncs — see node_history.py "
-                "_open_connection() comment."
-            )
-        db.close()
-
-
-class TestDBBackup:
-    """Tests for SQLite backup creation (Step 16)."""
-
-    def test_create_backup(self, tmp_path):
-        """Backup creates a valid copy of the database."""
-        db = NodeHistoryDB(db_path=tmp_path / "main.db", throttle_seconds=0)
-        db.record_observation("!node1", 35.0, 139.0)
-        db.record_observation("!node2", 40.0, -74.0)
-
-        backup_path = tmp_path / "backup.db"
-        assert db.create_backup(backup_path) is True
-        assert backup_path.exists()
-
-        # Verify backup has the same data
-        backup_db = NodeHistoryDB(db_path=backup_path, throttle_seconds=0)
-        assert backup_db.observation_count == 2
-        backup_db.close()
-        db.close()
-
-    def test_backup_returns_false_when_closed(self, tmp_path):
-        """Backup returns False when DB is not connected."""
-        db = NodeHistoryDB(db_path=tmp_path / "closed.db", throttle_seconds=0)
-        db.close()
-        assert db.create_backup(tmp_path / "backup.db") is False
 
 
 class TestWriteErrorSurfacing:
-    """Disk-fatal write errors must be visible to the health endpoint."""
+    """Disk-fatal write errors are visible to /api/health."""
 
     def test_initial_state_clean(self, tmp_path):
-        db = NodeHistoryDB(db_path=tmp_path / "clean.db", throttle_seconds=0)
+        db = NodeHistoryDB(db_path=tmp_path / "clean.db")
         try:
             state = db.write_error_state()
             assert state["last_write_error_at"] is None
@@ -658,9 +528,8 @@ class TestWriteErrorSurfacing:
             db.close()
 
     def test_successful_write_clears_error(self, tmp_path):
-        db = NodeHistoryDB(db_path=tmp_path / "ok.db", throttle_seconds=0)
+        db = NodeHistoryDB(db_path=tmp_path / "ok.db")
         try:
-            # Pretend a prior write failed.
             db._last_write_error_at = 12345
             db._last_write_error_msg = "stale"
             assert db.record_observation("!ok", 35.0, 139.0) is True
@@ -671,11 +540,7 @@ class TestWriteErrorSurfacing:
             db.close()
 
     def test_disk_full_error_is_recorded(self, tmp_path):
-        """An OperationalError naming 'disk' must flip the error fields."""
-        # sqlite3.Connection.execute is a read-only C slot, so we exercise the
-        # classifier directly rather than monkey-patching the connection.
-        import sqlite3
-        db = NodeHistoryDB(db_path=tmp_path / "full.db", throttle_seconds=0)
+        db = NodeHistoryDB(db_path=tmp_path / "full.db")
         try:
             db._record_write_error(
                 sqlite3.OperationalError("database or disk is full"),
@@ -688,9 +553,7 @@ class TestWriteErrorSurfacing:
             db.close()
 
     def test_non_disk_error_does_not_set_disk_state(self, tmp_path):
-        """A non-disk sqlite error logs at warning but doesn't claim disk-full."""
-        import sqlite3
-        db = NodeHistoryDB(db_path=tmp_path / "other.db", throttle_seconds=0)
+        db = NodeHistoryDB(db_path=tmp_path / "other.db")
         try:
             db._record_write_error(
                 sqlite3.OperationalError("table observations is locked"),
@@ -703,8 +566,7 @@ class TestWriteErrorSurfacing:
             db.close()
 
     def test_disk_io_error_message_variant_is_recorded(self, tmp_path):
-        import sqlite3
-        db = NodeHistoryDB(db_path=tmp_path / "io.db", throttle_seconds=0)
+        db = NodeHistoryDB(db_path=tmp_path / "io.db")
         try:
             db._record_write_error(
                 sqlite3.OperationalError("disk I/O error"),
@@ -713,5 +575,46 @@ class TestWriteErrorSurfacing:
             state = db.write_error_state()
             assert state["last_write_error_at"] is not None
             assert "I/O error" in (state["last_write_error_msg"] or "")
+        finally:
+            db.close()
+
+
+class TestDBBackup:
+    def test_create_backup(self, tmp_path):
+        db = NodeHistoryDB(db_path=tmp_path / "main.db")
+        db.record_observation("!node1", 35.0, 139.0)
+        db.record_observation("!node2", 40.0, -74.0)
+        backup_path = tmp_path / "backup.db"
+        assert db.create_backup(backup_path) is True
+        assert backup_path.exists()
+        backup_db = NodeHistoryDB(db_path=backup_path)
+        try:
+            assert backup_db.node_count == 2
+        finally:
+            backup_db.close()
+            db.close()
+
+    def test_backup_returns_false_when_closed(self, tmp_path):
+        db = NodeHistoryDB(db_path=tmp_path / "closed.db")
+        db.close()
+        assert db.create_backup(tmp_path / "backup.db") is False
+
+
+class TestDeprecatedConstructorArgs:
+    """v1 throttle_seconds / heartbeat_seconds should be accepted and ignored."""
+
+    def test_throttle_seconds_ignored(self, tmp_path):
+        db = NodeHistoryDB(
+            db_path=tmp_path / "compat.db",
+            throttle_seconds=300,
+            heartbeat_seconds=3600,
+        )
+        try:
+            # Behavior is v2: first append always lands
+            assert db.record_observation("!a", 35.0, 139.0) is True
+            count = db._conn.execute(
+                "SELECT COUNT(*) FROM trajectory"
+            ).fetchone()[0]
+            assert count == 1
         finally:
             db.close()

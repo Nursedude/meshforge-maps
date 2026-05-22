@@ -82,7 +82,7 @@ class HistoricalAnalytics:
                 (timestamp / ?) * ? AS bucket_start,
                 COUNT(DISTINCT node_id) AS unique_nodes,
                 COUNT(*) AS total_observations
-            FROM observations
+            FROM trajectory
             WHERE timestamp >= ? AND timestamp <= ?
             GROUP BY bucket_start
             ORDER BY bucket_start ASC
@@ -134,7 +134,7 @@ class HistoricalAnalytics:
             SELECT
                 CAST(strftime('%H', timestamp, 'unixepoch') AS INTEGER) AS hour,
                 COUNT(*) AS obs_count
-            FROM observations
+            FROM trajectory
             WHERE timestamp >= ? AND timestamp <= ?
             GROUP BY hour
             ORDER BY hour ASC
@@ -179,7 +179,7 @@ class HistoricalAnalytics:
                 MIN(timestamp) AS first_seen,
                 MAX(timestamp) AS last_seen,
                 network
-            FROM observations
+            FROM trajectory
             WHERE timestamp >= ?
             GROUP BY node_id
             ORDER BY observation_count DESC
@@ -225,7 +225,7 @@ class HistoricalAnalytics:
             SELECT
                 COUNT(DISTINCT node_id) AS unique_nodes,
                 COUNT(*) AS total_observations
-            FROM observations
+            FROM trajectory
             WHERE timestamp >= ?
         """
 
@@ -234,7 +234,7 @@ class HistoricalAnalytics:
                 COALESCE(network, 'unknown') AS net,
                 COUNT(DISTINCT node_id) AS node_count,
                 COUNT(*) AS obs_count
-            FROM observations
+            FROM trajectory
             WHERE timestamp >= ?
             GROUP BY net
             ORDER BY node_count DESC

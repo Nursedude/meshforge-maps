@@ -1,20 +1,29 @@
 """
-MeshForge Maps - Node History Database
+MeshForge Maps - Node History Database (v2: movement-triggered trajectory)
 
-SQLite-backed storage for node position observations over time.
-Enables trajectory visualization, historical playback, and growth statistics.
+Two-table schema:
+  - ``nodes_current``: one row per node, UPSERT on every position message.
+    Always the latest position. Bounded by node_count.
+  - ``trajectory``: append-only motion log. A new row is written only when
+    haversine distance from the node's previous trajectory row exceeds
+    ``move_threshold_meters`` (default 50 m). Per-node cap evicts oldest
+    row in the same transaction so DB size is bounded by
+    (node_count × trajectory_rows_per_node).
 
-Modeled after meshforge core's utils/node_history.py pattern:
-  - Throttled recording (1 observation per node per configurable interval)
-  - Trajectory export as GeoJSON LineString
-  - Point-in-time snapshots
-  - WAL mode for concurrent read/write
-  - Automatic old-data pruning
+This replaces the v1 firehose model where every broker message that survived
+a coarse heartbeat became an ``observations`` row. v1's DB grew with message
+volume; v2's grows with actual node motion + node count, both bounded on
+Pi-class hardware regardless of broker rate.
+
+Migration is in-place: ``PRAGMA user_version`` checked at startup. v1 DBs
+get their latest-row-per-node seeded into ``nodes_current``, ``observations``
+is dropped, and ``user_version`` is bumped to 2.
 
 Storage location: ~/.local/share/meshforge/maps_node_history.db
 """
 
 import logging
+import math
 import sqlite3
 import threading
 import time
@@ -28,30 +37,47 @@ logger = logging.getLogger(__name__)
 # Default DB location
 DEFAULT_DB_PATH = get_data_dir() / "maps_node_history.db"
 
-# Minimum interval between observations for the same node (seconds)
-DEFAULT_THROTTLE_SECONDS = 300  # 5 min (was 60s; 42K nodes at 60s = 60M rows/day)
+# Default retention period (seconds). Time-based prune still applies to the
+# trajectory table — old motion events get aged out even if a node is well
+# under its per-node cap. Default 1 day matches the fleet-default since the
+# 2026-05-21 moc1 incident (PR #81 / `a460b22`).
+DEFAULT_RETENTION_SECONDS = 1 * 24 * 3600
 
-# Heartbeat interval — when a stationary node's (lat, lon, network) match the
-# last record, skip the insert until this interval has elapsed. Mobile nodes
-# still write on every position change (subject to the throttle floor).
-# 1 h heartbeat for stationary nodes drops 988 MB → ~80 MB steady state on
-# moc1's 10K-node fleet.
-DEFAULT_HEARTBEAT_SECONDS = 3600
+# Movement threshold for appending to trajectory. Below this many meters of
+# haversine distance from the node's previous trajectory point, the message
+# updates ``nodes_current`` only and skips the trajectory append. 50 m skips
+# GPS jitter (~5-15 m on consumer hardware) while catching pedestrian and
+# vehicle motion.
+DEFAULT_MOVE_THRESHOLD_METERS = 50.0
 
-# Lat/lon comparison precision (decimal degrees). 6 dp ≈ 11 cm — anything
-# tighter is GPS noise, anything looser would smear repeater stacks at the
-# same site into one. 6 is the sweet spot for "did the node actually move."
-_LAT_LON_PRECISION = 6
+# Per-node trajectory row cap. When a node's row count would exceed this,
+# the oldest row for that node is deleted in the same transaction. Hard
+# ceiling on DB size: node_count × cap × ~150 bytes per row.
+DEFAULT_TRAJECTORY_ROWS_PER_NODE = 500
 
-# Default retention period (seconds)
-DEFAULT_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days (was 7; keeps DB under ~500 MB)
-
-# Maximum observations per node for trajectory queries
+# Maximum trajectory points returned by a single get_trajectory_geojson call.
+# Independent from the per-node storage cap — this is just a query limit.
 MAX_TRAJECTORY_POINTS = 1000
+
+# Earth radius in meters for the haversine helper.
+_EARTH_RADIUS_M = 6_371_000.0
+
+# Schema version stamped into PRAGMA user_version. Bump when the schema
+# changes incompatibly. 0 / unset = v1 (observations table) or fresh DB.
+_USER_VERSION = 2
+
+
+def _haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two (lat, lon) pairs in meters."""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
 class NodeHistoryDB:
-    """SQLite-backed node position history with trajectory GeoJSON export.
+    """SQLite-backed node position store with movement-triggered trajectory.
 
     Thread-safe: all operations acquire a lock around DB access.
     Uses WAL mode for better concurrent read performance.
@@ -60,42 +86,52 @@ class NodeHistoryDB:
     def __init__(
         self,
         db_path: Optional[Path] = None,
-        throttle_seconds: int = DEFAULT_THROTTLE_SECONDS,
         retention_seconds: int = DEFAULT_RETENTION_SECONDS,
-        heartbeat_seconds: int = DEFAULT_HEARTBEAT_SECONDS,
+        move_threshold_meters: float = DEFAULT_MOVE_THRESHOLD_METERS,
+        trajectory_rows_per_node: int = DEFAULT_TRAJECTORY_ROWS_PER_NODE,
+        # Deprecated v1 constructor params — accepted and ignored for one
+        # cycle so MapServer doesn't break on stale config. The v2 writer
+        # doesn't throttle (UPSERT is cheap) or heartbeat-dedupe (movement
+        # is the trigger).
+        throttle_seconds: Optional[int] = None,
+        heartbeat_seconds: Optional[int] = None,
     ):
         self._db_path = db_path or DEFAULT_DB_PATH
-        self._throttle_seconds = throttle_seconds
         self._retention_seconds = retention_seconds
-        # heartbeat_seconds == 0 disables the value-dedup path (legacy
-        # time-only behavior). Negative is treated as 0.
-        self._heartbeat_seconds = max(0, heartbeat_seconds)
-        self._MAX_THROTTLE_ENTRIES = 50000
+        self._move_threshold_meters = max(0.0, float(move_threshold_meters))
+        self._trajectory_rows_per_node = max(1, int(trajectory_rows_per_node))
+        if throttle_seconds is not None:
+            logger.debug(
+                "NodeHistoryDB v2 ignores throttle_seconds=%s (deprecated)",
+                throttle_seconds,
+            )
+        if heartbeat_seconds is not None:
+            logger.debug(
+                "NodeHistoryDB v2 ignores heartbeat_seconds=%s (deprecated)",
+                heartbeat_seconds,
+            )
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
-        # In-memory throttle tracker: node_id -> last_recorded_timestamp
-        self._last_recorded: Dict[str, float] = {}
-        # Last (lat, lon, network) per node. Used by the value-dedup path
-        # to skip writes when a stationary node reports the same position
-        # within the heartbeat window. Pruned in lockstep with _last_recorded.
-        self._last_value: Dict[str, Tuple[float, float, str]] = {}
-        # Cached count queries (expensive on large DBs)
+        # In-memory per-node trajectory state — lazily populated on first
+        # write for a node, then kept in sync with the DB on every append.
+        # Avoids a (lat, lon) query and a COUNT(*) per write.
+        self._last_traj_pos: Dict[str, Tuple[float, float]] = {}
+        self._traj_count: Dict[str, int] = {}
+        # Cached count queries (still useful — trajectory count drives
+        # /api/health observation_count surfacing).
         self._cached_obs_count: int = 0
         self._cached_node_count: int = 0
-        # Use -inf so the "invalidated" sentinel forces a refresh regardless of
-        # time.monotonic()'s starting value. (Fresh CI runners/containers can
-        # report monotonic < TTL, making a plain `= 0` sentinel ineffective.)
         self._count_cache_time: float = float("-inf")
         self._COUNT_CACHE_TTL = 300  # 5 minutes
-        # Last fatal write error (disk full / IO error). When set, the health
-        # endpoint surfaces it and knocks points off the score so the operator
-        # sees the silent backlog instead of having to grep journalctl.
+        # Last fatal write error (disk full / IO error). Surfaced in
+        # /api/health so an operator sees the silent backlog instead of
+        # having to grep journalctl.
         self._last_write_error_at: Optional[int] = None
         self._last_write_error_msg: Optional[str] = None
         self._init_db()
 
     def _init_db(self) -> None:
-        """Create database and tables if they don't exist."""
+        """Open DB, ensure v2 schema, run v1→v2 migration if needed."""
         conn = None
         try:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -142,61 +178,10 @@ class NodeHistoryDB:
                     self._db_path.unlink(missing_ok=True)
                 conn = self._open_connection()
 
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS observations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    node_id TEXT NOT NULL,
-                    timestamp INTEGER NOT NULL,
-                    latitude REAL NOT NULL,
-                    longitude REAL NOT NULL,
-                    altitude REAL,
-                    network TEXT,
-                    snr REAL,
-                    battery INTEGER,
-                    name TEXT
-                )
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_obs_node_time
-                ON observations (node_id, timestamp)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_obs_time
-                ON observations (timestamp)
-            """)
+            self._ensure_v2_schema(conn)
             conn.commit()
             self._conn = conn
-            logger.info("Node history DB initialized at %s", self._db_path)
-
-            # Startup compaction: prune + VACUUM if DB is bloated (>300 MB).
-            # Lowered from 500 MB after observing a 463 MB main-DB + 157 MB WAL
-            # on the Pi deploy — 300 MB catches that case on the next restart
-            # and leaves headroom above the normal 3-day steady state.
-            try:
-                db_size = self._db_path.stat().st_size
-                if db_size > 300_000_000:
-                    logger.info(
-                        "DB is %.1f GB — running startup compaction",
-                        db_size / 1e9,
-                    )
-                    cutoff = int(time.time()) - self._retention_seconds
-                    cur = conn.execute(
-                        "DELETE FROM observations WHERE timestamp < ?",
-                        (cutoff,),
-                    )
-                    conn.commit()
-                    pruned = cur.rowcount
-                    if pruned:
-                        logger.info("Startup prune removed %d old rows", pruned)
-                    conn.execute("VACUUM")
-                    conn.commit()
-                    new_size = self._db_path.stat().st_size
-                    logger.info(
-                        "Compaction complete: %.1f GB → %.1f MB",
-                        db_size / 1e9, new_size / 1e6,
-                    )
-            except Exception as ce:
-                logger.warning("Startup compaction failed: %s", ce)
+            logger.info("Node history DB initialized at %s (v2 schema)", self._db_path)
         except Exception as e:
             logger.error("Failed to initialize node history DB: %s", e)
             if conn is not None:
@@ -205,6 +190,89 @@ class NodeHistoryDB:
                 except Exception as close_exc:
                     logger.debug("Error closing DB connection during init failure: %s", close_exc)
             self._conn = None
+
+    def _ensure_v2_schema(self, conn: sqlite3.Connection) -> None:
+        """Create v2 tables; migrate v1 observations if present."""
+        user_version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS nodes_current (
+                node_id   TEXT PRIMARY KEY,
+                timestamp INTEGER NOT NULL,
+                latitude  REAL    NOT NULL,
+                longitude REAL    NOT NULL,
+                altitude  REAL,
+                network   TEXT,
+                snr       REAL,
+                battery   INTEGER,
+                name      TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trajectory (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id   TEXT    NOT NULL,
+                timestamp INTEGER NOT NULL,
+                latitude  REAL    NOT NULL,
+                longitude REAL    NOT NULL,
+                altitude  REAL,
+                network   TEXT,
+                snr       REAL,
+                battery   INTEGER,
+                name      TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_traj_node_time
+            ON trajectory (node_id, timestamp)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_traj_time
+            ON trajectory (timestamp)
+        """)
+
+        if user_version < _USER_VERSION:
+            self._migrate_v1_to_v2(conn)
+            conn.execute(f"PRAGMA user_version = {_USER_VERSION}")
+
+    def _migrate_v1_to_v2(self, conn: sqlite3.Connection) -> None:
+        """Seed nodes_current from v1 observations and drop the old table.
+
+        Fresh-start migration per the v2 plan: keep one row per node (the
+        latest observation), discard the rest. trajectory starts empty.
+        """
+        has_v1 = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='observations'"
+        ).fetchone()
+        if not has_v1:
+            logger.info("No v1 observations table found — fresh v2 install")
+            return
+
+        before = conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+        # Seed nodes_current with the latest row per node. MAX(id) on an
+        # AUTOINCREMENT column gives a deterministic "latest" pick when
+        # multiple rows share MAX(timestamp).
+        conn.execute("""
+            INSERT OR IGNORE INTO nodes_current
+                (node_id, timestamp, latitude, longitude, altitude,
+                 network, snr, battery, name)
+            SELECT node_id, timestamp, latitude, longitude, altitude,
+                   network, snr, battery, name
+            FROM observations
+            WHERE id IN (SELECT MAX(id) FROM observations GROUP BY node_id)
+        """)
+        seeded = conn.execute("SELECT COUNT(*) FROM nodes_current").fetchone()[0]
+        conn.execute("DROP TABLE observations")
+        # Reclaim the space the dropped table held. VACUUM here is bounded
+        # by the post-migration DB size (nodes_current is small), not the
+        # original v1 DB size.
+        conn.commit()
+        conn.execute("VACUUM")
+        logger.info(
+            "v1→v2 migration: dropped observations (%d rows), seeded "
+            "nodes_current with %d nodes",
+            before, seeded,
+        )
 
     def _open_connection(self) -> sqlite3.Connection:
         """Open a SQLite connection with standard PRAGMAs."""
@@ -217,18 +285,10 @@ class NodeHistoryDB:
             conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
             conn.execute("PRAGMA journal_mode=WAL")
             # synchronous=NORMAL: with WAL this is durable across power loss
-            # for most-recent commits; sufficient for telemetry. Per-connection,
-            # so the default FULL silently applied to every prior open of this
-            # DB — fsync on every commit at 120s collect cadence × ~12k inserts
-            # is the SD-card-wear path the Pi can't afford.
+            # for most-recent commits; sufficient for telemetry.
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=5000")
-            # Cap the WAL file at 64 MB. Without this, a PASSIVE autocheckpoint
-            # (default every 1000 pages) moves pages into the main DB but never
-            # shrinks the -wal file itself; only a TRUNCATE checkpoint does, and
-            # that silently downgrades to PASSIVE when any reader holds an old
-            # snapshot. journal_size_limit forces the file to be truncated on
-            # every successful checkpoint regardless of mode.
+            # Cap the WAL file at 64 MB.
             conn.execute("PRAGMA journal_size_limit=67108864")
         except Exception:
             conn.close()
@@ -245,6 +305,10 @@ class NodeHistoryDB:
             except sqlite3.OperationalError:
                 return []
 
+    # ------------------------------------------------------------------
+    # Write path
+    # ------------------------------------------------------------------
+
     def record_observation(
         self,
         node_id: str,
@@ -257,52 +321,25 @@ class NodeHistoryDB:
         name: str = "",
         timestamp: Optional[int] = None,
     ) -> bool:
-        """Record a node position observation if not throttled.
+        """Record a node position: always UPSERT nodes_current; conditionally
+        append to trajectory if movement exceeds the threshold.
 
-        Returns True if the observation was recorded, False if throttled
-        or an error occurred.
+        Returns True if the write succeeded (regardless of whether trajectory
+        was appended), False on DB error.
         """
         if not self._conn:
             return False
 
         now = timestamp if timestamp is not None else int(time.time())
+        row = (node_id, now, lat, lon, altitude, network, snr, battery, name)
 
         with self._lock:
-            # Throttle check inside lock to prevent duplicate observations
-            # from concurrent calls passing the check simultaneously
-            last = self._last_recorded.get(node_id, 0)
-            if (now - last) < self._throttle_seconds:
-                return False
-
-            # Value-dedup: skip when (lat, lon, network) match the last
-            # recorded value AND we're still inside the heartbeat window.
-            # Disabled when heartbeat_seconds == 0.
-            if self._heartbeat_seconds > 0:
-                rounded = (round(lat, _LAT_LON_PRECISION),
-                           round(lon, _LAT_LON_PRECISION),
-                           network)
-                last_value = self._last_value.get(node_id)
-                if last_value == rounded and (now - last) < self._heartbeat_seconds:
-                    return False
-
             try:
-                self._conn.execute(
-                    """INSERT INTO observations
-                       (node_id, timestamp, latitude, longitude, altitude,
-                        network, snr, battery, name)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (node_id, now, lat, lon, altitude, network, snr, battery, name),
-                )
+                self._upsert_current_locked(row)
+                appended = self._maybe_append_trajectory_locked(row)
                 self._conn.commit()
-                self._last_recorded[node_id] = now
-                if self._heartbeat_seconds > 0:
-                    self._last_value[node_id] = (
-                        round(lat, _LAT_LON_PRECISION),
-                        round(lon, _LAT_LON_PRECISION),
-                        network,
-                    )
-                self._count_cache_time = float("-inf")
-                # Successful write clears any stale error state.
+                if appended:
+                    self._count_cache_time = float("-inf")
                 self._last_write_error_at = None
                 self._last_write_error_msg = None
                 return True
@@ -313,85 +350,116 @@ class NodeHistoryDB:
     def record_observations_batch(
         self, observations: List[Dict[str, Any]]
     ) -> int:
-        """Batch-record observations with a single lock acquisition and commit.
+        """Batch-record observations under a single lock + commit.
 
-        Each observation dict should have: node_id, lat, lon, network.
-        Optional keys: altitude, snr, battery, name.
-        Returns the number of observations actually recorded (non-throttled).
+        Returns the number of observations that produced a trajectory append
+        (NOT the number of UPSERTs — every observation touches nodes_current).
         """
         if not self._conn or not observations:
             return 0
 
         now = int(time.time())
-        rows = []
-        recorded_ids = []
-
-        recorded_values: List[Tuple[float, float, str]] = []
+        appended_count = 0
 
         with self._lock:
-            for obs in observations:
-                node_id = obs.get("node_id")
-                if not node_id:
-                    continue
-                last = self._last_recorded.get(node_id, 0)
-                if (now - last) < self._throttle_seconds:
-                    continue
-                lat = obs.get("lat")
-                lon = obs.get("lon")
-                network = obs.get("network", "")
-
-                # Value-dedup mirrors record_observation(). Skip when the
-                # (lat, lon, network) tuple is unchanged and we're still
-                # inside the heartbeat window.
-                if self._heartbeat_seconds > 0 and lat is not None and lon is not None:
-                    rounded = (round(lat, _LAT_LON_PRECISION),
-                               round(lon, _LAT_LON_PRECISION),
-                               network)
-                    last_value = self._last_value.get(node_id)
-                    if last_value == rounded and (now - last) < self._heartbeat_seconds:
-                        continue
-                    recorded_values.append(rounded)
-                else:
-                    recorded_values.append(None)  # type: ignore[arg-type]
-
-                rows.append((
-                    node_id, now,
-                    lat, lon, obs.get("altitude"),
-                    network, obs.get("snr"), obs.get("battery"),
-                    obs.get("name", ""),
-                ))
-                recorded_ids.append(node_id)
-
-            if not rows:
-                return 0
-
             try:
-                self._conn.executemany(
-                    """INSERT INTO observations
-                       (node_id, timestamp, latitude, longitude, altitude,
-                        network, snr, battery, name)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    rows,
-                )
+                for obs in observations:
+                    node_id = obs.get("node_id")
+                    if not node_id:
+                        continue
+                    lat = obs.get("lat")
+                    lon = obs.get("lon")
+                    if lat is None or lon is None:
+                        continue
+                    row = (
+                        node_id, now, lat, lon, obs.get("altitude"),
+                        obs.get("network", ""), obs.get("snr"),
+                        obs.get("battery"), obs.get("name", ""),
+                    )
+                    self._upsert_current_locked(row)
+                    if self._maybe_append_trajectory_locked(row):
+                        appended_count += 1
                 self._conn.commit()
-                for nid, val in zip(recorded_ids, recorded_values):
-                    self._last_recorded[nid] = now
-                    if val is not None:
-                        self._last_value[nid] = val
-                self._count_cache_time = float("-inf")
+                if appended_count:
+                    self._count_cache_time = float("-inf")
                 self._last_write_error_at = None
                 self._last_write_error_msg = None
-                return len(rows)
+                return appended_count
             except sqlite3.Error as e:
-                self._record_write_error(e, f"batch x{len(rows)}")
+                self._record_write_error(e, f"batch x{len(observations)}")
                 return 0
 
-    # Used by the lock-holding write paths above. Disk-full / I/O errors get
-    # logged at ERROR and remembered so the /api/health endpoint can surface
-    # them; other sqlite errors stay at WARNING. Must be called under self._lock.
+    def _upsert_current_locked(self, row: Tuple[Any, ...]) -> None:
+        """INSERT OR REPLACE into nodes_current. Must be called under self._lock."""
+        self._conn.execute(
+            """INSERT OR REPLACE INTO nodes_current
+                   (node_id, timestamp, latitude, longitude, altitude,
+                    network, snr, battery, name)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            row,
+        )
+
+    def _maybe_append_trajectory_locked(self, row: Tuple[Any, ...]) -> bool:
+        """Append to trajectory if movement threshold is met (or first sighting).
+
+        Evicts the oldest row for this node in the same transaction when the
+        per-node cap would be exceeded. Returns True if a row was inserted.
+        Must be called under self._lock.
+        """
+        node_id, _ts, lat, lon = row[0], row[1], row[2], row[3]
+
+        # Lazily prime the in-memory caches from the DB on first write per node.
+        if node_id not in self._last_traj_pos:
+            last = self._conn.execute(
+                "SELECT latitude, longitude FROM trajectory WHERE node_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (node_id,),
+            ).fetchone()
+            if last is not None:
+                self._last_traj_pos[node_id] = (last[0], last[1])
+                count = self._conn.execute(
+                    "SELECT COUNT(*) FROM trajectory WHERE node_id = ?",
+                    (node_id,),
+                ).fetchone()[0]
+                self._traj_count[node_id] = count
+
+        prev = self._last_traj_pos.get(node_id)
+        if prev is not None:
+            distance = _haversine_meters(prev[0], prev[1], lat, lon)
+            if distance < self._move_threshold_meters:
+                return False
+
+        self._conn.execute(
+            """INSERT INTO trajectory
+                   (node_id, timestamp, latitude, longitude, altitude,
+                    network, snr, battery, name)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            row,
+        )
+        self._last_traj_pos[node_id] = (lat, lon)
+        new_count = self._traj_count.get(node_id, 0) + 1
+
+        if new_count > self._trajectory_rows_per_node:
+            # Evict oldest row for this node in the same transaction.
+            self._conn.execute(
+                "DELETE FROM trajectory WHERE id = "
+                "(SELECT MIN(id) FROM trajectory WHERE node_id = ?)",
+                (node_id,),
+            )
+            new_count = self._trajectory_rows_per_node
+
+        self._traj_count[node_id] = new_count
+        return True
+
+    # ------------------------------------------------------------------
+    # Error visibility (consumed by /api/health)
+    # ------------------------------------------------------------------
+
     _DISK_FULL_SIGNALS = ("disk i/o error", "database or disk is full", "no space left")
 
     def _record_write_error(self, exc: Exception, context: str) -> None:
+        """Disk-full / IO errors → ERROR + remembered for /api/health.
+        Other sqlite errors → WARNING. Must be called under self._lock."""
         msg = str(exc).lower()
         is_disk_problem = (
             isinstance(exc, sqlite3.OperationalError)
@@ -417,6 +485,10 @@ class NodeHistoryDB:
                 "last_write_error_msg": self._last_write_error_msg,
             }
 
+    # ------------------------------------------------------------------
+    # Read path
+    # ------------------------------------------------------------------
+
     def get_trajectory_geojson(
         self,
         node_id: str,
@@ -430,13 +502,13 @@ class NodeHistoryDB:
           - geometry: LineString of [lon, lat, alt] coordinates
           - properties: node_id, point_count, time_span, timestamps
 
-        If the node has only one observation, returns a Point geometry instead.
-        If no observations found, returns an empty FeatureCollection.
+        If the node has only one trajectory row, returns a Point geometry instead.
+        If no trajectory found, returns an empty FeatureCollection.
         """
         if not self._conn:
             return {"type": "FeatureCollection", "features": []}
 
-        query = "SELECT timestamp, latitude, longitude, altitude FROM observations WHERE node_id = ?"
+        query = "SELECT timestamp, latitude, longitude, altitude FROM trajectory WHERE node_id = ?"
         params: List[Any] = [node_id]
 
         if since is not None:
@@ -493,13 +565,13 @@ class NodeHistoryDB:
         since: Optional[int] = None,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """Get observation history for a node as a list of dicts."""
+        """Get trajectory history for a node as a list of dicts."""
         if not self._conn:
             return []
 
         query = """SELECT timestamp, latitude, longitude, altitude, network,
                           snr, battery, name
-                   FROM observations WHERE node_id = ?"""
+                   FROM trajectory WHERE node_id = ?"""
         params: List[Any] = [node_id]
 
         if since is not None:
@@ -534,32 +606,45 @@ class NodeHistoryDB:
         self,
         timestamp: int,
     ) -> Dict[str, Any]:
-        """Get the most recent observation for each node at or before a timestamp.
+        """Return the network state at or before a given timestamp.
 
-        Returns a GeoJSON FeatureCollection of Point features representing
-        the network state at the given point in time.
+        For ``timestamp`` >= now, returns ``nodes_current`` directly (fast,
+        one row per node). For past timestamps, walks the trajectory table
+        and returns the latest row per node before ``timestamp``.
+
+        Nodes that have only ever upserted nodes_current (never moved enough
+        to generate a trajectory row) won't appear in past-timestamp
+        snapshots — by design, since we don't know where they were then.
         """
         if not self._conn:
             return {"type": "FeatureCollection", "features": []}
 
-        # Get most recent observation for each node before the timestamp.
-        # Use MAX(id) to break ties when multiple observations share the
-        # same timestamp for a node, preventing duplicate rows.
-        query = """
-            SELECT o.node_id, o.timestamp, o.latitude, o.longitude,
-                   o.altitude, o.network, o.snr, o.battery, o.name
-            FROM observations o
-            INNER JOIN (
-                SELECT MAX(id) as max_id
-                FROM observations
-                WHERE timestamp <= ?
-                GROUP BY node_id
-            ) latest ON o.id = latest.max_id
-        """
+        now = int(time.time())
+        if timestamp >= now:
+            query = (
+                "SELECT node_id, timestamp, latitude, longitude, altitude, "
+                "network, snr, battery, name FROM nodes_current"
+            )
+            params: Tuple[Any, ...] = ()
+        else:
+            # Latest trajectory row per node before timestamp. MAX(id) breaks
+            # ties when multiple rows share the same timestamp.
+            query = """
+                SELECT t.node_id, t.timestamp, t.latitude, t.longitude,
+                       t.altitude, t.network, t.snr, t.battery, t.name
+                FROM trajectory t
+                INNER JOIN (
+                    SELECT MAX(id) AS max_id
+                    FROM trajectory
+                    WHERE timestamp <= ?
+                    GROUP BY node_id
+                ) latest ON t.id = latest.max_id
+            """
+            params = (timestamp,)
 
         with self._lock:
             try:
-                rows = self._conn.execute(query, (timestamp,)).fetchall()
+                rows = self._conn.execute(query, params).fetchall()
             except Exception as e:
                 logger.error("Snapshot query failed: %s", e)
                 return {"type": "FeatureCollection", "features": []}
@@ -594,15 +679,20 @@ class NodeHistoryDB:
         }
 
     def get_tracked_nodes(self) -> List[Dict[str, Any]]:
-        """List all nodes with observation counts and time ranges."""
+        """List all nodes that have generated trajectory data.
+
+        ``observation_count`` here is the number of MOVEMENT EVENTS recorded
+        in trajectory, not message count. v2 semantics: this measures
+        mobility, not chattiness.
+        """
         if not self._conn:
             return []
 
         query = """
-            SELECT node_id, COUNT(*) as obs_count,
-                   MIN(timestamp) as first_seen,
-                   MAX(timestamp) as last_seen
-            FROM observations
+            SELECT node_id, COUNT(*) AS obs_count,
+                   MIN(timestamp) AS first_seen,
+                   MAX(timestamp) AS last_seen
+            FROM trajectory
             GROUP BY node_id
             ORDER BY last_seen DESC
         """
@@ -625,9 +715,10 @@ class NodeHistoryDB:
         ]
 
     def prune_old_data(self, before_timestamp: Optional[int] = None) -> int:
-        """Remove observations older than the retention period.
+        """Remove trajectory rows older than the retention period.
 
-        Returns the number of rows deleted.
+        ``nodes_current`` is never time-pruned (always the latest snapshot).
+        Returns the number of trajectory rows deleted.
         """
         if not self._conn:
             return 0
@@ -638,17 +729,16 @@ class NodeHistoryDB:
         with self._lock:
             try:
                 cursor = self._conn.execute(
-                    "DELETE FROM observations WHERE timestamp < ?",
+                    "DELETE FROM trajectory WHERE timestamp < ?",
                     (before_timestamp,),
                 )
                 self._conn.commit()
                 deleted = cursor.rowcount
                 if deleted:
-                    logger.info("Pruned %d old node history observations", deleted)
-                    # Invalidate count cache after prune
+                    logger.info("Pruned %d old trajectory rows", deleted)
                     self._count_cache_time = float("-inf")
-                # Always checkpoint WAL — runs every ~120s via bg collect;
-                # without this, WAL grows unbounded when no rows are pruned
+                # Keep checkpointing — incremental_vacuum + wal_checkpoint
+                # are cheap and prevent WAL growth even when prune is a no-op.
                 try:
                     self._conn.execute("PRAGMA incremental_vacuum(2000)")
                 except Exception as ve:
@@ -657,40 +747,40 @@ class NodeHistoryDB:
                     self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 except Exception as we:
                     logger.warning("WAL checkpoint failed: %s", we)
-                # Prune stale throttle entries
-                cutoff = time.time() - self._retention_seconds
-                stale = [k for k, v in self._last_recorded.items()
-                         if v < cutoff]
-                for k in stale:
-                    del self._last_recorded[k]
-                    self._last_value.pop(k, None)
+                # Drop stale entries from the in-memory trajectory caches
+                # for nodes whose latest trajectory row was pruned. Looking
+                # up the new latest position lazily on next write is cheaper
+                # than tracking it here.
+                stale = []
+                for nid in list(self._last_traj_pos.keys()):
+                    has_any = self._conn.execute(
+                        "SELECT 1 FROM trajectory WHERE node_id = ? LIMIT 1",
+                        (nid,),
+                    ).fetchone()
+                    if not has_any:
+                        stale.append(nid)
+                for nid in stale:
+                    self._last_traj_pos.pop(nid, None)
+                    self._traj_count.pop(nid, None)
                 if stale:
-                    logger.debug("Pruned %d stale throttle entries",
-                                 len(stale))
-                # Cap size: evict oldest entries if over limit
-                overflow = len(self._last_recorded) - self._MAX_THROTTLE_ENTRIES
-                if overflow > 0:
-                    sorted_entries = sorted(
-                        self._last_recorded.items(), key=lambda x: x[1])
-                    for k, _ in sorted_entries[:overflow]:
-                        del self._last_recorded[k]
-                        self._last_value.pop(k, None)
-                    logger.info("Evicted %d throttle entries (size cap)",
-                                overflow)
+                    logger.debug(
+                        "Cleared trajectory caches for %d fully-pruned nodes",
+                        len(stale),
+                    )
                 return deleted
             except Exception as e:
                 logger.error("Prune failed: %s", e)
                 return 0
 
     def _refresh_count_cache(self) -> None:
-        """Refresh cached observation/node counts from DB (call under lock)."""
+        """Refresh cached trajectory/node counts (call under lock)."""
         try:
             row = self._conn.execute(
-                "SELECT COUNT(*) FROM observations"
+                "SELECT COUNT(*) FROM trajectory"
             ).fetchone()
             self._cached_obs_count = row[0] if row else 0
             row = self._conn.execute(
-                "SELECT COUNT(DISTINCT node_id) FROM observations"
+                "SELECT COUNT(*) FROM nodes_current"
             ).fetchone()
             self._cached_node_count = row[0] if row else 0
             self._count_cache_time = time.monotonic()
@@ -699,7 +789,11 @@ class NodeHistoryDB:
 
     @property
     def observation_count(self) -> int:
-        """Total number of observations in the database (cached, 5min TTL)."""
+        """Total trajectory rows in the database (cached, 5min TTL).
+
+        v2 semantics: total movement events recorded, bounded by
+        node_count × trajectory_rows_per_node.
+        """
         if not self._conn:
             return 0
         if (time.monotonic() - self._count_cache_time) < self._COUNT_CACHE_TTL:
@@ -710,7 +804,7 @@ class NodeHistoryDB:
 
     @property
     def node_count(self) -> int:
-        """Number of distinct nodes with observations (cached, 5min TTL)."""
+        """Number of distinct nodes tracked in nodes_current (cached, 5min TTL)."""
         if not self._conn:
             return 0
         if (time.monotonic() - self._count_cache_time) < self._COUNT_CACHE_TTL:
@@ -726,36 +820,16 @@ class NodeHistoryDB:
         precision: int = 4,
         network: Optional[str] = None,
     ) -> List[Tuple[float, float, int]]:
-        """Get observation density as (lat, lon, count) tuples for heatmap rendering.
+        """Get movement density as (lat, lon, count) tuples for heatmap rendering.
 
-        Observations are grouped by rounded (latitude, longitude) at the given
-        decimal ``precision`` (default 4 ≈ ~11 m).  Each tuple represents a
-        grid cell with its total observation count, suitable for feeding
-        directly into a Leaflet.heat layer.
-
-        Parameters
-        ----------
-        since : int, optional
-            Unix timestamp — only include observations at or after this time.
-        until : int, optional
-            Unix timestamp — only include observations at or before this time.
-        precision : int
-            Decimal places to round lat/lon (controls grid resolution).
-            4 → ~11 m cells, 3 → ~110 m, 2 → ~1.1 km.
-        network : str, optional
-            Filter to a specific network (e.g. "meshtastic").
-
-        Returns
-        -------
-        list of (lat, lon, count)
-            Sorted descending by count so the densest cells come first.
+        v2 semantics: density of movement events, not message volume.
         """
         if not self._conn:
             return []
 
         query = (
             "SELECT ROUND(latitude, ?) AS lat, ROUND(longitude, ?) AS lon, "
-            "COUNT(*) AS cnt FROM observations WHERE 1=1"
+            "COUNT(*) AS cnt FROM trajectory WHERE 1=1"
         )
         params: List[Any] = [precision, precision]
 

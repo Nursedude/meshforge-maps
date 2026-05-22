@@ -1636,13 +1636,17 @@ class MapServer:
         # Node history DB for trajectory tracking
         self._node_history: Optional[NodeHistoryDB] = None
         try:
-            _throttle = int(config.get_effective("node_history_throttle_seconds", 300))
             _retention_days = int(config.get_effective("node_history_retention_days", 1))
-            _heartbeat = int(config.get_effective("node_history_heartbeat_seconds", 3600))
+            _move_threshold = float(config.get_effective(
+                "trajectory_move_threshold_meters", 50.0,
+            ))
+            _per_node_cap = int(config.get_effective(
+                "trajectory_rows_per_node", 500,
+            ))
             self._node_history = NodeHistoryDB(
-                throttle_seconds=_throttle,
                 retention_seconds=_retention_days * 24 * 3600,
-                heartbeat_seconds=_heartbeat,
+                move_threshold_meters=_move_threshold,
+                trajectory_rows_per_node=_per_node_cap,
             )
             self._aggregator.set_node_history(self._node_history)
         except Exception as e:
