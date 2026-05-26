@@ -129,3 +129,37 @@ class TestOfflineAlertWiring:
             offline_threshold=self.OFFLINE_THRESHOLD, now=2700.0,
         )
         assert alert2 is not None  # Past default cooldown (600s)
+
+
+class TestOfflineAlertScope:
+    """node_offline must fire only for owned/fleet nodes, not the tens of
+    thousands of FOREIGN external-feed nodes the map also tracks (the 835k
+    CRITICAL-alert churn). Scope = MapServer._offline_in_scope(node_id, owned)."""
+
+    def test_owned_node_in_scope(self):
+        from src.map_server import MapServer
+        assert MapServer._offline_in_scope("!ebfa1b11", {"!ebfa1b11", "!32962f10"})
+
+    def test_foreign_node_out_of_scope(self):
+        from src.map_server import MapServer
+        assert not MapServer._offline_in_scope("!02ed5754", {"!ebfa1b11", "!32962f10"})
+
+    def test_empty_owned_is_unscoped_legacy(self):
+        """Empty owned set = alert all (preserves legacy behavior / opt-out)."""
+        from src.map_server import MapServer
+        assert MapServer._offline_in_scope("!02ed5754", set())
+
+    def test_scope_filter_drops_foreign_offline_nodes(self):
+        """Integration: with owned scope, only owned offline nodes pass the
+        filter the offline-check loop applies before firing an alert."""
+        from src.map_server import MapServer
+        owned = {"!ebfa1b11"}  # one fleet node
+        tracker = NodeStateTracker(offline_threshold=60.0)
+        tracker.record_heartbeat("!ebfa1b11", timestamp=1000.0)   # owned
+        for fid in ("!02ed5754", "!f67092c8", "!9e77db3c"):       # foreign
+            tracker.record_heartbeat(fid, timestamp=1000.0)
+        newly_offline = tracker.check_offline(now=1100.0)
+        assert len(newly_offline) == 4
+        in_scope = [n for n in newly_offline
+                    if MapServer._offline_in_scope(n, owned)]
+        assert in_scope == ["!ebfa1b11"]   # only the owned node would alert

@@ -123,6 +123,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_config_drift": True,      # Config drift detection (tracks firmware/hardware changes)
     "enable_node_state": True,        # Node state machine (online/offline/intermittent tracking)
     "enable_analytics": True,         # Historical analytics (growth, heatmap, ranking)
+    # node_offline alert scoping. This map ingests tens of thousands of FOREIGN
+    # nodes from external feeds (meshmap.net / aredn_worldmap / meshcore_map),
+    # and firing a CRITICAL node_offline for every one that goes quiet is pure
+    # noise. List the node IDs you actually own/care about here and offline
+    # alerts fire ONLY for those. Empty = unscoped (alert all — legacy). Set the
+    # fleet/owned IDs in per-box config (global.ini / settings.json), NOT here,
+    # to keep operator-specific values out of source.
+    "owned_node_ids": [],
 }
 
 # Tile provider definitions for Leaflet.js

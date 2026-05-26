@@ -1680,6 +1680,18 @@ class MapServer:
         # Alert engine for threshold-based monitoring
         self._alert_engine = AlertEngine()
 
+        # node_offline alert scope: only fire for owned/fleet node IDs. This
+        # map tracks tens of thousands of FOREIGN external-feed nodes; without
+        # scoping, every one that goes quiet fires a CRITICAL node_offline
+        # (835k+ fired, all foreign). Empty set = unscoped (alert all, legacy).
+        self._owned_node_ids = set(_get("owned_node_ids", []) or [])
+        if self._owned_node_ids:
+            logger.info("node_offline alerts scoped to %d owned node(s)",
+                        len(self._owned_node_ids))
+        else:
+            logger.info("node_offline alerts UNSCOPED (owned_node_ids empty) — "
+                        "all tracked nodes can alert")
+
         # Periodic offline node check timer
         self._offline_check_timer: Optional[threading.Timer] = None
         self._offline_check_stop = threading.Event()
@@ -1870,6 +1882,16 @@ class MapServer:
         self._offline_check_timer.daemon = True
         self._offline_check_timer.start()
 
+    @staticmethod
+    def _offline_in_scope(node_id: str, owned_ids: set) -> bool:
+        """Whether node_id should fire a node_offline alert.
+
+        Empty owned_ids = unscoped (alert all, legacy). Otherwise only owned
+        nodes alert — foreign external-feed nodes are tracked for the map but
+        never fire CRITICAL offline alerts.
+        """
+        return (not owned_ids) or (node_id in owned_ids)
+
     def _check_offline_nodes(self) -> None:
         """Check all tracked nodes for offline transitions and fire alerts."""
         try:
@@ -1877,6 +1899,9 @@ class MapServer:
                 return
             newly_offline = self._node_state.check_offline()
             for node_id in newly_offline:
+                # Scope: skip foreign nodes (only owned/fleet IDs alert).
+                if not self._offline_in_scope(node_id, self._owned_node_ids):
+                    continue
                 info = self._node_state.get_node_info(node_id)
                 if not info:
                     continue
