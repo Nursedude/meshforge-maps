@@ -273,6 +273,44 @@ class TestPerNodeCap:
         finally:
             db.close()
 
+    def test_prune_then_move_does_not_prematurely_evict(self, tmp_path):
+        """Regression: a partial prune left the in-memory _traj_count inflated,
+        so a node that kept moving tripped the per-node cap eviction early and
+        silently retained far fewer than trajectory_rows_per_node points.
+        Existing tests cover cap and prune separately but not the interaction.
+        """
+        db = NodeHistoryDB(
+            db_path=tmp_path / "prune_cap.db",
+            retention_seconds=86400,            # 1 day
+            move_threshold_meters=0.0,          # every observation appends
+            trajectory_rows_per_node=10,        # cap above the surviving count
+        )
+        try:
+            now = int(time.time())
+            old_ts = now - 2 * 86400            # 2 days ago → prunable
+            # 5 prunable rows + 5 recent rows for one node (under the cap of 10)
+            for i in range(5):
+                db.record_observation("!n1", 10.0 + 0.001 * i, 20.0, timestamp=old_ts + i)
+            for i in range(5):
+                db.record_observation("!n1", 11.0 + 0.001 * i, 20.0, timestamp=now + i)
+            assert db._traj_count["!n1"] == 10   # cache reflects 10 rows
+
+            deleted = db.prune_old_data()        # removes the 5 old rows only
+            assert deleted == 5
+
+            # 5 rows remain; 4 more moves → 9 total, all within the cap of 10,
+            # so NONE should be evicted. With the stale-count bug the inflated
+            # counter (still 10) evicts on every append, pinning the node at 5.
+            for i in range(4):
+                db.record_observation("!n1", 12.0 + 0.001 * i, 20.0, timestamp=now + 10 + i)
+
+            remaining = db._conn.execute(
+                "SELECT COUNT(*) FROM trajectory WHERE node_id = '!n1'"
+            ).fetchone()[0]
+            assert remaining == 9, "partial prune must not cause premature eviction"
+        finally:
+            db.close()
+
 
 class TestBatchRecording:
     @pytest.fixture(autouse=True)
