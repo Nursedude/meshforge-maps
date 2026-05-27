@@ -123,6 +123,10 @@ class MapServerContext:
     api_key: Optional[str] = None
     rate_limiter: Optional[RateLimiter] = None
     enable_hsts: bool = False
+    # IPs of trusted reverse proxies. When the direct peer is one of these,
+    # the real client IP is taken from X-Forwarded-For (rightmost non-trusted
+    # hop). Empty = trust nobody, always use the socket peer (LAN/dev default).
+    trusted_proxies: frozenset = frozenset()
 
 
 class MeshForgeHTTPServer(ThreadingHTTPServer):
@@ -201,16 +205,48 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     _VALID_SOURCES = {"meshtastic", "reticulum", "aredn", "hamclock", "mqtt"}
 
     def _client_ip(self) -> str:
-        """Best-effort client IP for rate-limit and audit logging."""
+        """Best-effort real client IP for rate-limit and audit logging.
+
+        When the direct peer is a configured trusted proxy, honor
+        X-Forwarded-For: walk it right-to-left and return the first hop that
+        is NOT itself a trusted proxy (the real client as the proxy saw it).
+        XFF is trusted ONLY when the peer is trusted, so a direct client can't
+        spoof its way past the limiter by sending the header itself. Without
+        this, a TLS-terminating proxy or NAT collapses every client to one IP
+        — sharing one rate-limit bucket and masking the audit log."""
         try:
-            return self.client_address[0]
+            peer = self.client_address[0]
         except (AttributeError, IndexError, TypeError):
             return "unknown"
+        trusted = getattr(self._ctx, "trusted_proxies", frozenset())
+        if peer in trusted:
+            xff = self.headers.get("X-Forwarded-For", "")
+            hops = [h.strip() for h in xff.split(",") if h.strip()]
+            for hop in reversed(hops):
+                if hop not in trusted:
+                    return hop
+            if hops:
+                return hops[0]
+        return peer
+
+    # Liveness endpoint must never be rate-limited (a 429 reads as down to
+    # the watchdog). Static assets/pages are exempt too — the limiter exists
+    # to protect the expensive /api/* surface from scraping/DoS, not to throttle
+    # a normal page load (which, behind NAT, shares one bucket across users).
+    _RATE_LIMIT_EXEMPT_PATHS = frozenset({"/api/health"})
+
+    def _rate_limit_applies(self, path: str) -> bool:
+        p = path.rstrip("/")
+        if p in self._RATE_LIMIT_EXEMPT_PATHS:
+            return False
+        return p.startswith("/api")
 
     def _check_rate_limit(self) -> bool:
         """Consume one token; on deny, send 429 + Retry-After and return False."""
         limiter = self._ctx.rate_limiter
         if limiter is None:
+            return True
+        if not self._rate_limit_applies(urlparse(self.path).path):
             return True
         allowed, retry_after = limiter.allow(self._client_ip())
         if allowed:
@@ -1758,6 +1794,8 @@ class MapServer:
                     api_key=self._config.get("api_key"),
                     rate_limiter=rate_limiter,
                     enable_hsts=bool(self._config.get("enable_hsts", False)),
+                    trusted_proxies=frozenset(
+                        self._config.get("trusted_proxies") or []),
                 )
                 self._server = MeshForgeHTTPServer(
                     (http_host, port), MapRequestHandler, context=ctx,

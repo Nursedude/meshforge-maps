@@ -84,6 +84,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # covers a normal browser session (a page load is ~5-10 API calls) while
     # blocking unauthenticated scraping. Set to 0 to disable.
     "rate_limit_per_minute": 60,
+    # IPs of trusted reverse proxies (the TLS-terminating front the cloud
+    # deployment runs behind). When the direct peer is in this list, the real
+    # client IP is read from X-Forwarded-For for rate-limiting + auth audit;
+    # otherwise the socket peer is used. Empty = trust nobody (LAN/dev). Set
+    # in per-box config, e.g. ["127.0.0.1"] when nginx fronts the service.
+    "trusted_proxies": [],
     # Strict-Transport-Security header. Off by default because the service
     # serves plaintext HTTP on the LAN; enable only when fronted by an HTTPS
     # reverse proxy on a public deployment.
@@ -562,6 +568,15 @@ class MapsConfig:
                     errors.append("enable_hsts must be a boolean")
                     continue
                 validated[key] = value
+            elif key == "trusted_proxies":
+                if not isinstance(value, list):
+                    errors.append("trusted_proxies must be a list of IP strings")
+                    continue
+                bad = [v for v in value if not isinstance(v, str) or not v.strip()]
+                if bad:
+                    errors.append("trusted_proxies entries must be non-empty strings")
+                    continue
+                validated[key] = [v.strip() for v in value]
             elif key == "ws_allowed_origins":
                 if not isinstance(value, list):
                     errors.append("ws_allowed_origins must be a list of origin strings")

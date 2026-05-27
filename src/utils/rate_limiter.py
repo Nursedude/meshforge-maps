@@ -36,11 +36,21 @@ class RateLimiter:
     # capacity within normal use.
     _PRUNE_IDLE_SECONDS = 600
 
-    def __init__(self, requests_per_minute: int = 60) -> None:
+    # Hard ceiling on tracked IPs. Time-based pruning alone can't bound memory
+    # under a flood of DISTINCT source IPs (trivial over IPv6, or a botnet —
+    # i.e. the DoS this limiter exists to blunt): such IPs aren't idle within
+    # the prune window, so without a cap the dict grows unbounded. When a new
+    # IP would push past the cap we force an idle-prune and, if still full,
+    # evict the least-recently-seen bucket.
+    _DEFAULT_MAX_BUCKETS = 10000
+
+    def __init__(self, requests_per_minute: int = 60,
+                 max_buckets: int = _DEFAULT_MAX_BUCKETS) -> None:
         if requests_per_minute <= 0:
             raise ValueError("requests_per_minute must be positive")
         self._capacity = float(requests_per_minute)
         self._refill_per_second = self._capacity / 60.0
+        self._max_buckets = max(1, int(max_buckets))
         self._buckets: Dict[str, Tuple[float, float]] = {}
         self._lock = threading.Lock()
         self._last_prune = time.monotonic()
@@ -53,6 +63,13 @@ class RateLimiter:
         """
         now = time.monotonic()
         with self._lock:
+            # Bound memory: before admitting a brand-new IP at capacity, force
+            # an idle-prune and, if still full, evict the oldest bucket.
+            if ip not in self._buckets and len(self._buckets) >= self._max_buckets:
+                self._prune_locked(now, force=True)
+                if len(self._buckets) >= self._max_buckets:
+                    oldest = min(self._buckets, key=lambda k: self._buckets[k][1])
+                    del self._buckets[oldest]
             tokens, last = self._buckets.get(ip, (self._capacity, now))
             tokens = min(
                 self._capacity,
@@ -60,15 +77,17 @@ class RateLimiter:
             )
             if tokens >= 1.0:
                 self._buckets[ip] = (tokens - 1.0, now)
-                self._maybe_prune_locked(now)
+                self._prune_locked(now)
                 return True, 0
             self._buckets[ip] = (tokens, now)
             retry_after = max(1, int((1.0 - tokens) / self._refill_per_second) + 1)
-            self._maybe_prune_locked(now)
+            self._prune_locked(now)
             return False, retry_after
 
-    def _maybe_prune_locked(self, now: float) -> None:
-        if now - self._last_prune < self._PRUNE_IDLE_SECONDS:
+    def _prune_locked(self, now: float, force: bool = False) -> None:
+        """Drop idle buckets. Skips the work unless ``force`` or the idle
+        window has elapsed since the last prune (keeps the hot path cheap)."""
+        if not force and now - self._last_prune < self._PRUNE_IDLE_SECONDS:
             return
         self._last_prune = now
         stale = [

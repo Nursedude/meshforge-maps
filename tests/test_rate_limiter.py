@@ -70,3 +70,31 @@ class TestRateLimiterPruning:
         rl.allow("203.0.113.99")
         # Old buckets pruned; only the fresh one remains.
         assert rl.bucket_count == 1
+
+
+class TestRateLimiterBucketCap:
+    """A flood of distinct (non-idle) source IPs must not grow _buckets
+    without bound — time-based pruning alone can't catch active IPs."""
+
+    def test_bucket_count_capped_under_unique_ip_flood(self):
+        rl = RateLimiter(requests_per_minute=60, max_buckets=50)
+        # 500 distinct IPs, all "fresh" (no time advance → none are idle).
+        for i in range(500):
+            rl.allow(f"198.51.100.{i // 256}.{i % 256}")
+        assert rl.bucket_count <= 50, "bucket dict must stay bounded under flood"
+
+    def test_cap_evicts_least_recently_seen(self, monkeypatch):
+        fake_now = [1000.0]
+        monkeypatch.setattr("src.utils.rate_limiter.time.monotonic",
+                            lambda: fake_now[0])
+        rl = RateLimiter(requests_per_minute=60, max_buckets=2)
+        rl.allow("a")
+        fake_now[0] += 1
+        rl.allow("b")
+        fake_now[0] += 1
+        # "a" is now the oldest; admitting "c" must evict "a", keep "b"/"c".
+        rl.allow("c")
+        assert rl.bucket_count == 2
+        # "b" still tracked (not reset to a full fresh bucket):
+        rl.allow("b")
+        assert rl.bucket_count == 2

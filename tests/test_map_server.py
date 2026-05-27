@@ -421,6 +421,54 @@ class TestRateLimitingIntegration:
             assert e.headers.get("Retry-After") is not None
             assert int(e.headers["Retry-After"]) >= 1
 
+    def test_health_endpoint_is_never_rate_limited(self):
+        """The liveness endpoint must stay 200 past the budget — a 429 reads
+        as 'service down' to the watchdog."""
+        for _ in range(10):  # budget is 3; /api/health is exempt
+            with self.urlopen(self.base + "/api/health", timeout=5) as resp:
+                assert resp.status == 200
+
+
+class TestClientIPAndExemption:
+    """_client_ip trusted-proxy resolution + rate-limit path exemption."""
+
+    def _bare_handler(self, peer, trusted=(), xff=None):
+        import types
+        h = MapRequestHandler.__new__(MapRequestHandler)
+        h.client_address = (peer, 12345)
+        h.headers = {"X-Forwarded-For": xff} if xff is not None else {}
+        # _ctx is a read-only property → self.server.context.
+        h.server = types.SimpleNamespace(
+            context=MapServerContext(trusted_proxies=frozenset(trusted)))
+        return h
+
+    def test_peer_used_when_no_trusted_proxy(self):
+        h = self._bare_handler("203.0.113.7", trusted=(), xff="9.9.9.9")
+        assert h._client_ip() == "203.0.113.7"  # XFF ignored — peer not trusted
+
+    def test_xff_honored_behind_trusted_proxy(self):
+        h = self._bare_handler("127.0.0.1", trusted=("127.0.0.1",), xff="203.0.113.7")
+        assert h._client_ip() == "203.0.113.7"
+
+    def test_xff_skips_trusted_hops(self):
+        h = self._bare_handler("127.0.0.1", trusted=("127.0.0.1", "10.0.0.1"),
+                                xff="203.0.113.7, 10.0.0.1")
+        assert h._client_ip() == "203.0.113.7"
+
+    def test_spoofed_xff_from_untrusted_peer_ignored(self):
+        # A direct client setting its own XFF must NOT bypass its real bucket.
+        h = self._bare_handler("203.0.113.9", trusted=("127.0.0.1",), xff="1.2.3.4")
+        assert h._client_ip() == "203.0.113.9"
+
+    def test_rate_limit_exempts_health_and_static(self):
+        h = MapRequestHandler.__new__(MapRequestHandler)
+        assert h._rate_limit_applies("/api/status") is True
+        assert h._rate_limit_applies("/api/nodes/geojson") is True
+        assert h._rate_limit_applies("/api/health") is False
+        assert h._rate_limit_applies("/api/health/") is False
+        assert h._rate_limit_applies("/") is False
+        assert h._rate_limit_applies("/app.js") is False
+
 
 class TestSecurityHeaders:
     """HSTS is opt-in via enable_hsts; default is no header."""
