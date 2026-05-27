@@ -721,6 +721,18 @@ class NodeHistoryDB:
                 if deleted:
                     logger.info("Pruned %d old trajectory rows", deleted)
                     self._count_cache_time = float("-inf")
+                    # A prune can remove SOME (not all) of a node's rows, so
+                    # the in-memory per-node trajectory caches are now stale.
+                    # A stale (inflated) _traj_count trips the per-node cap
+                    # eviction EARLY and silently under-retains a moving node's
+                    # trajectory — it caps well below trajectory_rows_per_node.
+                    # Clear both caches; the write path re-primes each node
+                    # lazily from the DB (latest position + real COUNT) on its
+                    # next observation. This also retires the previous
+                    # cleanup loop, which issued one SELECT per cached node
+                    # under the lock yet only fixed FULLY-pruned nodes.
+                    self._last_traj_pos.clear()
+                    self._traj_count.clear()
                 # Keep checkpointing — incremental_vacuum + wal_checkpoint
                 # are cheap and prevent WAL growth even when prune is a no-op.
                 try:
@@ -731,26 +743,6 @@ class NodeHistoryDB:
                     self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 except Exception as we:
                     logger.warning("WAL checkpoint failed: %s", we)
-                # Drop stale entries from the in-memory trajectory caches
-                # for nodes whose latest trajectory row was pruned. Looking
-                # up the new latest position lazily on next write is cheaper
-                # than tracking it here.
-                stale = []
-                for nid in list(self._last_traj_pos.keys()):
-                    has_any = self._conn.execute(
-                        "SELECT 1 FROM trajectory WHERE node_id = ? LIMIT 1",
-                        (nid,),
-                    ).fetchone()
-                    if not has_any:
-                        stale.append(nid)
-                for nid in stale:
-                    self._last_traj_pos.pop(nid, None)
-                    self._traj_count.pop(nid, None)
-                if stale:
-                    logger.debug(
-                        "Cleared trajectory caches for %d fully-pruned nodes",
-                        len(stale),
-                    )
                 return deleted
             except Exception as e:
                 logger.error("Prune failed: %s", e)
