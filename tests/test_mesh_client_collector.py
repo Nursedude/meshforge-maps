@@ -2,6 +2,7 @@
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 
 from src.collectors.base import ONLINE_THRESHOLDS
 from src.collectors.mesh_client_collector import MeshClientCollector
@@ -12,7 +13,8 @@ def _writer_feature(node_id="!a1b2c3d4", lon=-122.4194, lat=37.7749,
                     last_heard=None, **props):
     """Build one feature in the writer's (meshing_around) shape."""
     if last_heard is None:
-        last_heard = time.time()
+        # Match the real writer (get_geojson): last_heard is an ISO-8601 string.
+        last_heard = datetime.now(timezone.utc).isoformat()
     p = {
         "node_id": node_id,
         "name": "Node A",
@@ -151,20 +153,64 @@ class TestMeshClientCollectorValidation:
 
 
 class TestMeshClientCollectorOnlineThreshold:
-    def test_recent_last_heard_online(self, tmp_path):
+    def _is_online(self, tmp_path, last_heard):
         f = tmp_path / "nodes.geojson"
-        _write(f, _snapshot([_writer_feature(last_heard=time.time())]))
-        fc = MeshClientCollector(path=str(f))._fetch()
-        assert fc["features"][0]["properties"]["is_online"] is True
+        _write(f, _snapshot([_writer_feature(last_heard=last_heard)]))
+        props = MeshClientCollector(path=str(f))._fetch()["features"][0]["properties"]
+        return props.get("is_online")
 
-    def test_old_last_heard_offline(self, tmp_path):
+    # Real writer format: ISO-8601 strings. Regression for the live-caught bug
+    # where is_node_online(float(iso)) raised -> is_online was always None.
+    def test_iso_recent_online(self, tmp_path):
+        assert self._is_online(tmp_path, datetime.now(timezone.utc).isoformat()) is True
+
+    def test_iso_old_offline(self, tmp_path):
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        assert self._is_online(tmp_path, old) is False
+
+    def test_iso_z_suffix_parsed(self, tmp_path):
+        iso_z = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        assert self._is_online(tmp_path, iso_z) is True
+
+    # Numeric epoch (and numeric string) must keep working.
+    def test_epoch_recent_online(self, tmp_path):
+        assert self._is_online(tmp_path, time.time()) is True
+
+    def test_epoch_old_offline(self, tmp_path):
+        assert self._is_online(tmp_path, time.time() - 100000) is False
+
+    def test_missing_last_heard_unknown(self, tmp_path):
+        # No last_heard -> is_online unknown (None), never falsely online.
+        # make_feature strips None, so the property is simply absent.
         f = tmp_path / "nodes.geojson"
-        _write(f, _snapshot([_writer_feature(last_heard=time.time() - 100000)]))
-        fc = MeshClientCollector(path=str(f))._fetch()
-        assert fc["features"][0]["properties"]["is_online"] is False
+        feat = _writer_feature()
+        feat["properties"]["last_heard"] = None
+        _write(f, _snapshot([feat]))
+        props = MeshClientCollector(path=str(f))._fetch()["features"][0]["properties"]
+        assert "is_online" not in props
 
     def test_threshold_registered(self):
         assert ONLINE_THRESHOLDS["mesh_client"] == 900
+
+
+class TestToEpoch:
+    def test_iso_with_offset(self):
+        ts = MeshClientCollector._to_epoch("2026-06-21T04:10:19.295239+00:00")
+        assert isinstance(ts, float) and ts > 0
+
+    def test_iso_with_z(self):
+        ts = MeshClientCollector._to_epoch("2026-06-21T04:10:19Z")
+        assert isinstance(ts, float) and ts > 0
+
+    def test_numeric_passthrough(self):
+        assert MeshClientCollector._to_epoch(1750000000) == 1750000000.0
+        assert MeshClientCollector._to_epoch("1750000000") == 1750000000.0
+
+    def test_none_and_junk_return_none(self):
+        assert MeshClientCollector._to_epoch(None) is None
+        assert MeshClientCollector._to_epoch("") is None
+        assert MeshClientCollector._to_epoch("not-a-date") is None
+        assert MeshClientCollector._to_epoch(True) is None
 
 
 class TestMeshClientCollectorStaleSkip:

@@ -31,6 +31,7 @@ Design notes:
 import json
 import logging
 import os
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from .base import (
@@ -152,7 +153,9 @@ class MeshClientCollector(BaseCollector):
         if not isinstance(node_id, str) or not NODE_ID_RE.match(node_id):
             return None
 
-        last_heard = props.get("last_heard")
+        # The writer emits last_heard as an ISO-8601 string, but is_node_online()
+        # and the rest of the pipeline use numeric epochs — coerce it.
+        last_heard = self._to_epoch(props.get("last_heard"))
         name = (
             props.get("long_name")
             or props.get("name")
@@ -179,3 +182,36 @@ class MeshClientCollector(BaseCollector):
             channel_utilization=props.get("channel_utilization"),
             quality_percent=props.get("quality_percent"),
         )
+
+    @staticmethod
+    def _to_epoch(value: Any) -> Optional[float]:
+        """Coerce the writer's last_heard to a Unix epoch float.
+
+        meshing_around's get_geojson() emits last_heard as an ISO-8601 string
+        (``node.last_heard.isoformat()``), but ``is_node_online()`` and the map
+        pipeline use numeric epochs. Accepts ISO-8601, a numeric epoch, or a
+        numeric string; returns None for missing/empty/unparseable values (so a
+        node with no last_heard reads as "unknown", never falsely online).
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            # bool is an int subclass — a stray True/False is not a timestamp.
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return None
+            try:
+                return float(s)  # numeric epoch as a string
+            except ValueError:
+                pass
+            try:
+                # fromisoformat handles offsets + microseconds on 3.9; normalize
+                # a trailing 'Z' which it only accepts natively from 3.11.
+                return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+            except (ValueError, TypeError):
+                return None
+        return None
