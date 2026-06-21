@@ -10,6 +10,7 @@ from ..helpers import (
     _event_type_color,
     _format_ts,
     safe_addstr,
+    safe_str,
 )
 
 
@@ -36,18 +37,24 @@ def draw_events(win: Any, top: int, height: int, cols: int,
     lines: List[Tuple[str, int]] = []
     lines.append(("", 0))
 
+    # Drop any non-dict frame up front: the WebSocket ingest appends raw
+    # json.loads() output, so a non-object frame (array/string/number/null)
+    # would crash every .get() below and blank the whole tab until it ages
+    # out of the deque. (alerts.py guards per-row; here we filter once.)
+    events = [e for e in events if isinstance(e, dict)]
+
     # Apply type filter
     if event_type_filter:
         events = [e for e in events
-                  if event_type_filter in e.get("type", "")]
+                  if event_type_filter in safe_str(e.get("type"), "")]
 
     # Apply search filter
     if search_query:
         q = search_query.lower()
         events = [e for e in events
-                  if q in e.get("type", "").lower()
-                  or q in e.get("node_id", "").lower()
-                  or q in e.get("source", "").lower()
+                  if q in safe_str(e.get("type"), "").lower()
+                  or q in safe_str(e.get("node_id"), "").lower()
+                  or q in safe_str(e.get("source"), "").lower()
                   or q in str(e.get("data", "")).lower()]
 
     lines.append((" EVENT STREAM", curses.A_BOLD | curses.A_UNDERLINE))
@@ -73,9 +80,9 @@ def draw_events(win: Any, top: int, height: int, cols: int,
         for evt in reversed(events):
             ts = evt.get("timestamp", 0)
             time_str = _format_ts(ts)
-            etype = evt.get("type", "?")
-            source = evt.get("source", "")[:8]
-            node_id = evt.get("node_id", "")[:12]
+            etype = safe_str(evt.get("type", "?"), "?")
+            source = safe_str(evt.get("source", ""), "")[:8]
+            node_id = safe_str(evt.get("node_id", ""), "")[:12]
             # Build detail string from data
             data = evt.get("data", {})
             detail_parts = []

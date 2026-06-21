@@ -8,6 +8,7 @@ from ..helpers import (
     CP_SOURCE_OFFLINE,
     CP_SOURCE_ONLINE,
     safe_addstr,
+    safe_str,
 )
 
 
@@ -18,7 +19,9 @@ def draw_system(win: Any, top: int, height: int, cols: int,
     lines.append(("", 0))
 
     deps = cache.get("dependencies") or {}
-    packages = deps.get("packages", [])
+    # `or []` guards a present-but-null "packages"; isinstance drops any non-dict
+    # element so the pkg.get() loops below can't raise AttributeError.
+    packages = [p for p in (deps.get("packages") or []) if isinstance(p, dict)]
 
     # Find meshtastic package entry
     mesh_pkg = None
@@ -56,7 +59,7 @@ def draw_system(win: Any, top: int, height: int, cols: int,
         lines.append(("  (dependency info unavailable)", 0))
 
     if protobuf_pkg:
-        pb_ver = protobuf_pkg.get("installed_version", "not installed")
+        pb_ver = safe_str(protobuf_pkg.get("installed_version"), "not installed")
         lines.append((f"  Protobuf:  {pb_ver}", 0))
 
     lines.append(("", 0))
@@ -78,7 +81,7 @@ def draw_system(win: Any, top: int, height: int, cols: int,
     # ── Optional Dependencies ──
     lines.append((" OPTIONAL DEPENDENCIES", curses.A_BOLD | curses.A_UNDERLINE))
     for pkg in packages:
-        name = pkg.get("name", "?")
+        name = safe_str(pkg.get("name", "?"), "?")
         installed = pkg.get("installed_version")
         if installed:
             indicator = "OK "

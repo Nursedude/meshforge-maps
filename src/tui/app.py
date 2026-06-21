@@ -843,6 +843,12 @@ class TuiApp:
 
     def _on_ws_message(self, msg: Dict[str, Any]) -> None:
         """Handle an incoming WebSocket message — add to event log and update cache."""
+        # Only enqueue object frames: the Events tab calls .get() on every
+        # entry, so a non-dict frame (array/string/number/null) would poison
+        # the deque and blank the tab until it ages out. Drop it at ingest.
+        if not isinstance(msg, dict):
+            logger.debug("Dropping non-dict WS frame: %r", type(msg).__name__)
+            return
         with self._data_lock:
             self._event_log.append(msg)
 

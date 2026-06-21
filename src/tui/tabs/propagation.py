@@ -13,6 +13,8 @@ from ..helpers import (
     CP_HIGHLIGHT,
     CP_SOURCE_ONLINE,
     safe_addstr,
+    safe_num,
+    safe_str,
 )
 
 
@@ -71,8 +73,8 @@ def draw_propagation(win: Any, top: int, height: int, cols: int,
         lines.append((col_hdr, curses.color_pair(CP_HIGHLIGHT)))
         for band, info in voacap["bands"].items():
             if isinstance(info, dict):
-                rel = info.get("reliability", 0)
-                status = info.get("status", "?")
+                rel = safe_num(info, "reliability")
+                status = safe_str(info.get("status", "?"), "?")
                 marker = " << BEST" if band == best else ""
                 # Color by reliability
                 if rel >= 70:
@@ -81,7 +83,7 @@ def draw_propagation(win: Any, top: int, height: int, cols: int,
                     ba = curses.color_pair(CP_HEALTH_FAIR)
                 else:
                     ba = curses.color_pair(CP_HEALTH_POOR)
-                lines.append((f"  {band:<10}{rel:>10}%  {status:<12}{marker}", ba))
+                lines.append((f"  {band:<10}{rel:>10.0f}%  {status:<12}{marker}", ba))
         lines.append(("", 0))
 
     # Band conditions
@@ -109,11 +111,11 @@ def draw_propagation(win: Any, top: int, height: int, cols: int,
         lines.append((col_hdr, curses.color_pair(CP_HIGHLIGHT)))
         for s in spots[:20]:
             if isinstance(s, dict):
-                dx = s.get("dx_call", "?")
-                freq = s.get("freq_khz", "?")
-                de = s.get("de_call", "")
-                utc = s.get("utc", "")
-                lines.append((f"  {dx:<12}{str(freq):>10}  {de:<12}{utc:<8}", 0))
+                dx = safe_str(s.get("dx_call", "?"), "?")
+                freq = safe_str(s.get("freq_khz", "?"), "?")
+                de = safe_str(s.get("de_call", ""), "")
+                utc = safe_str(s.get("utc", ""), "")
+                lines.append((f"  {dx:<12}{freq:>10}  {de:<12}{utc:<8}", 0))
 
     # DE / DX station info
     de = hc.get("de_station", {})
