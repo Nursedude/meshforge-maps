@@ -11,6 +11,8 @@ from ..helpers import (
     _format_ts,
     health_color,
     safe_addstr,
+    safe_num,
+    safe_str,
     severity_color,
 )
 
@@ -44,10 +46,10 @@ def build_node_rows(cache: Dict[str, Any],
         name = props.get("name", props.get("long_name", nid))
         source = props.get("source", props.get("network", "?"))
         h = health_map.get(nid, {})
-        score = h.get("score", h.get("total_score", -1))
-        label = h.get("label", h.get("status", ""))
+        score = safe_num(h, "score", "total_score", default=-1)
+        label = safe_str(h.get("label", h.get("status", "")), "")
         s = state_map.get(nid, {})
-        state = s.get("state", "?")
+        state = safe_str(s.get("state", "?"), "?")
         node_rows.append({
             "full_id": str(nid),
             "id": str(nid)[:12],
@@ -217,8 +219,8 @@ def draw_node_detail(win: Any, top: int, height: int, cols: int,
     detail_health = cache.get("detail_health") or {}
     if detail_health:
         lines.append((" HEALTH SCORE", curses.A_BOLD | curses.A_UNDERLINE))
-        total_score = detail_health.get("score", detail_health.get("total_score", -1))
-        status = detail_health.get("status", detail_health.get("label", "?"))
+        total_score = safe_num(detail_health, "score", "total_score", default=-1)
+        status = safe_str(detail_health.get("status", detail_health.get("label", "?")), "?")
         lines.append((f"  Overall: {total_score:.0f}/100  ({status})",
                        health_color(status)))
 
@@ -228,8 +230,8 @@ def draw_node_detail(win: Any, top: int, height: int, cols: int,
             lines.append(("  Component Breakdown:", curses.A_BOLD))
             for comp_name, comp_data in components.items():
                 if isinstance(comp_data, dict):
-                    c_score = comp_data.get("score", 0)
-                    c_max = comp_data.get("max", 0)
+                    c_score = safe_num(comp_data, "score")
+                    c_max = safe_num(comp_data, "max")
                     pct = (c_score / c_max * 100) if c_max > 0 else 0
                     bar_w = min(20, cols - 45)
                     filled = int(pct / 100 * bar_w) if bar_w > 0 else 0
@@ -239,7 +241,7 @@ def draw_node_detail(win: Any, top: int, height: int, cols: int,
                         if k not in ("score", "max"):
                             detail_parts.append(f"{k}={v}")
                     detail_str = "  ".join(detail_parts)
-                    lines.append((f"  {comp_name:<12} {c_score:>5.1f}/{c_max:<4} "
+                    lines.append((f"  {comp_name:<12} {c_score:>5.1f}/{c_max:<4.0f} "
                                   f"[{bar}]", 0))
                     if detail_str:
                         lines.append((f"    {detail_str}", curses.A_DIM))
@@ -259,13 +261,13 @@ def draw_node_detail(win: Any, top: int, height: int, cols: int,
         for obs in observations[:20]:
             ts = obs.get("timestamp", 0)
             time_str = _format_ts(ts)
-            lat = obs.get("latitude", 0)
-            lon = obs.get("longitude", 0)
+            lat = safe_num(obs, "latitude")
+            lon = safe_num(obs, "longitude")
             snr = obs.get("snr")
             batt = obs.get("battery")
             net = obs.get("network", "?")
-            snr_str = f"{snr:>5.1f}" if snr is not None else "    -"
-            batt_str = f"{batt:>4}%" if batt is not None else "    -"
+            snr_str = f"{snr:>5.1f}" if isinstance(snr, (int, float)) else "    -"
+            batt_str = f"{batt:>4}%" if isinstance(batt, (int, float)) else "    -"
             lines.append((f"  {time_str:<10}{lat:>10.5f}{lon:>11.5f}"
                           f"{snr_str}{batt_str} {net}", 0))
     else:
@@ -283,7 +285,7 @@ def draw_node_detail(win: Any, top: int, height: int, cols: int,
             field = d.get("field", "?")
             old = d.get("old_value", "?")
             new = d.get("new_value", "?")
-            sev = d.get("severity", "info")
+            sev = safe_str(d.get("severity", "info"), "info")
             ts = d.get("timestamp", 0)
             time_str = _format_ts(ts)
             lines.append((f"  [{sev.upper():<8}] {field}: {old} -> {new}  ({time_str})",
@@ -299,9 +301,9 @@ def draw_node_detail(win: Any, top: int, height: int, cols: int,
     if alert_list:
         for al in alert_list[:15]:
             if isinstance(al, dict):
-                sev = al.get("severity", "info")
-                atype = al.get("alert_type", al.get("type", "?"))
-                msg = al.get("message", "")[:50]
+                sev = safe_str(al.get("severity", "info"), "info")
+                atype = safe_str(al.get("alert_type", al.get("type", "?")), "?")
+                msg = safe_str(al.get("message", ""), "")[:50]
                 ts = al.get("timestamp", 0)
                 time_str = _format_ts(ts)
                 lines.append((f"  [{sev.upper():<8}] {atype:<20} {time_str}  {msg}",

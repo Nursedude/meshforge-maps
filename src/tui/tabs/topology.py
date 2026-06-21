@@ -11,7 +11,23 @@ from ..helpers import (
     CP_HIGHLIGHT,
     _quality_color,
     safe_addstr,
+    safe_str,
 )
+
+
+def _as_snr(value: Any) -> Any:
+    """Coerce a link SNR to a float, or None when absent / null / non-numeric.
+
+    Keeping a real ``None`` (rather than collapsing to 0) lets the table sort
+    rank missing links last and lets the display show ``--`` for "no reading"
+    while still showing a genuine ``0.0 dB`` link — and never crashes a float
+    format spec on a string/null SNR.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def draw_topology(win: Any, top: int, height: int, cols: int,
@@ -40,8 +56,8 @@ def draw_topology(win: Any, top: int, height: int, cols: int,
         props = feat.get("properties", {})
         src = str(props.get("source", ""))
         tgt = str(props.get("target", ""))
-        snr = props.get("snr", 0)
-        quality = props.get("quality", "unknown")
+        snr = _as_snr(props.get("snr"))
+        quality = safe_str(props.get("quality", "unknown"), "unknown")
         if src and tgt:
             links.append({"source": src, "target": tgt, "snr": snr,
                           "quality": quality})
@@ -82,9 +98,10 @@ def draw_topology(win: Any, top: int, height: int, cols: int,
             lines.append((f"  [{name}] ({conn_count} links)",
                            curses.A_BOLD))
 
-            for tgt_id, snr, quality in sorted(neighbors,
-                                                key=lambda x: x[1],
-                                                reverse=True):
+            for tgt_id, snr, quality in sorted(
+                    neighbors,
+                    key=lambda x: x[1] if x[1] is not None else float("-inf"),
+                    reverse=True):
                 tgt_name = node_names.get(tgt_id, str(tgt_id)[:8])
                 # Pick link style based on quality
                 if quality == "excellent":
@@ -103,7 +120,7 @@ def draw_topology(win: Any, top: int, height: int, cols: int,
                     link_char = "???"
                     la = curses.A_DIM
 
-                snr_str = f"{snr:>5.1f}dB" if snr else "   --  "
+                snr_str = f"{snr:>5.1f}dB" if snr is not None else "   --  "
                 lines.append((f"    {link_char}{link_char} {tgt_name:<14} "
                               f"SNR:{snr_str}", la))
 
@@ -114,14 +131,16 @@ def draw_topology(win: Any, top: int, height: int, cols: int,
         link_hdr = f"  {'Source':<14}{'Target':<14}{'SNR':>8}  {'Quality':<12}"
         lines.append((link_hdr, curses.color_pair(CP_HIGHLIGHT)))
 
-        sorted_links = sorted(links, key=lambda link: link.get("snr", 0),
-                              reverse=True)
+        sorted_links = sorted(
+            links,
+            key=lambda link: link["snr"] if link["snr"] is not None else float("-inf"),
+            reverse=True)
         for lk in sorted_links:
             src_name = node_names.get(lk["source"], lk["source"][:10])
             tgt_name = node_names.get(lk["target"], lk["target"][:10])
-            snr = lk.get("snr", 0)
+            snr = lk["snr"]
             quality = lk.get("quality", "?")
-            snr_str = f"{snr:>7.1f}" if snr else "     --"
+            snr_str = f"{snr:>7.1f}" if snr is not None else "     --"
             la = _quality_color(quality)
             lines.append((f"  {src_name:<14}{tgt_name:<14}{snr_str}  "
                           f"{quality:<12}", la))

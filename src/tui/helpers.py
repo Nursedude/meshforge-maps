@@ -75,7 +75,39 @@ def severity_color(severity: str) -> int:
     return curses.color_pair(mapping.get(severity, CP_NORMAL))
 
 
-def safe_addstr(win: Any, y: int, x: int, text: str,
+def safe_num(d: Any, *keys: str, default: float = 0) -> float:
+    """Return the first present, non-null, *numeric* value among ``keys`` in ``d``.
+
+    Guards the pervasive ``d.get("k", 0)`` idiom: ``dict.get`` only substitutes
+    the default when the key is *absent*, never when it is present with a JSON
+    ``null`` (-> ``None``) or a wrong-typed value. That ``None`` then crashes a
+    downstream format spec / comparison / arithmetic and blanks the whole tab
+    via the renderer's ``_safe_draw_tab`` wrapper. ``bool`` is rejected (it is an
+    ``int`` subclass but never a real numeric metric here).
+    """
+    if isinstance(d, dict):
+        for key in keys:
+            value = d.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value
+    return default
+
+
+def safe_str(value: Any, default: str = "-") -> str:
+    """Coerce an API value to a display-safe ``str``.
+
+    ``None`` -> ``default``; a ``str`` passes through; anything else is
+    ``str()``-wrapped. Guards string fields (state, label, severity, message,
+    source, node_id, type) that are otherwise handed straight to ``.lower()`` /
+    ``.upper()`` / slicing / a width format spec and crash on a JSON ``null`` or
+    non-``str`` value.
+    """
+    if value is None:
+        return default
+    return value if isinstance(value, str) else str(value)
+
+
+def safe_addstr(win: Any, y: int, x: int, text: Any,
                 attr: int = 0, max_width: int = 0) -> None:
     """Write text to curses window, clipping to avoid curses errors."""
     rows, cols = win.getmaxyx()
@@ -86,20 +118,33 @@ def safe_addstr(win: Any, y: int, x: int, text: str,
         available = min(available, max_width)
     if available <= 0:
         return
-    clipped = text[:available]
+    # Last-resort coercion: a non-str slipping through (None/number) would raise
+    # in the slice below and blank the tab; str() keeps the frame alive.
+    clipped = (text if isinstance(text, str) else str(text))[:available]
     try:
         win.addstr(y, x, clipped, attr)
     except curses.error:
         pass
 
 
-def _format_ts(ts: float) -> str:
-    """Format a unix timestamp as HH:MM:SS."""
+def _format_ts(ts: Any) -> str:
+    """Format a unix timestamp as HH:MM:SS, tolerating null/string/bad values.
+
+    The maps backend can hand back a timestamp as a number, a numeric string, an
+    ISO-8601 string, or null. ``time.localtime`` raises ``TypeError`` (not just
+    OSError/ValueError) on a non-numeric arg, so a single string timestamp would
+    otherwise blank the whole Alerts/Events tab.
+    """
     if not ts:
         return "--:--:--"
+    if isinstance(ts, str):
+        try:
+            ts = float(ts)
+        except ValueError:
+            return "??:??:??"
     try:
         return time.strftime("%H:%M:%S", time.localtime(ts))
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError, OverflowError):
         return "??:??:??"
 
 

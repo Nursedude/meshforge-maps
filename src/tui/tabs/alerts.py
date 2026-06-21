@@ -9,6 +9,7 @@ from ..helpers import (
     CP_SOURCE_ONLINE,
     _format_ts,
     safe_addstr,
+    safe_str,
     severity_color,
 )
 
@@ -26,16 +27,16 @@ def draw_alerts(win: Any, top: int, height: int, cols: int,
     # Apply search filter to alerts
     if search_query:
         q = search_query.lower()
-        alert_list = [a for a in alert_list if isinstance(a, dict) and (
-            q in a.get("alert_type", "").lower()
-            or q in a.get("severity", "").lower()
-            or q in a.get("node_id", "").lower()
-            or q in a.get("message", "").lower())]
-        active_list = [a for a in active_list if isinstance(a, dict) and (
-            q in a.get("alert_type", "").lower()
-            or q in a.get("severity", "").lower()
-            or q in a.get("node_id", "").lower()
-            or q in a.get("message", "").lower())]
+
+        def _matches(a: Any) -> bool:
+            return isinstance(a, dict) and (
+                q in safe_str(a.get("alert_type"), "").lower()
+                or q in safe_str(a.get("severity"), "").lower()
+                or q in safe_str(a.get("node_id"), "").lower()
+                or q in safe_str(a.get("message"), "").lower())
+
+        alert_list = [a for a in alert_list if _matches(a)]
+        active_list = [a for a in active_list if _matches(a)]
 
     lines: List[Tuple[str, int]] = []
 
@@ -51,10 +52,10 @@ def draw_alerts(win: Any, top: int, height: int, cols: int,
         lines.append((" ACTIVE ALERTS", curses.A_BOLD | curses.A_UNDERLINE))
         for al in active_list:
             if isinstance(al, dict):
-                sev = al.get("severity", "info")
-                atype = al.get("alert_type", al.get("type", "?"))
-                node = al.get("node_id", "?")
-                msg = al.get("message", al.get("description", ""))
+                sev = safe_str(al.get("severity", "info"), "info")
+                atype = safe_str(al.get("alert_type", al.get("type", "?")), "?")
+                node = safe_str(al.get("node_id", "?"), "?")
+                msg = safe_str(al.get("message", al.get("description", "")), "")
                 ts = al.get("timestamp", 0)
                 time_str = _format_ts(ts)
                 prefix = f"  [{sev.upper():<8}]"
@@ -71,13 +72,13 @@ def draw_alerts(win: Any, top: int, height: int, cols: int,
 
     for al in alert_list:
         if isinstance(al, dict):
-            sev = al.get("severity", "info")
-            atype = al.get("alert_type", al.get("type", "?"))
-            node = al.get("node_id", "?")
-            msg = al.get("message", al.get("description", ""))[:40]
+            sev = safe_str(al.get("severity", "info"), "info")
+            atype = safe_str(al.get("alert_type", al.get("type", "?")), "?")
+            node = safe_str(al.get("node_id", "?"), "?")
+            msg = safe_str(al.get("message", al.get("description", "")), "")[:40]
             ts = al.get("timestamp", 0)
             time_str = _format_ts(ts)
-            row = f"  {sev:<10}{atype:<22}{str(node):<14}{time_str:<12}{msg}"
+            row = f"  {sev:<10}{atype:<22}{node:<14}{time_str:<12}{msg}"
             lines.append((row, severity_color(sev)))
 
     if not alert_list:
@@ -91,10 +92,10 @@ def draw_alerts(win: Any, top: int, height: int, cols: int,
         lines.append((" ALERT RULES", curses.A_BOLD | curses.A_UNDERLINE))
         for rule in rules_list:
             if isinstance(rule, dict):
-                rid = rule.get("rule_id", "?")
+                rid = safe_str(rule.get("rule_id", "?"), "?")
                 enabled = rule.get("enabled", True)
-                rtype = rule.get("alert_type", "?")
-                sev = rule.get("severity", "?")
+                rtype = safe_str(rule.get("alert_type", "?"), "?")
+                sev = safe_str(rule.get("severity", "?"), "?")
                 metric = rule.get("metric", "?")
                 op = rule.get("operator", "?")
                 thresh = rule.get("threshold", "?")

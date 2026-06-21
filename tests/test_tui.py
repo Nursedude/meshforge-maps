@@ -1129,3 +1129,279 @@ class TestEventsPauseResume:
         app._stdscr.getch.return_value = ord("f")
         app._handle_input()
         assert app._event_type_filter is None
+
+
+# ── Null / malformed API data hardening ────────────────────────────
+#
+# The maps backend can return a field as JSON null (e.g. an unscored node's
+# `average_score`, a link with no `snr`) or as a string timestamp. The
+# `d.get("k", 0)` idiom only substitutes the default for an *absent* key, not a
+# *present-but-null* one, so that None used to reach a format spec / comparison /
+# arithmetic and raise — which `_safe_draw_tab` turns into a blanked tab. These
+# tests pin the safe_num / safe_str / _format_ts coercion so a single null field
+# can never blank a whole tab. (This surface is omitted from coverage, so these
+# are net-new safety nets.)
+
+class TestHelperCoercion:
+    """Unit tests for the safe_num / safe_str / _format_ts guards."""
+
+    def test_safe_num_present_value(self):
+        from src.tui.helpers import safe_num
+        assert safe_num({"a": 5}, "a") == 5
+        assert safe_num({"a": 3.5}, "a") == 3.5
+
+    def test_safe_num_null_value_uses_default(self):
+        from src.tui.helpers import safe_num
+        # Present-but-null is the bug: dict.get would return None, not the default.
+        assert safe_num({"a": None}, "a") == 0
+        assert safe_num({"a": None}, "a", default=-1) == -1
+
+    def test_safe_num_missing_key_uses_default(self):
+        from src.tui.helpers import safe_num
+        assert safe_num({}, "a") == 0
+
+    def test_safe_num_fallback_keys(self):
+        from src.tui.helpers import safe_num
+        # First present, non-null, numeric wins; null is skipped to the next key.
+        assert safe_num({"average_score": None, "avg_score": 7}, "average_score", "avg_score") == 7
+
+    def test_safe_num_rejects_bool_and_str(self):
+        from src.tui.helpers import safe_num
+        assert safe_num({"a": True}, "a") == 0          # bool is not a real metric
+        assert safe_num({"a": "12"}, "a", default=-1) == -1  # numeric string is not a number
+
+    def test_safe_num_non_dict(self):
+        from src.tui.helpers import safe_num
+        assert safe_num(None, "a") == 0
+
+    def test_safe_str_passthrough_and_none(self):
+        from src.tui.helpers import safe_str
+        assert safe_str("hi") == "hi"
+        assert safe_str(None) == "-"
+        assert safe_str(None, "") == ""
+        assert safe_str(42) == "42"
+
+    def test_format_ts_tolerates_bad_values(self):
+        from src.tui.helpers import _format_ts
+        assert _format_ts(0) == "--:--:--"
+        assert _format_ts(None) == "--:--:--"
+        # Numeric string is parsed; non-numeric / wrong-type never raises.
+        assert _format_ts("not-a-time") == "??:??:??"
+        assert _format_ts({"bad": 1}) == "??:??:??"
+        assert ":" in _format_ts(1700000000)
+        assert ":" in _format_ts("1700000000")
+
+
+class TestNullDataHardening:
+    """Every tab must render — not blank — when API fields are null/malformed."""
+
+    def test_dashboard_null_fields_no_crash(self):
+        app = _make_app_with_screen()
+        cache = {
+            "status": {"version": None, "port": None, "uptime": None},
+            "sources": {"mqtt": {"enabled": True, "available": True, "node_count": None}},
+            "node_health_summary": {"average_score": None, "total_nodes": None,
+                                    "distribution": {"excellent": None, "good": None}},
+            "node_states_summary": {"distribution": {"stable": None, "offline": None}},
+            "alert_summary": {"total": None, "active": None,
+                              "by_severity": {"critical": None}},
+            "mqtt": {"running": True, "messages_total": None, "nodes_tracked": None},
+            "perf": {"cache": {"hits": None, "misses": None, "hit_ratio": None},
+                     "latency": {"avg": None, "p99": None}},
+        }
+        mc = _mock_curses()
+        with patch("src.tui.tabs.dashboard.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_dashboard(1, 38, 120, cache)  # must not raise
+
+    def test_nodes_null_fields_no_crash(self):
+        app = _make_app_with_screen()
+        cache = {
+            "nodes": {"features": [
+                {"properties": {"id": "!n1", "name": None, "source": None}}]},
+            "all_node_health": {"!n1": {"score": None, "label": None}},
+            "all_node_states": {"nodes": {"!n1": {"state": None}}},
+        }
+        mc = _mock_curses()
+        with patch("src.tui.tabs.nodes.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_nodes(1, 38, 120, cache)  # must not raise
+
+    def test_nodes_search_on_null_string_fields_no_crash(self):
+        # Search calls .lower() on state/label — null there used to AttributeError.
+        app = _make_app_with_screen()
+        app._search_query = "x"
+        cache = {
+            "nodes": {"features": [
+                {"properties": {"id": "!n1", "name": None, "source": None}}]},
+            "all_node_health": {"!n1": {"score": 50, "label": None}},
+            "all_node_states": {"nodes": {"!n1": {"state": None}}},
+        }
+        mc = _mock_curses()
+        with patch("src.tui.tabs.nodes.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_nodes(1, 38, 120, cache)  # must not raise
+
+    def test_node_detail_null_fields_no_crash(self):
+        app = _make_app_with_screen()
+        app._detail_node_id = "!n1"
+        cache = {
+            "nodes": {"features": [
+                {"properties": {"id": "!n1", "name": None, "source": None}}]},
+            "all_node_health": {"!n1": {"score": None}},
+            "all_node_states": {"nodes": {"!n1": {"state": None}}},
+            "detail_health": {"score": None, "status": None,
+                              "components": {"battery": {"score": None, "max": None}}},
+            "detail_history": {"observations": [
+                {"timestamp": None, "latitude": None, "longitude": None,
+                 "snr": None, "battery": None, "network": None}]},
+            "detail_alerts": {"alerts": [
+                {"severity": None, "alert_type": None, "message": None,
+                 "timestamp": None}]},
+            "config_drift": {"recent_drifts": [
+                {"node_id": "!n1", "field": None, "old_value": None,
+                 "new_value": None, "severity": None, "timestamp": None}]},
+        }
+        mc = _mock_curses()
+        with patch("src.tui.tabs.nodes.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_node_detail(1, 38, 120, cache)  # must not raise
+
+    def test_topology_null_and_string_snr_no_crash_and_zero_db_shows(self):
+        app = _make_app_with_screen()
+        cache = {
+            "topo": {"features": [
+                {"properties": {"source": "!a", "target": "!b",
+                                "snr": None, "quality": None}},
+                {"properties": {"source": "!b", "target": "!c",
+                                "snr": "8.5", "quality": "good"}},
+                {"properties": {"source": "!a", "target": "!c",
+                                "snr": 0, "quality": "poor"}},
+            ]},
+            "nodes": {"features": [{"properties": {"id": "!a", "name": None}}]},
+        }
+        mc = _mock_curses()
+        with patch("src.tui.tabs.topology.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_topology(1, 38, 120, cache)  # must not raise (sort + format)
+        rendered = " ".join(
+            str(c.args[2]) for c in app._stdscr.addstr.call_args_list if len(c.args) > 2)
+        # A genuine 0 dB link must show its value, not be hidden as "--".
+        assert "0.0" in rendered
+
+    def test_propagation_null_fields_no_crash(self):
+        app = _make_app_with_screen()
+        cache = {"hamclock": {
+            "available": True, "source": None,
+            "space_weather": {"solar_flux": None, "kp_index": None,
+                              "band_conditions": None},
+            "voacap": {"best_band": None,
+                       "bands": {"20m": {"reliability": None, "status": None}}},
+            "band_conditions": {"bands": {"40m": None}},
+            "dxspots": [{"dx_call": None, "freq_khz": None,
+                         "de_call": None, "utc": None}],
+            "de_station": {"call": None, "grid": None},
+            "dx_station": {"call": None, "grid": None},
+        }}
+        mc = _mock_curses()
+        with patch("src.tui.tabs.propagation.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_propagation(1, 38, 120, cache)  # must not raise
+
+    def test_alerts_null_fields_no_crash(self):
+        app = _make_app_with_screen()
+        null_alert = {"severity": None, "alert_type": None, "node_id": None,
+                      "message": None, "timestamp": None}
+        cache = {
+            "alerts": {"alerts": [null_alert]},
+            "active_alerts": {"alerts": [null_alert]},
+            "alert_rules": {"rules": [
+                {"rule_id": None, "enabled": True, "alert_type": None,
+                 "severity": None, "metric": None, "operator": None,
+                 "threshold": None}]},
+        }
+        mc = _mock_curses()
+        with patch("src.tui.tabs.alerts.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_alerts(1, 38, 120, cache)  # must not raise
+
+    def test_alerts_search_on_null_fields_no_crash(self):
+        app = _make_app_with_screen()
+        app._search_query = "x"
+        null_alert = {"severity": None, "alert_type": None, "node_id": None,
+                      "message": None, "timestamp": None}
+        cache = {
+            "alerts": {"alerts": [null_alert]},
+            "active_alerts": {"alerts": [null_alert]},
+            "alert_rules": {},
+        }
+        mc = _mock_curses()
+        with patch("src.tui.tabs.alerts.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_alerts(1, 38, 120, cache)  # must not raise
+
+    def test_system_null_and_non_dict_packages_no_crash(self):
+        app = _make_app_with_screen()
+        cache = {"dependencies": {
+            "upgrade_command": None,
+            "recommended_version": None,
+            "packages": [
+                {"name": None, "installed_version": None},  # null name -> {name:<16}
+                "not-a-dict",                                # non-dict element
+                None,
+                {"name": "protobuf", "installed_version": None},
+            ],
+        }}
+        mc = _mock_curses()
+        with patch("src.tui.tabs.system.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_system(1, 38, 120, cache)  # must not raise
+
+    def test_system_null_packages_value_no_crash(self):
+        # "packages" present-but-null used to make `for pkg in None` raise.
+        app = _make_app_with_screen()
+        cache = {"dependencies": {"packages": None}}
+        mc = _mock_curses()
+        with patch("src.tui.tabs.system.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_system(1, 38, 120, cache)  # must not raise
+
+    def test_events_null_and_string_timestamp_no_crash(self):
+        app = _make_app_with_screen()
+        app._event_log = deque([
+            {"type": None, "timestamp": None, "source": None,
+             "node_id": None, "data": None},
+            {"type": "alert.fired", "timestamp": "2026-01-01T00:00:00Z",
+             "source": "engine", "node_id": "!def", "data": {"snr": None}},
+        ], maxlen=500)
+        mc = _mock_curses()
+        with patch("src.tui.tabs.events.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_events(1, 38, 120)  # must not raise
+
+
+class TestWsFramePoisoning:
+    """A non-object WebSocket frame must never poison the event deque/Events tab."""
+
+    def test_on_ws_message_drops_non_dict(self):
+        app = _make_app()
+        app._event_log = deque(maxlen=500)
+        for bad in (["a", "b"], "a string", 42, None):
+            app._on_ws_message(bad)
+        assert len(app._event_log) == 0
+        app._on_ws_message({"type": "ok"})
+        assert len(app._event_log) == 1
+
+    def test_events_tab_survives_non_dict_frames(self):
+        # Even if a non-dict frame reaches the log some other way, the render
+        # filters it instead of blanking the tab.
+        app = _make_app_with_screen()
+        app._event_log = deque([
+            ["not", "a", "dict"], "string-frame", 42, None,
+            {"type": "node.position", "timestamp": 1700000000,
+             "source": "mqtt", "node_id": "!abc", "data": {}},
+        ], maxlen=500)
+        mc = _mock_curses()
+        with patch("src.tui.tabs.events.curses", mc), \
+             patch("src.tui.helpers.curses", mc):
+            app._draw_events(1, 38, 120)  # must not raise
