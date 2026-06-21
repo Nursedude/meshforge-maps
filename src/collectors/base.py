@@ -28,6 +28,7 @@ NODE_ID_RE = re.compile(r"^!?[0-9a-fA-F]{1,16}$")
 ONLINE_THRESHOLDS = {
     "meshtastic": 900,    # 15 minutes — frequent heartbeats
     "mqtt": 900,          # 15 minutes — real-time broker
+    "mesh_client": 900,   # 15 minutes — file snapshot from meshing_around (issue #78)
     "reticulum": 1800,    # 30 minutes — infrequent announces
     "aredn": 3600,        # 60 minutes — slow poll scans
     "meshcore": 3600,     # 60 minutes — externally-polled API

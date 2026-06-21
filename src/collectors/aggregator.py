@@ -20,6 +20,7 @@ from .base import (
     make_link_feature, normalize_bboxes, point_in_region,
 )
 from .hamclock_collector import HamClockCollector
+from .mesh_client_collector import MeshClientCollector
 from .meshtastic_collector import MeshtasticCollector
 from .meshcore_collector import MeshCoreCollector
 from .mqtt_subscriber import MQTTNodeStore, MQTTSubscriber
@@ -177,6 +178,16 @@ class DataAggregator:
                 max_retries=retries,
                 mqtt_store=mqtt_store,
                 source_mode=config.get("meshtastic_source", "auto"),
+            )
+
+        # Mesh-client GeoJSON snapshot ingest (issue #78). Opt-in; placed after
+        # meshtastic so a node present in both feeds keeps the live broker copy
+        # (deduplicate_features is first-by-id, and these share node ids).
+        if config.get("enable_mesh_client", False):
+            self._collectors["mesh_client"] = MeshClientCollector(
+                path=config.get("mesh_client_path", "/var/lib/meshforge/nodes.geojson"),
+                cache_ttl_seconds=cache_ttl,
+                max_retries=retries,
             )
 
         if config.get("enable_reticulum", True):
