@@ -202,7 +202,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     }
 
     # Valid source names for /api/nodes/<source> endpoint
-    _VALID_SOURCES = {"meshtastic", "reticulum", "aredn", "hamclock", "mqtt"}
+    _VALID_SOURCES = {"meshtastic", "mesh_client", "reticulum", "aredn", "hamclock", "mqtt"}
 
     def _client_ip(self) -> str:
         """Best-effort real client IP for rate-limit and audit logging.

@@ -213,6 +213,26 @@ class TestToEpoch:
         assert MeshClientCollector._to_epoch(True) is None
 
 
+class TestMeshClientStatusWiring:
+    """mesh_client must appear consistently in the source enumerations, not
+    just in the aggregator (the 'two consumers, one updated' gap)."""
+
+    def test_get_enabled_sources_includes_mesh_client_when_enabled(self, tmp_path):
+        from src.utils.config import MapsConfig
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps({"enable_mesh_client": True}))
+        assert "mesh_client" in MapsConfig(config_path=p).get_enabled_sources()
+
+    def test_get_enabled_sources_omits_mesh_client_by_default(self, tmp_path):
+        from src.utils.config import MapsConfig
+        assert "mesh_client" not in MapsConfig(config_path=tmp_path / "absent.json").get_enabled_sources()
+
+    def test_mesh_client_is_a_valid_source_filter(self):
+        from src.map_server import MapRequestHandler
+        # /api/nodes/mesh_client must not 404 as an "Unknown source".
+        assert "mesh_client" in MapRequestHandler._VALID_SOURCES
+
+
 class TestMeshClientCollectorStaleSkip:
     def test_unchanged_updated_reuses_parse(self, tmp_path):
         f = tmp_path / "nodes.geojson"
