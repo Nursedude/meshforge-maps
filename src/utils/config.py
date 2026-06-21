@@ -673,6 +673,8 @@ class MapsConfig:
         sources = []
         if settings.get("enable_meshtastic"):
             sources.append("meshtastic")
+        if settings.get("enable_mesh_client"):
+            sources.append("mesh_client")
         if settings.get("enable_reticulum"):
             sources.append("reticulum")
         if settings.get("enable_hamclock"):
