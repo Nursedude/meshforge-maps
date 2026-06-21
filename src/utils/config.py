@@ -30,6 +30,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_aredn": True,
     "enable_meshcore": True,
     "enable_noaa_alerts": True,
+    # Mesh-client GeoJSON ingest (issue #78): read a snapshot file written by
+    # meshing_around_meshforge so mesh-client users see their own nodes on the
+    # map alongside the other feeds. Opt-in (default off) — the writer side is
+    # opt-in too. Nodes are tagged source="mesh_client", network="meshtastic".
+    "enable_mesh_client": False,
+    "mesh_client_path": "/var/lib/meshforge/nodes.geojson",
     # Meshtastic data source mode: "auto" (API → MQTT → cache), "mqtt_only", "local_only"
     "meshtastic_source": "auto",
     # NOAA weather alerts (api.weather.gov)
