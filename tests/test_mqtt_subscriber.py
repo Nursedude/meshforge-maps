@@ -319,3 +319,26 @@ class TestMQTTSubscriberStopEvent:
 
         # Should exit near-instantly, not wait for full backoff delay
         assert elapsed < 2.0
+
+
+class TestNodeStringCapsQA20260705:
+    """QA maps audit 2026-07-05: the NODEINFO + JSON ingestion paths did not cap
+    untrusted broker strings (only MapReport did), so an oversize long_name from
+    the public broker could multiply across up to MAX_NODES stored entries. Caps
+    are now applied at the update_nodeinfo store chokepoint."""
+
+    def test_long_name_and_hw_capped(self):
+        store = MQTTNodeStore()
+        store.update_position("!cap", 10.0, 20.0)
+        store.update_nodeinfo("!cap", long_name="A" * 5000, hw_model="H" * 5000)
+        node = store.get_all_nodes()[0]
+        assert len(node["name"]) == 40
+        assert len(node["hardware"]) == 32
+
+    def test_short_name_and_role_capped(self):
+        store = MQTTNodeStore()
+        store.update_position("!cap2", 10.0, 20.0)
+        store.update_nodeinfo("!cap2", short_name="S" * 100, role="R" * 100)
+        node = store.get_all_nodes()[0]
+        assert len(node["short_name"]) == 8
+        assert len(node["role"]) == 16

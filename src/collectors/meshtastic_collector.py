@@ -180,7 +180,19 @@ class MeshtasticCollector(BaseCollector):
         lat, lon = coords
 
         user = node.get("user", {})
-        node_id = user.get("id", node.get("num", ""))
+        node_id = user.get("id")
+        if not node_id:
+            # A node with a position but no NodeInfo has only the numeric `num`.
+            # Format it as canonical !hex — NEVER the decimal string, else it
+            # won't dedup against the same node's !hex id from MQTT/meshmap
+            # (fleet-wide numeric-key class). Drop if there's no resolvable id.
+            num = node.get("num")
+            try:
+                node_id = f"!{int(num):08x}" if num is not None else ""
+            except (TypeError, ValueError):
+                node_id = ""
+        if not node_id:
+            return None
         name = user.get("longName", user.get("shortName", str(node_id)))
         hardware = user.get("hwModel", "")
         role = user.get("role", "")
