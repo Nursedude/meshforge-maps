@@ -55,6 +55,16 @@ MAX_NODES = 10000
 # Maximum MQTT payload size to process (bytes) -- reject oversized payloads
 MAX_PAYLOAD_SIZE = 65536  # 64 KB
 
+# Per-field caps for untrusted broker-supplied node strings. The MapReport path
+# capped inline; the NODEINFO + JSON paths did not, so an oversize long_name
+# from the public broker could multiply across up to MAX_NODES stored entries
+# (~OOM on a Pi). Applied at the update_nodeinfo store chokepoint so every path
+# is covered (QA maps audit 2026-07-05).
+_NODE_NAME_CAP = 40
+_NODE_SHORT_CAP = 8
+_NODE_HW_CAP = 32
+_NODE_ROLE_CAP = 16
+
 # Default Meshtastic LongFast channel AES key (well-known public PSK)
 # This is the expanded form of the 1-byte default PSK (AQ== / 0x01).
 # All Meshtastic devices ship with this key on the default channel.
@@ -204,6 +214,14 @@ class MQTTNodeStore:
     def update_nodeinfo(self, node_id: str, long_name: str = "",
                         short_name: str = "", hw_model: str = "",
                         role: str = "") -> None:
+        # Cap untrusted broker strings at the store chokepoint so the NODEINFO
+        # and JSON ingestion paths get the protection the MapReport path applies
+        # inline — an oversize field would otherwise multiply across up to
+        # MAX_NODES stored entries and out to every /api/nodes/geojson response.
+        long_name = (str(long_name) if long_name else "")[:_NODE_NAME_CAP]
+        short_name = (str(short_name) if short_name else "")[:_NODE_SHORT_CAP]
+        hw_model = (str(hw_model) if hw_model else "")[:_NODE_HW_CAP]
+        role = (str(role) if role else "")[:_NODE_ROLE_CAP]
         with self._lock:
             node = self._nodes.setdefault(node_id, {"id": node_id})
             if long_name:

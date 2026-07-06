@@ -665,7 +665,10 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         data = aggregator.collect_source(source)
         self._send_json(data)
 
-    _REDACTED_CONFIG_KEYS = ("mqtt_password", "api_key", "rch_api_key")
+    # mqtt_username added 2026-07-05 (QA maps audit): it identifies the
+    # operator's broker account and was exposed on the unauthenticated
+    # /api/config for public deployments.
+    _REDACTED_CONFIG_KEYS = ("mqtt_password", "mqtt_username", "api_key", "rch_api_key")
 
     def _serve_config(self) -> None:
         """Serve current configuration (non-sensitive)."""
@@ -1470,7 +1473,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             "available": bool(nh and nh._conn),
             "observation_count": nh.observation_count if nh else 0,
             "node_count": nh.node_count if nh else 0,
-            "db_path": str(nh._db_path) if nh else None,
+            # Basename only — the full path leaks the OS username (/home/<user>
+            # or /root) on the unauthenticated public /api/status (QA maps audit).
+            "db_path": Path(str(nh._db_path)).name if nh else None,
         }
 
         # ru_maxrss is KB on Linux, bytes on macOS. Convert to MB for Linux (our deploy target).
