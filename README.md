@@ -6,7 +6,7 @@ Visualization plugin for the [MeshForge ecosystem](https://github.com/Nursedude/
 >
 > **More field notes:** [`docs/substack/`](docs/substack/) -- debugging post-mortems and collaboration notes from this project.
 
-![Version](https://img.shields.io/badge/version-0.7.0--beta-blue)
+![Version](https://img.shields.io/badge/version-0.7.4--beta-blue)
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
