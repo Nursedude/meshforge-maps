@@ -24,6 +24,9 @@ jobs:
       - name: Ruff lint (includes bandit security rules)
         run: ruff check src/ tests/
 
+      - name: Version consistency (MF024)
+        run: python scripts/version_consistency_check.py
+
   test:
     name: Test Suite
     runs-on: ubuntu-latest
