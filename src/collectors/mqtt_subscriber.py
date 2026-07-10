@@ -65,6 +65,16 @@ _NODE_SHORT_CAP = 8
 _NODE_HW_CAP = 32
 _NODE_ROLE_CAP = 16
 
+# Max length of a node-dict KEY. The protobuf paths always derive a formatted
+# `!%08x` id (bounded), but the JSON fallback takes `sender` verbatim when it
+# is a string — so a crafted 64 KB `sender` from the public broker became a
+# node-dict key, cached and served out /api/nodes. The label caps above bound
+# VALUES; MAX_NODES bounds the node COUNT; neither bounds per-KEY size. Gate
+# at the store chokepoint so every ingestion path is covered (2026-07-09
+# frontier review of the maps protobuf-subscriber twin; mirrors the MeshForge
+# _ensure_node node-key gate).
+_MAX_NODE_KEY_LEN = 32
+
 # Default Meshtastic LongFast channel AES key (well-known public PSK)
 # This is the expanded form of the 1-byte default PSK (AQ== / 0x01).
 # All Meshtastic devices ship with this key on the default channel.
@@ -189,9 +199,29 @@ class MQTTNodeStore:
         self._remove_seconds = remove_seconds
         self._max_nodes = max_nodes
         self._on_node_removed = on_node_removed
+        # Witness for keys refused by _key_ok (implausible/oversize node ids
+        # from the untrusted JSON path). Written only on the single MQTT
+        # network thread; read for get_stats.
+        self._rejected_keys = 0
+
+    @property
+    def rejected_keys(self) -> int:
+        return self._rejected_keys
+
+    def _key_ok(self, node_id: Any) -> bool:
+        """True iff node_id is a plausible node-dict key. Refuses non-strings
+        (an attacker `sender` can be a dict/list) and oversize strings (the
+        OOM vector). Bumps the rejection witness on failure so a probe can
+        see refusals instead of a silent drop."""
+        if isinstance(node_id, str) and 0 < len(node_id) <= _MAX_NODE_KEY_LEN:
+            return True
+        self._rejected_keys += 1
+        return False
 
     def update_position(self, node_id: str, lat: float, lon: float,
                         altitude: Optional[int] = None, timestamp: Optional[int] = None) -> None:
+        if not self._key_ok(node_id):
+            return
         evicted_id = None
         with self._lock:
             if node_id not in self._nodes and len(self._nodes) >= self._max_nodes:
@@ -218,6 +248,8 @@ class MQTTNodeStore:
         # and JSON ingestion paths get the protection the MapReport path applies
         # inline — an oversize field would otherwise multiply across up to
         # MAX_NODES stored entries and out to every /api/nodes/geojson response.
+        if not self._key_ok(node_id):
+            return
         long_name = (str(long_name) if long_name else "")[:_NODE_NAME_CAP]
         short_name = (str(short_name) if short_name else "")[:_NODE_SHORT_CAP]
         hw_model = (str(hw_model) if hw_model else "")[:_NODE_HW_CAP]
@@ -243,6 +275,8 @@ class MQTTNodeStore:
                          air_util_tx: Optional[float] = None,
                          iaq: Optional[int] = None,
                          **extra: Any) -> None:
+        if not self._key_ok(node_id):
+            return
         with self._lock:
             node = self._nodes.setdefault(node_id, {"id": node_id})
             if battery is not None:
@@ -269,6 +303,8 @@ class MQTTNodeStore:
 
     def update_neighbors(self, node_id: str,
                          neighbors: List[Dict[str, Any]]) -> None:
+        if not self._key_ok(node_id):
+            return
         with self._lock:
             self._neighbors[node_id] = neighbors
 
@@ -584,6 +620,7 @@ class MQTTSubscriber:
             "decrypt_skipped": skipped,
             "node_count": self._store.node_count,
             "protobuf_available": self._proto is not None,
+            "nodes_rejected": self._store.rejected_keys,
         }
 
     def _run_loop(self) -> None:

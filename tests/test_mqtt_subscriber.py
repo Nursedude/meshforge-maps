@@ -342,3 +342,59 @@ class TestNodeStringCapsQA20260705:
         node = store.get_all_nodes()[0]
         assert len(node["short_name"]) == 8
         assert len(node["role"]) == 16
+
+
+class TestNodeKeyGate20260709:
+    """2026-07-09 frontier review of the maps protobuf-subscriber twin. The
+    protobuf paths derive a bounded `!%08x` id, but the JSON fallback used an
+    untrusted `sender` string verbatim as a node-dict key — a 64 KB `sender`
+    from the public broker became a cached, served key (label caps bound
+    VALUES and MAX_NODES bounds COUNT; neither bounds per-KEY size). The store
+    chokepoint now refuses implausible keys with a witness."""
+
+    def test_oversize_string_key_refused(self):
+        store = MQTTNodeStore()
+        store.update_position("!" + "A" * 100000, 10.0, 20.0)
+        assert store.node_count == 0
+        assert store.rejected_keys == 1
+
+    def test_non_string_key_refused(self):
+        """An attacker `sender` can be a dict/list (unhashable) — refuse
+        cleanly instead of relying on a downstream TypeError."""
+        store = MQTTNodeStore()
+        store.update_nodeinfo({"evil": 1}, long_name="x")  # type: ignore[arg-type]
+        store.update_telemetry(["also", "evil"], battery=50)  # type: ignore[arg-type]
+        assert store.node_count == 0
+        assert store.rejected_keys == 2
+
+    def test_valid_key_still_accepted(self):
+        store = MQTTNodeStore()
+        store.update_position("!a1b2c3d4", 21.3, -157.8)
+        assert store.node_count == 1
+        assert store.rejected_keys == 0
+
+    def test_decode_json_oversize_sender_rejected_end_to_end(self):
+        """The real hostile path: a public-broker JSON packet whose `sender`
+        is a giant string must not create a node."""
+        sub = MQTTSubscriber()
+        import json as _json
+        evil = _json.dumps({
+            "type": "nodeinfo",
+            "sender": "!" + "Z" * 70000,
+            "payload": {"long_name": "pwn", "short_name": "x"},
+        }).encode()
+        sub._decode_json(evil, "msh/US/2/json/LongFast/!gw")
+        assert sub.store.node_count == 0
+        assert sub.get_stats()["nodes_rejected"] == 1
+
+    def test_decode_json_valid_sender_creates_node(self):
+        sub = MQTTSubscriber()
+        import json as _json
+        good = _json.dumps({
+            "type": "position",
+            "sender": 0x11223344,
+            "payload": {"latitude_i": 213000000, "longitude_i": -1578000000},
+        }).encode()
+        sub._decode_json(good, "msh/US/2/json/LongFast/!gw")
+        assert sub.store.get_node("!11223344") is not None
+        assert sub.get_stats()["nodes_rejected"] == 0
