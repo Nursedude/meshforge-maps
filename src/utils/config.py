@@ -103,7 +103,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # WebSocket origin allowlist. Loopback binds (127.0.0.1/::1) auto-allow
     # localhost-prefix origins. Non-loopback binds (0.0.0.0, LAN IP) consult
     # this list — empty means deny all browser origins, so set it explicitly
-    # for your deployment, e.g. ["http://moc:8808", "http://192.168.86.38:8808"].
+    # for your deployment, e.g. ["http://<hostname>:8808", "http://<lan-ip>:8808"].
     "ws_allowed_origins": [],
     # Meshtastic API proxy port (meshtasticd-compatible JSON proxy)
     "meshtastic_proxy_port": 4404,

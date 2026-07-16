@@ -718,7 +718,7 @@ Settings stored at `~/.config/meshforge/plugins/org.meshforge.extension.maps/set
 
 ## Security
 
-The HTTP and WebSocket servers bind to **127.0.0.1** (localhost) by default. Changing `http_host` or `ws_host` to `0.0.0.0` exposes the server to the network -- use a reverse proxy with TLS in front when doing so. For non-loopback binds, you must also populate `ws_allowed_origins` (e.g. `["http://moc:8808", "http://192.168.86.38:8808"]`) or browser clients will be refused at the WebSocket handshake.
+The HTTP and WebSocket servers bind to **127.0.0.1** (localhost) by default. Changing `http_host` or `ws_host` to `0.0.0.0` exposes the server to the network -- use a reverse proxy with TLS in front when doing so. For non-loopback binds, you must also populate `ws_allowed_origins` (e.g. `["http://<hostname>:8808", "http://<lan-ip>:8808"]`) or browser clients will be refused at the WebSocket handshake.
 
 **API authentication:** Set `api_key` in settings.json to require authentication on all `/api/*` write endpoints. Clients send the key via the `X-MeshForge-Key` HTTP header. When no key is configured, all API requests are allowed. Rejected keys are logged at `WARNING` with the source IP and target path.
 
