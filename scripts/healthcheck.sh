@@ -47,10 +47,21 @@ fi
 
 if [ "$RUN_TESTS" -eq 1 ] && [ "$RC" -eq 0 ]; then
     print_step "Tests"
-    if python3 -m pytest tests/ -q --tb=short --timeout=30 --timeout-method=thread 2>&1 | tail -30 ; then
-        print_ok "Tests passed"
+    # Consumer-of-record interpreter (MF/MA honest_status port 2026-07-19):
+    # the service's ExecStart runs the repo venv python — test THAT env, not
+    # whatever system python3 happens to carry. Falls back on venv-less boxes.
+    PY="python3"
+    [ -x "venv/bin/python" ] && PY="venv/bin/python"
+    # File-capture the REAL pytest exit code — `pytest | tail` tests tail's
+    # exit, so a failing suite read as healthy (calibrated_claims rule 4;
+    # feedback_verify_ci_exit_code_not_masked). Tail is for display only.
+    "$PY" -m pytest tests/ -q --tb=short --timeout=30 --timeout-method=thread \
+        >/tmp/.maps_healthcheck_pytest 2>&1; PYTEST_RC=$?
+    tail -30 /tmp/.maps_healthcheck_pytest
+    if [ "$PYTEST_RC" -eq 0 ]; then
+        print_ok "Tests passed (exit 0)"
     else
-        print_fail "Tests failed"
+        print_fail "Tests failed (exit $PYTEST_RC)"
         RC=2
     fi
 fi
