@@ -10,7 +10,7 @@ Visualization plugin for the [MeshForge ecosystem](https://github.com/Nursedude/
 ![Status](https://img.shields.io/badge/status-beta-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1047-brightgreen)
+![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![MeshForge](https://img.shields.io/badge/meshforge-extension-4fc3f7)
 
 A unified multi-source mesh network map that aggregates Meshtastic, Reticulum/RMAP, OpenHamClock propagation data, AREDN, and MeshCore into a single configurable Leaflet.js web map with live MQTT subscription, topology visualization, per-node health scoring, threshold-based alerting, historical analytics, and offline tile caching.
@@ -845,7 +845,7 @@ flowchart LR
 
 ```bash
 pip install pytest pytest-cov
-pytest tests/ -v    # 1047 tests, no network access needed
+pytest tests/ -v    # ~1,200 tests (run `pytest tests/ --co -q` for the live count), no network access needed
 ruff check src/ tests/       # lint gate used by CI
 ```
 
@@ -862,7 +862,7 @@ Any pytest failure posts an extracted summary as a comment on the PR (via `tee /
 
 ### Testing Status
 
-This project is in **beta**. The unit test suite (1047 tests) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
+This project is in **beta**. The unit test suite (~1,200 tests across <!--STAT:testfiles-->48<!--/STAT--> test files) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
 
 | Area | Unit Tested | Live Tested | Notes |
 |------|:-----------:|:-----------:|-------|
