@@ -24,6 +24,7 @@ Storage location: ~/.local/share/meshforge/maps_node_history.db
 
 import logging
 import math
+import os
 import sqlite3
 import threading
 import time
@@ -831,15 +832,39 @@ class NodeHistoryDB:
         return [(r[0], r[1], r[2]) for r in rows]
 
     def create_backup(self, backup_path: Path) -> bool:
-        """Create an online SQLite backup at the given path."""
+        """Create an online SQLite backup at the given path.
+
+        Refuses an existing destination: a backup step that can overwrite is
+        not a backup step (MF 2026-08-05 — a real backup was destroyed by an
+        in-place ``.backup()`` to a reused path). The destination is reserved
+        atomically (O_CREAT|O_EXCL), never check-then-write.
+        """
         with self._lock:
             if not self._conn:
                 return False
             try:
                 backup_path.parent.mkdir(parents=True, exist_ok=True)
-                backup_conn = sqlite3.connect(str(backup_path))
-                self._conn.backup(backup_conn)
-                backup_conn.close()
+                try:
+                    os.close(os.open(str(backup_path),
+                                     os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                                     0o600))
+                except FileExistsError:
+                    logger.error(
+                        "Backup REFUSED: %s already exists — a backup must "
+                        "never overwrite; pick a new destination", backup_path)
+                    return False
+                try:
+                    backup_conn = sqlite3.connect(str(backup_path))
+                    self._conn.backup(backup_conn)
+                    backup_conn.close()
+                except Exception:
+                    # Remove the partial file WE created this call — a corpse
+                    # named like a backup is worse than no file.
+                    try:
+                        backup_path.unlink()
+                    except OSError:
+                        pass
+                    raise
                 logger.info("DB backup created at %s", backup_path)
                 return True
             except Exception as e:

@@ -398,3 +398,63 @@ class TestNodeKeyGate20260709:
         sub._decode_json(good, "msh/US/2/json/LongFast/!gw")
         assert sub.store.get_node("!11223344") is not None
         assert sub.get_stats()["nodes_rejected"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Processing-error witness (MF 2026-07-09 subscriber finding, ported
+# 2026-08-06): a processing BUG must land in its own stat, never the benign
+# decrypt-skip bucket — folded together, 100%-dead processing reads as
+# normal encrypted traffic in get_stats.
+# ---------------------------------------------------------------------------
+
+class TestProcessingErrorWitness:
+    @staticmethod
+    def _msg(payload=b"{}", topic="msh/US/2/json/LongFast/!feed"):
+        class _Msg:
+            pass
+        m = _Msg()
+        m.payload = payload
+        m.topic = topic
+        return m
+
+    def test_bug_counts_processing_errors_not_skips(self, monkeypatch):
+        sub = MQTTSubscriber()
+
+        def boom(payload, topic):
+            raise RuntimeError("decoder bug")
+
+        monkeypatch.setattr(sub, "_decode_json", boom)
+        sub._on_message(None, None, self._msg())
+        stats = sub.get_stats()
+        assert stats["processing_errors"] == 1
+        assert stats["decrypt_skipped"] == 0
+        assert stats["messages_received"] == 1
+
+    def test_expected_decode_failure_still_counts_as_skip(self, monkeypatch):
+        sub = MQTTSubscriber()
+
+        def expected(payload, topic):
+            raise ValueError("wrong channel key")
+
+        monkeypatch.setattr(sub, "_decode_json", expected)
+        sub._on_message(None, None, self._msg())
+        stats = sub.get_stats()
+        assert stats["decrypt_skipped"] == 1
+        assert stats["processing_errors"] == 0
+
+    def test_processing_warning_throttled(self, monkeypatch, caplog):
+        import logging as _logging
+
+        sub = MQTTSubscriber()
+
+        def boom(payload, topic):
+            raise RuntimeError("decoder bug")
+
+        monkeypatch.setattr(sub, "_decode_json", boom)
+        with caplog.at_level(_logging.WARNING, logger="src.collectors.mqtt_subscriber"):
+            for _ in range(5):
+                sub._on_message(None, None, self._msg())
+        warns = [r for r in caplog.records
+                 if "processing error" in r.getMessage()]
+        assert len(warns) == 1, "burst of bugs must produce ONE warning/min"
+        assert sub.get_stats()["processing_errors"] == 5

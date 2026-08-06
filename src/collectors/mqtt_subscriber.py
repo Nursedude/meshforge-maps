@@ -503,6 +503,12 @@ class MQTTSubscriber:
         self._stats_lock = threading.Lock()
         self._messages_received: int = 0
         self._decrypt_skipped: int = 0
+        # Processing BUGS are a separate bucket from expected decrypt skips:
+        # folding them into _decrypt_skipped made 100%-dead processing look
+        # like normal encrypted traffic (MF 2026-07-09 subscriber pass,
+        # ported 2026-08-06).
+        self._processing_errors: int = 0
+        self._last_processing_warn: float = 0.0
         self._proto = _try_import_meshtastic()
 
         mqtt_mod, api_version = _try_import_paho()
@@ -609,6 +615,7 @@ class MQTTSubscriber:
         with self._stats_lock:
             messages = self._messages_received
             skipped = self._decrypt_skipped
+            proc_errors = self._processing_errors
         return {
             "broker": self._broker,
             "port": self._port,
@@ -618,6 +625,7 @@ class MQTTSubscriber:
             "has_credentials": self._username is not None,
             "messages_received": messages,
             "decrypt_skipped": skipped,
+            "processing_errors": proc_errors,
             "node_count": self._store.node_count,
             "protobuf_available": self._proto is not None,
             "nodes_rejected": self._store.rejected_keys,
@@ -729,9 +737,23 @@ class MQTTSubscriber:
                     count,
                 )
         except Exception as e:
+            # A processing BUG, not an expected encrypted-traffic skip — count
+            # it in its own stat so dead processing is visible in get_stats,
+            # and throttle the warning so a systematic bug on public-broker
+            # volume cannot flood the journal.
+            now = time.monotonic()
             with self._stats_lock:
-                self._decrypt_skipped += 1
-            logger.warning("MQTT message processing error on %s: %s", msg.topic, e)
+                self._processing_errors += 1
+                count = self._processing_errors
+                do_warn = now - self._last_processing_warn >= 60.0
+                if do_warn:
+                    self._last_processing_warn = now
+            if do_warn:
+                logger.warning(
+                    "MQTT message processing error on %s: %s "
+                    "(%d total; further warnings throttled to 1/min)",
+                    msg.topic, e, count,
+                )
 
     def _notify_update(self, node_id: str, update_type: str, **kwargs) -> None:
         """Safely invoke the on_node_update callback and publish to event bus."""

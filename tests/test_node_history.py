@@ -638,3 +638,42 @@ class TestDBBackup:
         assert db.create_backup(tmp_path / "backup.db") is False
 
 
+
+
+class TestBackupRefusesOverwrite:
+    """A backup step that can overwrite is not a backup step (MF 2026-08-05:
+    a real backup was destroyed by an in-place .backup() to a reused path)."""
+
+    def test_existing_destination_refused_and_intact(self, tmp_path):
+        db = NodeHistoryDB(db_path=tmp_path / "main.db")
+        try:
+            db.record_observation("!node1", 35.0, 139.0)
+            backup_path = tmp_path / "backup.db"
+            assert db.create_backup(backup_path) is True
+            original = backup_path.read_bytes()
+            db.record_observation("!node2", 40.0, -74.0)
+            assert db.create_backup(backup_path) is False, \
+                "second backup to the same path must be REFUSED"
+            assert backup_path.read_bytes() == original, \
+                "the refused attempt must leave the original byte-identical"
+        finally:
+            db.close()
+
+    def test_failed_backup_leaves_no_corpse(self, tmp_path, monkeypatch):
+        import sqlite3 as _sqlite3
+
+        db = NodeHistoryDB(db_path=tmp_path / "main.db")
+        try:
+            db.record_observation("!node1", 35.0, 139.0)
+            backup_path = tmp_path / "backup.db"
+
+            def broken_connect(*a, **k):
+                raise _sqlite3.OperationalError("disk I/O error")
+
+            monkeypatch.setattr(
+                "src.utils.node_history.sqlite3.connect", broken_connect)
+            assert db.create_backup(backup_path) is False
+            assert not backup_path.exists(), \
+                "a failed backup must not leave a 0-byte corpse named like one"
+        finally:
+            db.close()

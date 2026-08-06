@@ -55,15 +55,21 @@ if [ "$RUN_TESTS" -eq 1 ] && [ "$RC" -eq 0 ]; then
     # File-capture the REAL pytest exit code — `pytest | tail` tests tail's
     # exit, so a failing suite read as healthy (calibrated_claims rule 4;
     # feedback_verify_ci_exit_code_not_masked). Tail is for display only.
+    # Then classify from LOG + rc (MF pytest_verdict port, 2026-08-06): the
+    # rc alone was measured flapping to 0 on FAILED runs — the flap only
+    # loses failures toward zero. UNKNOWN is never a pass.
+    PYTEST_LOG="$(mktemp)"
     "$PY" -m pytest tests/ -q --tb=short --timeout=30 --timeout-method=thread \
-        >/tmp/.maps_healthcheck_pytest 2>&1; PYTEST_RC=$?
-    tail -30 /tmp/.maps_healthcheck_pytest
-    if [ "$PYTEST_RC" -eq 0 ]; then
-        print_ok "Tests passed (exit 0)"
+        >"$PYTEST_LOG" 2>&1; PYTEST_RC=$?
+    tail -30 "$PYTEST_LOG"
+    if VERDICT="$(PYTEST_VERDICT_PY="$PY" bash scripts/pytest_verdict.sh \
+                  --log "$PYTEST_LOG" --rc "$PYTEST_RC")"; then
+        print_ok "Tests — $VERDICT"
     else
-        print_fail "Tests failed (exit $PYTEST_RC)"
+        print_fail "Tests — $VERDICT"
         RC=2
     fi
+    rm -f "$PYTEST_LOG"
 fi
 
 print_step "Summary"

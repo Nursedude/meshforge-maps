@@ -63,13 +63,18 @@ jobs:
           # GitHub's lazy-loaded log viewer sometimes hides raw output.
           # Coverage is collected here so the diagnostic also catches
           # coverage-threshold failures on 3.11.
+          rc=0
           if [ "${{ matrix.python-version }}" = "3.11" ]; then
             python -m pytest tests/ -v --tb=short \
               --cov=src --cov-report=xml --cov-fail-under=70 \
-              2>&1 | tee /tmp/pytest.log
+              2>&1 | tee /tmp/pytest.log || rc=$?
           else
-            python -m pytest tests/ -v --tb=short 2>&1 | tee /tmp/pytest.log
+            python -m pytest tests/ -v --tb=short 2>&1 | tee /tmp/pytest.log || rc=$?
           fi
+          # The raw exit code alone is a proven liar (MF measured 2026-07-28:
+          # ~50% of failed full runs exit 0 — a shutdown race that only loses
+          # failures toward zero). Classify from LOG + rc; UNKNOWN fails.
+          bash scripts/pytest_verdict.sh --log /tmp/pytest.log --rc "$rc"
         env:
           CI: true
           PYTHONUNBUFFERED: "1"
