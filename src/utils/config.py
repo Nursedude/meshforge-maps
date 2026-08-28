@@ -147,11 +147,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 # Tile provider definitions for Leaflet.js
 TILE_PROVIDERS: Dict[str, Dict[str, str]] = {
+    # Key stays "carto_dark" so per-box configs that saved it keep working;
+    # Carto revoked anonymous basemap access 2026-08 (every tile ships an
+    # "API KEY REQUIRED" watermark regardless of Referer), so the URL now
+    # points at Esri's keyless dark canvas. Rendered detail caps at z16.
     "carto_dark": {
-        "name": "CartoDB Dark Matter",
-        "url": "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-        "attribution": '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
-        "max_zoom": "20",
+        "name": "Dark (Esri Dark Gray)",
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        "attribution": "&copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors",
+        "max_zoom": "16",
     },
     "osm_standard": {
         "name": "OpenStreetMap",

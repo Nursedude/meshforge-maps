@@ -9,14 +9,16 @@
  *   - Configurable cache size limits with LRU eviction
  *
  * Tile domains cached:
- *   - *.basemaps.cartocdn.com   (CartoDB Dark Matter)
+ *   - *.basemaps.cartocdn.com   (legacy; Carto requires an API key since 2026-08)
  *   - tile.openstreetmap.org    (OSM)
  *   - tile.opentopomap.org      (OpenTopoMap)
  *   - server.arcgisonline.com   (Esri Satellite/Topo)
  *   - tiles.stadiamaps.com      (Stadia Terrain)
  */
 
-const CACHE_NAME = 'meshforge-maps-tiles-v2';
+// v3: purge Carto "API KEY REQUIRED" watermarked tiles cached under v2
+// (Carto revoked anonymous basemap access 2026-08; dark basemap moved to Esri)
+const CACHE_NAME = 'meshforge-maps-tiles-v3';
 const DEBUG_SW = true;  // DIAGNOSTIC: log tile fetch failures to console
 const STATIC_CACHE = 'meshforge-maps-static-v2';
 const API_CACHE = 'meshforge-maps-api-v1';

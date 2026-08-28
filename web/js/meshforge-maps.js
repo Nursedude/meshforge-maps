@@ -36,11 +36,13 @@ const NETWORK_COLORS = {
 
 // Tile provider definitions (loaded from server, with fallback)
 let TILE_PROVIDERS = {
+    // Key kept as carto_dark for saved-config compat; Carto revoked anonymous
+    // basemap access 2026-08 (tiles watermarked "API KEY REQUIRED").
     carto_dark: {
-        name: 'CartoDB Dark Matter',
-        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-        attribution: '&copy; OSM &copy; CARTO',
-        max_zoom: '20',
+        name: 'Dark (Esri Dark Gray)',
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+        attribution: '&copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
+        max_zoom: '16',
     },
     osm_standard: {
         name: 'OpenStreetMap',
