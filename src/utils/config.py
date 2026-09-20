@@ -84,7 +84,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # rejected by validate_config_update — they would expose admin POSTs to
     # any web page once a browser holds the API key.
     "cors_allowed_origin": None,
-    # API key for protecting /api/ POST endpoints (None = no auth required)
+    # API key for protecting /api/ POST endpoints (None = no auth required).
+    # NOT settable through the API itself -- see API_IMMUTABLE_KEYS below.
     "api_key": None,
     # Per-IP token-bucket rate limit on every HTTP request. 60/min comfortably
     # covers a normal browser session (a page load is ~5-10 API calls) while
@@ -144,6 +145,24 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # to keep operator-specific values out of source.
     "owned_node_ids": [],
 }
+
+#: Config keys that may never be written through ``POST /api/config``, even by
+#: an authenticated caller. They are operator-only: edit the config on the box
+#: (or re-run the setup wizard) and restart.
+#:
+#: ``api_key`` is the credential that GUARDS ``POST /api/config``. While it was
+#: writable there, the guard could be rewritten through the very door it
+#: protects: with no key set (the default) any unauthenticated caller who could
+#: reach the port could SET one and lock the operator out of their own admin
+#: endpoints, and a caller who learned the key -- it travels as a cleartext
+#: ``X-MeshForge-Key`` header over plain HTTP -- could rotate it to the same
+#: effect. A guard that its own subject can overwrite is not a guard.
+#:
+#: The other redacted secrets are deliberately NOT here: ``mqtt_username`` /
+#: ``mqtt_password`` are ordinary broker settings the UI exists to configure,
+#: and they gate nothing on this server.
+API_IMMUTABLE_KEYS = frozenset({"api_key"})
+
 
 # Tile provider definitions for Leaflet.js
 TILE_PROVIDERS: Dict[str, Dict[str, str]] = {
@@ -512,6 +531,14 @@ class MapsConfig:
         for key, value in data.items():
             if key not in DEFAULT_CONFIG:
                 errors.append(f"Unknown config key: {key}")
+                continue
+            if key in API_IMMUTABLE_KEYS:
+                # Name the remedy in the refusal: a gate that only says "no"
+                # gets satisfied the cheapest way the caller can find.
+                errors.append(
+                    f"{key} cannot be set through the API; edit the config "
+                    f"file on the box (or re-run the setup wizard) and restart"
+                )
                 continue
             # Type-specific validation
             if key == "mqtt_port":

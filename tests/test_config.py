@@ -382,6 +382,50 @@ class TestCloudHardeningDefaults:
         assert DEFAULT_CONFIG["ws_allowed_origins"] == []
 
 
+class TestApiKeyNotRemotelyWritable:
+    """`api_key` guards POST /api/config, so that endpoint must not be able to
+    rewrite it. While it could, the guard was overwritable through the very
+    door it protects: with no key set (the default) an unauthenticated caller
+    could SET one and lock the operator out, and one who learned the key could
+    rotate it. Each test PLANTS the write rather than reading the allowlist."""
+
+    def test_setting_api_key_is_refused(self):
+        validated, errors = MapsConfig.validate_update({"api_key": "attacker-picked"})
+        assert "api_key" not in validated
+        assert any("cannot be set through the API" in e for e in errors)
+
+    def test_clearing_api_key_is_refused(self):
+        # Clearing is the same escalation wearing a different hat: it would
+        # disarm the guard rather than seize it.
+        validated, errors = MapsConfig.validate_update({"api_key": None})
+        assert "api_key" not in validated
+        assert errors
+
+    def test_api_key_refused_even_alongside_valid_keys(self):
+        # A mixed payload must not smuggle the key in behind a legal setting,
+        # and must not poison the legal setting either.
+        validated, errors = MapsConfig.validate_update(
+            {"mqtt_port": 1883, "api_key": "smuggled"}
+        )
+        assert validated.get("mqtt_port") == 1883
+        assert "api_key" not in validated
+        assert any("api_key" in e for e in errors)
+
+    def test_refusal_names_the_remedy(self):
+        # A gate that only says "no" gets satisfied the cheapest way the
+        # caller can find; the message must say where the key DOES get set.
+        _, errors = MapsConfig.validate_update({"api_key": "x"})
+        assert any("setup wizard" in e or "config file" in e for e in errors)
+
+    def test_guard_does_not_over_refuse(self):
+        # The counter-test: an ordinary secret that gates nothing here stays
+        # writable, so the fix cannot quietly freeze normal MQTT config.
+        sample_value = "not-a-real-credential"
+        validated, errors = MapsConfig.validate_update({"mqtt_password": sample_value})
+        assert errors == []
+        assert validated["mqtt_password"] == sample_value
+
+
 class TestCorsWildcardRejection:
     """validate_update must refuse wildcard CORS origins."""
 
