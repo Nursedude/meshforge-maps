@@ -24,6 +24,12 @@ async function fetchWithRetry(url, retries, baseDelay) {
     }
 }
 
+// What the server substitutes for a secret it will not disclose. It is a MASK,
+// never a value -- never write it into an input the user can then Save.
+// NOTE: Keep in sync with REDACTION_MASK in src/utils/config.py
+// (pinned by tests/test_map_server.py::TestRedactionMask::test_js_constant_matches)
+const REDACTION_MASK = '***';
+
 // Network colors (matches meshforge core palette)
 // NOTE: Keep in sync with NETWORK_COLORS in src/utils/config.py
 const NETWORK_COLORS = {
@@ -1191,10 +1197,20 @@ function _populateSettingsForm(cfg) {
     }
     document.getElementById('cfgMqttBroker').value = cfg.mqtt_broker || '';
     document.getElementById('cfgMqttPort').value = cfg.mqtt_port || 1883;
-    document.getElementById('cfgMqttUsername').value = cfg.mqtt_username || '';
+    // Username is redacted server-side exactly like the password, so it arrives
+    // as REDACTION_MASK. Rendering that into the input made Save post three
+    // asterisks over the real credential -- live from 2026-07-05, when
+    // mqtt_username joined the redacted set, until 2026-09-19. The password had
+    // this treatment from the start; the username was simply missed.
+    var unameEl = document.getElementById('cfgMqttUsername');
+    var unameMasked = (cfg.mqtt_username === REDACTION_MASK);
+    unameEl.value = unameMasked ? '' : (cfg.mqtt_username || '');
+    unameEl.placeholder = unameMasked
+        ? 'Leave blank to keep current' : 'No username set';
     document.getElementById('cfgMqttPassword').value = '';
     document.getElementById('cfgMqttPassword').placeholder =
-        (cfg.mqtt_password === '***') ? 'Leave blank to keep current' : 'No password set';
+        (cfg.mqtt_password === REDACTION_MASK)
+            ? 'Leave blank to keep current' : 'No password set';
     var topicVal = cfg.mqtt_topic || '';
     var presetEl = document.getElementById('cfgMqttTopicPreset');
     var topicInput = document.getElementById('cfgMqttTopic');
@@ -1333,7 +1349,6 @@ async function saveSettings(event) {
         mqtt_topic: (document.getElementById('cfgMqttTopicPreset').value === 'custom'
             ? document.getElementById('cfgMqttTopic').value.trim()
             : document.getElementById('cfgMqttTopicPreset').value),
-        mqtt_username: document.getElementById('cfgMqttUsername').value.trim() || null,
         mqtt_use_tls: document.getElementById('cfgMqttTls').checked,
         deployment_profile: document.getElementById('cfgDeployProfile').value,
         enable_meshtastic: document.getElementById('cfgEnableMeshtastic').checked,
@@ -1344,10 +1359,16 @@ async function saveSettings(event) {
         enable_noaa_alerts: document.getElementById('cfgEnableNoaa').checked
     };
 
-    // Only send password if user typed a new one
+    // Only send credentials the user actually typed. Omitting a key leaves the
+    // stored value untouched; sending the mask back is refused by the server
+    // (validate_update), so a blank field must mean "unchanged", not "clear".
     var pw = document.getElementById('cfgMqttPassword').value;
     if (pw) {
         data.mqtt_password = pw;
+    }
+    var un = document.getElementById('cfgMqttUsername').value.trim();
+    if (un && un !== REDACTION_MASK) {
+        data.mqtt_username = un;
     }
 
     // Save region preset to localStorage immediately (fast, no server wait)

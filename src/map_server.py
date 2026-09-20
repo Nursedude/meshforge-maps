@@ -30,7 +30,15 @@ from .collectors.aggregator import DataAggregator
 from .collectors.base import point_in_bboxes, validate_node_id
 from .utils.alert_engine import Alert, AlertEngine
 from .utils.analytics import HistoricalAnalytics
-from .utils.config import NETWORK_COLORS, REGION_PRESETS, TILE_PROVIDERS, MapsConfig
+from .utils.config import (
+    NETWORK_COLORS,
+    REDACTED_BROKER_KEYS,
+    REDACTED_CONFIG_KEYS,
+    REDACTION_MASK,
+    REGION_PRESETS,
+    TILE_PROVIDERS,
+    MapsConfig,
+)
 from .utils.config_drift import ConfigDriftDetector
 from .utils.event_bus import Event, EventType, NodeEvent
 from .utils.health_scoring import NodeHealthScorer
@@ -743,7 +751,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     # mqtt_username added 2026-07-05 (QA maps audit): it identifies the
     # operator's broker account and was exposed on the unauthenticated
     # /api/config for public deployments.
-    _REDACTED_CONFIG_KEYS = ("mqtt_password", "mqtt_username", "api_key", "rch_api_key")
+    #: Bound to the SSOT in utils.config -- NOT a second copy. validate_update
+    #: must refuse exactly the mask this writes, so the two cannot drift.
+    _REDACTED_CONFIG_KEYS = REDACTED_CONFIG_KEYS
 
     #: Credential keys INSIDE each ``mqtt_brokers`` entry. _REDACTED_CONFIG_KEYS
     #: is a denylist of TOP-LEVEL scalars and so never saw these: they live one
@@ -752,7 +762,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     #: A populated mqtt_brokers therefore served broker credentials in clear on
     #: the unauthenticated GET. Empty on all fleet boxes when found 2026-09-19,
     #: so this was latent, not live -- one operator edit away from live.
-    _BROKER_SECRET_KEYS = ("username", "password")
+    _BROKER_SECRET_KEYS = REDACTED_BROKER_KEYS
 
     #: The ONLY config keys served to a caller without the admin key.
     #:
@@ -792,7 +802,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
         out = dict(cfg)
         for key in cls._REDACTED_CONFIG_KEYS:
             if out.get(key) is not None:
-                out[key] = "***"
+                out[key] = REDACTION_MASK
         brokers = out.get("mqtt_brokers")
         if isinstance(brokers, list):
             masked = []
@@ -803,7 +813,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 safe = dict(entry)
                 for key in cls._BROKER_SECRET_KEYS:
                     if safe.get(key) is not None:
-                        safe[key] = "***"
+                        safe[key] = REDACTION_MASK
                 masked.append(safe)
             out["mqtt_brokers"] = masked
         return out

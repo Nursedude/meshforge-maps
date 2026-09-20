@@ -792,3 +792,151 @@ class TestReadSurfaceTiering:
             assert "someuser" not in json.dumps(cfg)
         finally:
             srv.stop()
+
+
+class TestRedactionMask:
+    """A redaction mask is not a value, and must never round-trip into storage.
+
+    Live defect 2026-07-05 -> 2026-09-19: mqtt_username joined the redacted set,
+    GET /api/config started returning the mask for it, and the settings form
+    rendered that mask straight into its input -- so opening Settings and
+    pressing Save wrote three asterisks over the real broker username. The
+    password had been handled correctly from the start; the username was missed.
+    Found by the operator reading the form on a live box, not by any check here.
+    """
+
+    KEY = "mask-test-key"
+    MASK = "***"
+
+    def _server(self, tmp_path, port):
+        config = MapsConfig(config_path=tmp_path / "settings.json")
+        config.set("http_port", port)
+        for name in ("meshtastic", "reticulum", "hamclock", "aredn", "meshcore"):
+            config.set(f"enable_{name}", False)
+        config.set("api_key", self.KEY)
+        srv = MapServer(config)
+        assert srv.start() is True
+        time.sleep(0.1)
+        return srv, config
+
+    def _post(self, srv, payload):
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+        req = Request(
+            f"http://127.0.0.1:{srv.port}/api/config",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     "X-MeshForge-Key": self.KEY},
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read().decode())
+        except HTTPError as e:
+            return e.code, json.loads(e.read().decode())
+
+    # -- the constants cannot drift ------------------------------------------
+
+    def test_mask_constant_is_the_ssot(self):
+        """map_server must not carry its own copy of either constant."""
+        from src.map_server import MapRequestHandler as H
+        from src.utils.config import (REDACTED_BROKER_KEYS, REDACTED_CONFIG_KEYS,
+                                      REDACTION_MASK)
+        assert H._REDACTED_CONFIG_KEYS is REDACTED_CONFIG_KEYS
+        assert H._BROKER_SECRET_KEYS is REDACTED_BROKER_KEYS
+        assert REDACTION_MASK == self.MASK
+
+    def test_js_constant_matches(self):
+        """The browser needs the same literal and cannot import Python, so it is
+        test-pinned instead (honest_failure_modes #5: derive, import, or pin)."""
+        import re
+        from pathlib import Path
+        from src.utils.config import REDACTION_MASK
+        js = (Path(__file__).resolve().parent.parent
+              / "web" / "js" / "meshforge-maps.js").read_text()
+        m = re.search(r"const REDACTION_MASK = '([^']*)'", js)
+        assert m, "REDACTION_MASK not declared in web/js/meshforge-maps.js"
+        assert m.group(1) == REDACTION_MASK, (
+            f"JS mask {m.group(1)!r} != Python {REDACTION_MASK!r}"
+        )
+
+    def test_form_does_not_render_the_mask_into_the_username_input(self):
+        """Pin the exact regression. No JS engine exists on these boxes, so a
+        source assertion is the only automated guard this line can have."""
+        from pathlib import Path
+        js = (Path(__file__).resolve().parent.parent
+              / "web" / "js" / "meshforge-maps.js").read_text()
+        assert "cfgMqttUsername').value = cfg.mqtt_username || ''" not in js, (
+            "the settings form writes the redaction mask into the username "
+            "input again -- Save will overwrite the real credential"
+        )
+        assert "unameMasked" in js, "the mask-aware username fill is missing"
+
+    # -- the server refuses the mask -----------------------------------------
+
+    def test_masked_username_is_refused(self, tmp_path):
+        srv, config = self._server(tmp_path, 18898)
+        try:
+            config.set("mqtt_username", "meshdev")
+            status, body = self._post(srv, {"mqtt_username": self.MASK})
+            assert status == 400, f"mask accepted with status {status}"
+            assert any("redaction mask" in e for e in body["details"])
+            # The stored credential must be untouched.
+            assert config.get("mqtt_username") == "meshdev"
+        finally:
+            srv.stop()
+
+    def test_masked_broker_credentials_are_refused(self, tmp_path):
+        srv, config = self._server(tmp_path, 18899)
+        try:
+            status, body = self._post(srv, {"mqtt_brokers": [
+                {"broker": "b.example", "port": 1883,
+                 "username": self.MASK, "password": self.MASK},
+            ]})
+            assert status == 400
+            assert any("redaction mask" in e for e in body["details"])
+        finally:
+            srv.stop()
+
+    def test_a_real_credential_still_saves(self, tmp_path):
+        """CONTROL. A refusal that refuses everything proves nothing."""
+        srv, config = self._server(tmp_path, 18887)
+        try:
+            status, _ = self._post(srv, {"mqtt_username": "realuser"})
+            assert status == 200
+            assert config.get("mqtt_username") == "realuser"
+        finally:
+            srv.stop()
+
+    def test_omitting_the_key_leaves_it_unchanged(self, tmp_path):
+        """Blank field must mean 'unchanged', which is what the form now sends."""
+        srv, config = self._server(tmp_path, 18886)
+        try:
+            config.set("mqtt_username", "meshdev")
+            status, _ = self._post(srv, {"mqtt_port": 1884})
+            assert status == 200
+            assert config.get("mqtt_username") == "meshdev"
+        finally:
+            srv.stop()
+
+    def test_get_output_posted_straight_back_is_refused(self, tmp_path):
+        """The whole defect in one test: feed the endpoint its OWN output.
+
+        This is the question that would have caught it at write time -- what
+        input makes the writer and the reader disagree? The answer was 'the
+        thing the reader just handed you'.
+        """
+        from urllib.request import Request, urlopen
+        srv, config = self._server(tmp_path, 18885)
+        try:
+            config.set("mqtt_username", "meshdev")
+            req = Request(f"http://127.0.0.1:{srv.port}/api/config",
+                          headers={"X-MeshForge-Key": self.KEY})
+            with urlopen(req, timeout=5) as resp:
+                served = json.loads(resp.read().decode())
+            assert served["mqtt_username"] == self.MASK, "precondition: it is masked"
+            status, body = self._post(srv, {"mqtt_username": served["mqtt_username"]})
+            assert status == 400, "the API accepted its own redacted output"
+            assert config.get("mqtt_username") == "meshdev"
+        finally:
+            srv.stop()

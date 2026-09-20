@@ -163,6 +163,20 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 #: and they gate nothing on this server.
 API_IMMUTABLE_KEYS = frozenset({"api_key"})
 
+#: The string GET /api/config substitutes for a secret it will not disclose.
+REDACTION_MASK = "***"
+
+#: Keys whose values are replaced by ``REDACTION_MASK`` on the way out.
+#:
+#: Lives here, not in map_server, because TWO consumers need it and they must
+#: not drift (the 24,000-vs-24,576 class): ``MapRequestHandler._redacted_config``
+#: writes the mask, and ``validate_update`` below must REFUSE to store it.
+REDACTED_CONFIG_KEYS = ("mqtt_password", "mqtt_username", "api_key", "rch_api_key")
+
+#: Credential keys nested inside each ``mqtt_brokers`` entry -- same contract,
+#: one level down.
+REDACTED_BROKER_KEYS = ("username", "password")
+
 
 # Tile provider definitions for Leaflet.js
 TILE_PROVIDERS: Dict[str, Dict[str, str]] = {
@@ -540,6 +554,36 @@ class MapsConfig:
                     f"file on the box (or re-run the setup wizard) and restart"
                 )
                 continue
+            # A redaction mask is not a value. GET /api/config returns "***"
+            # for these keys, so any client that round-trips what it was shown
+            # -- which the settings form did, for mqtt_username, from
+            # 2026-07-05 until 2026-09-19 -- would overwrite a live credential
+            # with three asterisks and break auth in a way that reads as "the
+            # broker stopped working". Nobody can mean this literally, so it is
+            # rejected at the authoring boundary rather than absorbed
+            # (honest_failure_modes #3). Omit the key to leave it unchanged.
+            if key in REDACTED_CONFIG_KEYS and value == REDACTION_MASK:
+                errors.append(
+                    f"{key} was sent as the redaction mask "
+                    f"{REDACTION_MASK!r}, which is what the API returns in "
+                    f"place of the secret -- not the secret itself. Omit the "
+                    f"key to keep the current value, or send a real one."
+                )
+                continue
+            if key == "mqtt_brokers" and isinstance(value, list):
+                masked = [
+                    i for i, e in enumerate(value)
+                    if isinstance(e, dict)
+                    and any(e.get(k) == REDACTION_MASK for k in REDACTED_BROKER_KEYS)
+                ]
+                if masked:
+                    errors.append(
+                        f"mqtt_brokers entr{'y' if len(masked) == 1 else 'ies'} "
+                        f"{masked} carr{'ies' if len(masked) == 1 else 'y'} the "
+                        f"redaction mask {REDACTION_MASK!r} instead of a "
+                        f"credential; omit those fields to keep current values"
+                    )
+                    continue
             # Type-specific validation
             if key == "mqtt_port":
                 try:
