@@ -24,6 +24,26 @@ DEFAULT_TIMEOUT = 3  # seconds
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 
 
+def _load_api_key() -> Optional[str]:
+    """Read the admin key from the same config the SERVER reads it from.
+
+    Deliberately MapsConfig rather than a hand-rolled file read: the server
+    resolves api_key through DEFAULT_CONFIG < global.ini < settings.json, and a
+    client that parsed only settings.json would disagree with the server on any
+    box that set the key in global.ini -- a checker consuming a different
+    artifact than its subject. Returns None when no key is configured, which is
+    the default; the client then sends no header and behaves as it always has.
+    """
+    try:
+        from src.utils.config import MapsConfig
+
+        key = MapsConfig().get("api_key")
+        return str(key) if key else None
+    except Exception as e:  # config unreadable -> unauthenticated, not fatal
+        logger.debug("No maps api_key available for TUI requests: %s", e)
+        return None
+
+
 class MapDataClient:
     """Lightweight HTTP client for the MeshForge Maps REST API."""
 
@@ -32,8 +52,14 @@ class MapDataClient:
         host: str = "127.0.0.1",
         port: int = 8808,
         scheme: str = "http",
+        api_key: Optional[str] = None,
     ):
         self._base = f"{scheme}://{host}:{port}"
+        # Introspective endpoints (/api/dependencies, /api/config-drift,
+        # /api/perf, ...) require the admin key since the read-surface tiering.
+        # Load it once here rather than per request: _get() runs on the TUI's
+        # 5-second refresh loop and must not touch disk on every tab.
+        self._api_key = api_key if api_key is not None else _load_api_key()
 
     @property
     def base_url(self) -> str:
@@ -43,10 +69,24 @@ class MapDataClient:
         """Fetch JSON from an API endpoint. Returns None on failure."""
         url = f"{self._base}{path}"
         try:
-            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            headers = {"Accept": "application/json"}
+            if self._api_key:
+                headers["X-MeshForge-Key"] = self._api_key
+            req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
                 return json.loads(bounded_read(resp, max_bytes=MAX_RESPONSE_BYTES).decode("utf-8"))
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as e:
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                logger.warning(
+                    "API fetch refused %s: 401 -- this endpoint needs the admin "
+                    "key. Set api_key in the maps settings.json this TUI reads "
+                    "(or re-run the setup wizard); the server has one configured.",
+                    path,
+                )
+            else:
+                logger.warning("API fetch failed %s: %s", path, e)
+            return None
+        except (urllib.error.URLError, OSError, ValueError) as e:
             logger.warning("API fetch failed %s: %s", path, e)
             return None
 

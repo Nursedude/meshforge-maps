@@ -549,3 +549,246 @@ class TestAuthFailureLogging:
             )
         finally:
             srv.stop()
+
+
+class TestReadSurfaceTiering:
+    """GET surface split: the mesh's data stays open, the deployment's does not.
+
+    Every test here pins api_key explicitly. MapsConfig layers
+    DEFAULT_CONFIG < global.ini < settings.json, so a box with an api_key in
+    ~/.config/meshforge/global.ini would otherwise flip these verdicts
+    depending on WHOSE machine ran the suite.
+    """
+
+    KEY = "tiering-test-key"
+    MASK = "***"  # named constant: a literal here trips ruff S105
+
+    def _server(self, tmp_path, port, api_key):
+        config = MapsConfig(config_path=tmp_path / "settings.json")
+        config.set("http_port", port)
+        config.set("enable_meshtastic", False)
+        config.set("enable_reticulum", False)
+        config.set("enable_hamclock", False)
+        config.set("enable_aredn", False)
+        config.set("enable_meshcore", False)
+        config.set("api_key", api_key)
+        srv = MapServer(config)
+        assert srv.start() is True
+        time.sleep(0.1)
+        return srv, config
+
+    @staticmethod
+    def _get(base, path, key=None):
+        """Return (status, parsed_json_or_None).
+
+        The /api/export/* routes answer CSV, not JSON, so the body is parsed
+        opportunistically -- a decode failure here is a content type, not a
+        verdict, and must not be read as the endpoint failing.
+        """
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+        headers = {"Accept": "application/json"}
+        if key:
+            headers["X-MeshForge-Key"] = key
+        try:
+            with urlopen(Request(base + path, headers=headers), timeout=5) as resp:
+                raw = resp.read().decode()
+                try:
+                    return resp.status, json.loads(raw)
+                except ValueError:
+                    return resp.status, None
+        except HTTPError as e:
+            return e.code, None
+
+    # -- the closed-enum gate -------------------------------------------------
+
+    def test_every_route_is_classified(self):
+        """A new route must be declared public OR admin -- never default open.
+
+        This is the gate, not the tiering itself: without it, adding a route to
+        _ROUTE_TABLE silently publishes it, which is exactly how the endpoints
+        this change gates became public in the first place.
+        """
+        from src.map_server import MapRequestHandler as H
+        routes = set(H._ROUTE_TABLE.keys())
+        classified = H._PUBLIC_GET_PATHS | H._ADMIN_GET_PATHS
+        assert routes - classified == set(), (
+            f"unclassified route(s): {sorted(routes - classified)} -- add each to "
+            f"_PUBLIC_GET_PATHS or _ADMIN_GET_PATHS in src/map_server.py"
+        )
+        assert classified - routes == set(), (
+            f"classified but not routed: {sorted(classified - routes)} -- stale entry"
+        )
+        assert H._PUBLIC_GET_PATHS & H._ADMIN_GET_PATHS == set(), "a path cannot be both"
+
+    def test_public_config_keys_cover_first_paint(self):
+        """Pin the keys loadConfig() reads before any auth exists.
+
+        Shrinking _PUBLIC_CONFIG_KEYS blanks the map on first paint, and no
+        local check can catch that -- there is no JS engine on these boxes.
+        This test is the only thing standing in for a browser.
+        """
+        from src.map_server import MapRequestHandler as H
+        required = {
+            "map_center_lat", "map_center_lon", "map_default_zoom",
+            "default_tile_provider", "region_preset",
+            "region_presets", "network_colors", "ws_port",
+        }
+        assert required <= H._PUBLIC_CONFIG_KEYS
+
+    # -- the projection -------------------------------------------------------
+
+    def test_anonymous_config_is_display_only(self, tmp_path):
+        srv, _ = self._server(tmp_path, 18890, self.KEY)
+        try:
+            from src.map_server import MapRequestHandler as H
+            base = f"http://127.0.0.1:{srv.port}"
+            status, cfg = self._get(base, "/api/config")
+            assert status == 200, "the map must still load without a key"
+            assert set(cfg) <= H._PUBLIC_CONFIG_KEYS, (
+                f"leaked beyond the allowlist: {sorted(set(cfg) - H._PUBLIC_CONFIG_KEYS)}"
+            )
+            # The specific things that were public before this change.
+            for leaked in (
+                "mqtt_broker", "mqtt_topic", "mqtt_brokers", "aredn_node_ips",
+                "trusted_proxies", "meshtasticd_host", "meshtasticd_port",
+                "rch_host", "mesh_client_path", "ws_allowed_origins",
+                "cors_allowed_origin", "http_host", "http_port",
+            ):
+                assert leaked not in cfg, f"{leaked} still served anonymously"
+            # And it is still USABLE: first paint needs these.
+            assert "ws_port" in cfg or "region_presets" in cfg
+        finally:
+            srv.stop()
+
+    def test_admin_config_is_full(self, tmp_path):
+        srv, _ = self._server(tmp_path, 18891, self.KEY)
+        try:
+            base = f"http://127.0.0.1:{srv.port}"
+            status, cfg = self._get(base, "/api/config", key=self.KEY)
+            assert status == 200
+            assert "mqtt_broker" in cfg
+            assert "aredn_node_ips" in cfg
+            assert cfg["api_key"] == self.MASK, "the key must never echo back in clear"
+        finally:
+            srv.stop()
+
+    # -- the gate -------------------------------------------------------------
+
+    @pytest.mark.parametrize("path", [
+        "/api/dependencies",
+        "/api/config-drift",
+        "/api/config-drift/summary",
+        "/api/perf",
+        "/api/proxy/stats",
+        "/api/core-health",
+        "/api/export/nodes",
+        "/api/export/alerts",
+        "/api/export/analytics/growth",
+        "/api/export/analytics/activity",
+        "/api/export/analytics/ranking",
+    ])
+    def test_introspective_get_requires_key(self, tmp_path, path):
+        srv, _ = self._server(tmp_path, 18892, self.KEY)
+        try:
+            base = f"http://127.0.0.1:{srv.port}"
+            status, _body = self._get(base, path)
+            assert status == 401, f"{path} answered {status} without a key"
+            status_ok, _ = self._get(base, path, key=self.KEY)
+            assert status_ok != 401, f"{path} refused the correct key"
+        finally:
+            srv.stop()
+
+    @pytest.mark.parametrize("path", [
+        "/api/nodes/geojson",
+        "/api/status",
+        "/api/health",
+        "/api/topology",
+        "/api/alerts/active",
+        "/api/analytics/growth",
+        "/api/heatmap",
+        "/api/auth/check",
+    ])
+    def test_display_get_stays_open(self, tmp_path, path):
+        """The product must not need a key. A blanket gate would break the NOC."""
+        srv, _ = self._server(tmp_path, 18893, self.KEY)
+        try:
+            base = f"http://127.0.0.1:{srv.port}"
+            status, _ = self._get(base, path)
+            assert status == 200, f"{path} answered {status} -- display surface broke"
+        finally:
+            srv.stop()
+
+    def test_no_key_configured_changes_nothing(self, tmp_path):
+        """A box that never set a key behaves exactly as it did before."""
+        srv, _ = self._server(tmp_path, 18894, None)
+        try:
+            base = f"http://127.0.0.1:{srv.port}"
+            assert self._get(base, "/api/dependencies")[0] == 200
+            _, cfg = self._get(base, "/api/config")
+            assert "mqtt_broker" in cfg, "no key configured == no admin distinction"
+        finally:
+            srv.stop()
+
+    # -- the credential that fell through the denylist ------------------------
+
+    def test_nested_broker_credentials_are_masked(self, tmp_path):
+        """_REDACTED_CONFIG_KEYS is a denylist of TOP-LEVEL scalars; these live
+        one level down inside mqtt_brokers and were served in clear."""
+        srv, config = self._server(tmp_path, 18895, self.KEY)
+        try:
+            config.set("mqtt_brokers", [{
+                "broker": "broker.example", "port": 8883, "topic": "msh/#",
+                "username": "svc-account", "password": "s3cr3t", "use_tls": True,
+            }])
+            base = f"http://127.0.0.1:{srv.port}"
+            _, cfg = self._get(base, "/api/config", key=self.KEY)
+            entry = cfg["mqtt_brokers"][0]
+            assert entry["password"] == self.MASK
+            assert entry["username"] == self.MASK
+            # Non-secret fields survive -- the admin form needs them.
+            assert entry["broker"] == "broker.example"
+            assert entry["port"] == 8883
+            raw = json.dumps(cfg)
+            assert "s3cr3t" not in raw and "svc-account" not in raw
+        finally:
+            srv.stop()
+
+    def test_post_response_masks_broker_credentials_too(self, tmp_path):
+        """The POST response is cached into the browser's localStorage, so a
+        redaction that fixed only the GET would still write credentials to the
+        viewer's disk. One shared helper -- assert BOTH callers use it."""
+        from urllib.request import Request, urlopen
+        srv, config = self._server(tmp_path, 18896, self.KEY)
+        try:
+            config.set("mqtt_brokers", [{
+                "broker": "broker.example", "port": 8883,
+                "username": "svc-account", "password": "s3cr3t",
+            }])
+            req = Request(
+                f"http://127.0.0.1:{srv.port}/api/config",
+                data=b'{"map_default_zoom": 5}',
+                headers={"Content-Type": "application/json",
+                         "X-MeshForge-Key": self.KEY},
+                method="POST",
+            )
+            with urlopen(req, timeout=5) as resp:
+                body = json.loads(resp.read().decode())
+            assert body["status"] == "saved"
+            raw = json.dumps(body["config"])
+            assert "s3cr3t" not in raw, "POST response leaked a broker password"
+            assert "svc-account" not in raw
+        finally:
+            srv.stop()
+
+    def test_operator_home_path_not_served_anonymously(self, tmp_path):
+        """mesh_client_path defaults under the operator's home on two fleet
+        boxes; /api/status already basenames db_path for the same reason."""
+        srv, config = self._server(tmp_path, 18897, self.KEY)
+        try:
+            config.set("mesh_client_path", "/home/someuser/.local/state/nodes.geojson")
+            base = f"http://127.0.0.1:{srv.port}"
+            _, cfg = self._get(base, "/api/config")
+            assert "someuser" not in json.dumps(cfg)
+        finally:
+            srv.stop()

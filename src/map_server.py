@@ -204,6 +204,73 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     # Valid source names for /api/nodes/<source> endpoint
     _VALID_SOURCES = {"meshtastic", "mesh_client", "reticulum", "aredn", "hamclock", "mqtt"}
 
+    #: GET routes that describe THIS DEPLOYMENT rather than the mesh it maps:
+    #: a package version inventory to aim at, config-drift history, profiler
+    #: internals and slow queries, proxy counters, core service health, and bulk
+    #: exports of the whole history DB. These take the same key a write does.
+    #:
+    #: Everything else in _ROUTE_TABLE stays OPEN on purpose. Node positions,
+    #: topology, alerts and analytics are the product, and the radios broadcast
+    #: them in clear anyway -- gating them would break the NOC display to hide
+    #: data anyone with an SDR already has.
+    #:
+    #: Gated at the app, not the firewall: this fleet's network boundary is not
+    #: stable (AREDN .249 reassignment 2026-09-11; bridge/dual-DHCP 2026-09-12),
+    #: so a rule written against today's subnet is a control whose premise
+    #: expires. An app check travels with the box.
+    _ADMIN_GET_PATHS = frozenset({
+        "/api/dependencies",
+        "/api/config-drift",
+        "/api/config-drift/summary",
+        "/api/perf",
+        "/api/proxy/stats",
+        "/api/core-health",
+        "/api/export/nodes",
+        "/api/export/alerts",
+        "/api/export/analytics/growth",
+        "/api/export/analytics/activity",
+        "/api/export/analytics/ranking",
+    })
+
+    #: The complement. Declared rather than derived so that adding a route to
+    #: _ROUTE_TABLE without classifying it FAILS a test (see
+    #: TestReadSurfaceTiering::test_every_route_is_classified) instead of
+    #: silently defaulting to public -- the closed-enum rule, applied to a
+    #: security boundary.
+    _PUBLIC_GET_PATHS = frozenset({
+        "",
+        "/index.html",
+        "/api/nodes/geojson",
+        "/api/config",
+        "/api/tile-providers",
+        "/api/sources",
+        "/api/overlay",
+        "/api/topology",
+        "/api/topology/geojson",
+        "/api/status",
+        "/api/health",
+        "/api/hamclock",
+        "/api/mqtt/stats",
+        "/api/history/nodes",
+        "/api/node-states",
+        "/api/node-states/summary",
+        "/api/node-health",
+        "/api/node-health/summary",
+        "/api/alerts",
+        "/api/alerts/active",
+        "/api/alerts/rules",
+        "/api/alerts/summary",
+        "/api/analytics/growth",
+        "/api/analytics/activity",
+        "/api/analytics/ranking",
+        "/api/analytics/summary",
+        "/api/analytics/alert-trends",
+        "/api/weather/alerts",
+        "/api/auth/check",
+        "/api/heatmap",
+        "/api/region-presets",
+    })
+
     def _client_ip(self) -> str:
         """Best-effort real client IP for rate-limit and audit logging.
 
@@ -314,6 +381,14 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
         method_name = self._ROUTE_TABLE.get(path)
         handler = getattr(self, method_name) if method_name else None
+        # Introspective GETs take the admin key. Keyed off the SAME normalised
+        # `path` the dispatch above uses, so a spelling that evades this gate
+        # evades the route lookup too and lands on the static handler -- the
+        # check cannot be walked around by a variant the router still accepts.
+        # With no api_key configured _check_api_key() returns True, so a box
+        # that never set one behaves exactly as it did before.
+        if path in self._ADMIN_GET_PATHS and not self._check_api_key():
+            return
         try:
             if handler:
                 handler()
@@ -504,12 +579,12 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             if aggregator:
                 aggregator.restart_mqtt(config.to_dict())
 
-        # Return updated config (redacted)
-        cfg = config.to_dict()
-        for key in self._REDACTED_CONFIG_KEYS:
-            if cfg.get(key) is not None:
-                cfg[key] = "***"
-        self._send_json({"status": "saved", "config": cfg})
+        # Return updated config. Same helper as the GET: this payload is
+        # cached into the browser's localStorage by the admin UI, so it must
+        # mask nested broker credentials too.
+        self._send_json(
+            {"status": "saved", "config": self._redacted_config(config.to_dict())}
+        )
 
     def _handle_backup_create(self) -> None:
         """Create a SQLite backup of the node history database."""
@@ -670,22 +745,88 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
     # /api/config for public deployments.
     _REDACTED_CONFIG_KEYS = ("mqtt_password", "mqtt_username", "api_key", "rch_api_key")
 
+    #: Credential keys INSIDE each ``mqtt_brokers`` entry. _REDACTED_CONFIG_KEYS
+    #: is a denylist of TOP-LEVEL scalars and so never saw these: they live one
+    #: level down, inside the list (DEFAULT_CONFIG documents the entry shape as
+    #: ``{"broker", "port", "topic", "username", "password", "use_tls", "label"}``).
+    #: A populated mqtt_brokers therefore served broker credentials in clear on
+    #: the unauthenticated GET. Empty on all fleet boxes when found 2026-09-19,
+    #: so this was latent, not live -- one operator edit away from live.
+    _BROKER_SECRET_KEYS = ("username", "password")
+
+    #: The ONLY config keys served to a caller without the admin key.
+    #:
+    #: An ALLOWLIST on purpose. The redaction above is a denylist, and this one
+    #: endpoint has now been patched field-by-field three times -- mqtt_username
+    #: (2026-07-05 QA audit, comment above), db_path basename on /api/status,
+    #: and mqtt_brokers + mesh_client_path here -- because a denylist defaults
+    #: every NEW key to exposed. An allowlist defaults it to hidden, so the next
+    #: key added to DEFAULT_CONFIG is private until someone decides otherwise.
+    #:
+    #: Derived from the consumer, not from taste: these are exactly the keys
+    #: loadConfig() reads in web/js/meshforge-maps.js before any auth exists.
+    #: Shrinking this set breaks first paint; grep that function before editing.
+    _PUBLIC_CONFIG_KEYS = frozenset({
+        "map_center_lat",
+        "map_center_lon",
+        "map_default_zoom",
+        "default_tile_provider",
+        "region_preset",
+        # Injected below: static tables and the live WS port, not settings keys.
+        "region_presets",
+        "network_colors",
+        "ws_port",
+    })
+
+    @classmethod
+    def _redacted_config(cls, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a copy with every credential masked, nested ones included.
+
+        One copy on purpose. ``_serve_config`` and ``_handle_config_update``
+        both hand config back to a caller, and the POST response is cached into
+        the browser's localStorage by the admin UI -- so a redaction that fixed
+        only the GET would still write broker passwords to disk on every
+        machine the operator ever opened Settings from. Two independent loops
+        drift, and the one that drifts is the one nobody re-reads.
+        """
+        out = dict(cfg)
+        for key in cls._REDACTED_CONFIG_KEYS:
+            if out.get(key) is not None:
+                out[key] = "***"
+        brokers = out.get("mqtt_brokers")
+        if isinstance(brokers, list):
+            masked = []
+            for entry in brokers:
+                if not isinstance(entry, dict):
+                    masked.append(entry)
+                    continue
+                safe = dict(entry)
+                for key in cls._BROKER_SECRET_KEYS:
+                    if safe.get(key) is not None:
+                        safe[key] = "***"
+                masked.append(safe)
+            out["mqtt_brokers"] = masked
+        return out
+
     def _serve_config(self) -> None:
-        """Serve current configuration (non-sensitive)."""
+        """Serve config: full (redacted) to admin, display projection to others."""
         config = self._ctx.config
         if not config:
             self._send_json({})
             return
-        cfg = config.to_dict()
-        for key in self._REDACTED_CONFIG_KEYS:
-            if cfg.get(key) is not None:
-                cfg[key] = "***"
+        cfg = self._redacted_config(config.to_dict())
         cfg["network_colors"] = NETWORK_COLORS
         cfg["region_presets"] = REGION_PRESETS
         # Include WebSocket port so frontend can connect
         ws_server = self._ctx.ws_server
         if ws_server:
             cfg["ws_port"] = ws_server.port
+        # This endpoint cannot be gated outright: the map fetches it with no
+        # credentials at first paint (loadConfig()), so a 401 here is a blank
+        # map. It is PROJECTED instead -- the display keys for everyone, the
+        # deployment's own description for the key holder.
+        if not self._is_admin():
+            cfg = {k: v for k, v in cfg.items() if k in self._PUBLIC_CONFIG_KEYS}
         self._send_json(cfg)
 
     def _serve_tile_providers(self) -> None:

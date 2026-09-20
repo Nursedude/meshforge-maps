@@ -141,10 +141,19 @@ var _CONFIG_CACHE_KEY = 'meshforge_config_cache';
 
 function _cacheConfig(cfg) {
     try {
-        var safe = Object.assign({}, cfg);
+        // MERGE, never replace. GET /api/config returns only display keys to an
+        // unauthenticated caller, and loadConfig() is unauthenticated -- so a
+        // replace would blank the admin fields the Settings form pre-fills from,
+        // and a form pre-filled with blanks can be SAVED over a good config if
+        // the authenticated refresh then fails. Merging keeps the last full view.
+        var prev = _getCachedConfig() || {};
+        var safe = Object.assign({}, prev, cfg);
         delete safe.mqtt_password;
         delete safe.api_key;
         delete safe.rch_api_key;
+        // Entries carry per-broker username/password; the server masks them now,
+        // but this cache outlives any one server version on the viewer's disk.
+        delete safe.mqtt_brokers;
         localStorage.setItem(_CONFIG_CACHE_KEY, JSON.stringify(safe));
     } catch (e) {}
 }
@@ -1234,12 +1243,23 @@ async function openSettings() {
     try {
         var cfgController = new AbortController();
         var cfgTimeout = setTimeout(function() { cfgController.abort(); }, 10000);
-        var resp = await fetch(API_BASE + '/api/config', { signal: cfgController.signal });
+        // Send the admin key: /api/config returns the display projection to an
+        // unauthenticated caller, and this form edits the deployment's own
+        // settings (broker, ports, profile), which live behind that key.
+        var resp = await fetch(API_BASE + '/api/config', {
+            headers: _getAdminHeaders(),
+            signal: cfgController.signal
+        });
         clearTimeout(cfgTimeout);
         if (!resp.ok) throw new Error('Failed to load config');
         var cfg = await resp.json();
         _cacheConfig(cfg);
-        _populateSettingsForm(cfg);
+        // Populate from the MERGED cache, not the raw response: if the stored
+        // key has gone stale the server answers with the display projection,
+        // and filling the form from that alone would show blank MQTT fields as
+        // if they were unset. (The save would 401 so nothing is lost -- but a
+        // blank field that is not actually blank is still a lie to the operator.)
+        _populateSettingsForm(_getCachedConfig() || cfg);
 
         // Show MQTT connection status
         try {

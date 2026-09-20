@@ -1405,3 +1405,101 @@ class TestWsFramePoisoning:
         with patch("src.tui.tabs.events.curses", mc), \
              patch("src.tui.helpers.curses", mc):
             app._draw_events(1, 38, 120)  # must not raise
+
+
+class TestMapDataClientAdminKey:
+    """The TUI reads endpoints the read-surface tiering now gates, so it must
+    carry the admin key -- otherwise 8 tabs go blank on any box that set one.
+
+    Every test pins api_key explicitly. _load_api_key() reads the real
+    MapsConfig, so a client constructed with no argument would behave
+    differently depending on whose box ran the suite.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _start_echo_server(self):
+        """A server that echoes back the auth header it received."""
+        seen = {}
+
+        class _AuthEchoHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen["key"] = self.headers.get("X-MeshForge-Key")
+                if self.path == "/api/gated" and not seen["key"]:
+                    self.send_response(401)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Unauthorized"}')
+                    return
+                body = json.dumps({"key_seen": seen["key"]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, fmt, *args):
+                pass
+
+        self.seen = seen
+        self.server = HTTPServer(("127.0.0.1", 0), _AuthEchoHandler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        yield
+        self.server.shutdown()
+
+    def test_key_is_sent_when_configured(self):
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=self.port, api_key="tui-key")
+        result = client._get("/api/dependencies")
+        assert result is not None
+        assert result["key_seen"] == "tui-key"
+
+    def test_no_header_when_no_key(self):
+        """A box that never configured a key must behave exactly as before."""
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=self.port, api_key="")
+        result = client._get("/api/dependencies")
+        assert result is not None
+        assert result["key_seen"] is None
+
+    def test_gated_endpoint_reachable_with_key(self):
+        from src.tui.data_client import MapDataClient
+        assert MapDataClient(port=self.port, api_key="").\
+            _get("/api/gated") is None          # refused, no key
+        assert MapDataClient(port=self.port, api_key="tui-key").\
+            _get("/api/gated") is not None      # control: key works
+
+    def test_401_is_logged_as_auth_not_as_down(self, caplog):
+        """A 401 and an unreachable server must not read the same in the log --
+        otherwise the operator debugs the network instead of the key."""
+        import logging
+        from src.tui.data_client import MapDataClient
+        client = MapDataClient(port=self.port, api_key="")
+        with caplog.at_level(logging.WARNING, logger="src.tui.data_client"):
+            assert client._get("/api/gated") is None
+        assert any("admin key" in rec.message for rec in caplog.records), (
+            "a 401 must name the key as the cause"
+        )
+
+    def test_loader_reads_the_same_config_the_server_does(self, monkeypatch):
+        """Pin the SSOT: the key comes from MapsConfig, not a private parse, so
+        client and server cannot disagree on a box that sets it in global.ini."""
+        import src.tui.data_client as dc
+
+        class _FakeConfig:
+            def get(self, key, default=None):
+                return "from-mapsconfig" if key == "api_key" else default
+
+        monkeypatch.setattr("src.utils.config.MapsConfig", lambda *a, **k: _FakeConfig())
+        assert dc._load_api_key() == "from-mapsconfig"
+
+    def test_loader_returns_none_when_config_unreadable(self, monkeypatch):
+        """Config trouble must degrade to unauthenticated, never crash the TUI."""
+        import src.tui.data_client as dc
+
+        def _boom(*a, **k):
+            raise OSError("config unreadable")
+
+        monkeypatch.setattr("src.utils.config.MapsConfig", _boom)
+        assert dc._load_api_key() is None
