@@ -16,9 +16,34 @@ protobuf>=4.0
 # Meshtastic Python library (protobuf definitions + local daemon integration)
 meshtastic>=2.5.0
 
-# TLS certificate handling for secure MQTT connections
-pyopenssl>=25.3.0
-cryptography>=45.0.7,<47
+# TLS certificate handling for secure MQTT connections.
+#
+# SSOT for this pair — pyproject.toml [tls] and README.md must match, and
+# tests/test_crypto_pin.py fails if they drift. BOTH bounds are load-bearing
+# and the two packages MOVE TOGETHER; do not raise one alone.
+#
+# REBASELINED 2026-09-19, porting meshforge 558ffe55 (2026-09-05), which this
+# repo never received. The previous line — `pyopenssl>=25.3.0` +
+# `cryptography>=45.0.7,<47` — made a fresh install UNPATCHABLE: every version
+# satisfying that range carries GHSA-jwv3-5hgf-82ww (high) and
+# GHSA-m2h6-j472-rp4c, both fixed in 49.0.0, which `<47` forbids. An install
+# could be fully requirements-COMPLIANT and vulnerable at once. The ceiling
+# was the defect. Do not leave an unexplained bound in this file again.
+#
+# FLOOR 50.0.1 — NOT 49.0.0. GHSA-g6cj-pr64-35w5 (high, PKCS#7 Bleichenbacher)
+# is `< 50.0.0`, so 49.x still ships a known high. Re-derived from an
+# authority outside this repo on 2026-09-19, not carried from the parent:
+#   gh api "/advisories?ecosystem=pip&affects=cryptography@<v>" --jq length
+#   46.0.7 -> 4   49.0.0 -> 1   50.0.1 -> 0   51.0.0 -> 0
+#
+# CEILING 51 — because pyOpenSSL DECLARES it. 26.4.0's installed metadata
+# reads `cryptography<51,>=49.0.0` (read off the dist on a live box, not
+# inferred). That >=49.0.0 is also why the pyopenssl floor had to rise with
+# it: 25.3.0 cannot coexist with the patched cryptography line, so pinning
+# cryptography alone would fail the resolver. Re-derive before raising:
+#   python3 -m importlib.metadata  # or m.requires("pyOpenSSL")
+pyopenssl>=26.4.0
+cryptography>=50.0.1,<51
 
 # Development / testing
 # pytest>=7.0

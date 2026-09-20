@@ -120,7 +120,7 @@ ruff check src/ --select S --ignore S101,S310,S603,S607   # matches Security Sca
 - **Meshtastic latitudeI**: Integer fields (lat * 1e7) — pass `convert_int=True` to `validate_coordinates()`
 - **Null Island**: (0, 0) coordinates are rejected as invalid GPS (common protobuf default value)
 - **HamClock ports**: OpenHamClock `:3000` is preferred; legacy HamClock `:8080` is fallback only (no longer actively developed)
-- **pyopenssl pinning**: Must be `>=25.3.0` with `cryptography>=45.0.7,<47` to avoid SSL conflicts
+- **pyopenssl pinning**: `pyopenssl>=26.4.0` with `cryptography>=50.0.1,<51`. The pair MOVES TOGETHER (pyOpenSSL 26.4.0 declares `cryptography<51,>=49.0.0`); floor is 50.0.1 not 49.0.0 because GHSA-g6cj-pr64-35w5 is `<50`. SSOT is `requirements.txt`; `tests/test_crypto_pin.py` fails if pyproject/README drift. Never raise one of the pair alone.
 - **Graceful degradation**: All optional imports must be try/except guarded — feature disabled, never crash
 - **Circuit breakers**: Per-source failure isolation via `ConnectionManager` — don't bypass for "reliability"
 - **Config keys in README**: `cors_allowed_origin`, `api_key`, `enable_noaa_alerts`, `noaa_alerts_area`, `noaa_alerts_severity`, `rate_limit_per_minute`, `enable_hsts`, `ws_allowed_origins`, `trajectory_move_threshold_meters`, `trajectory_rows_per_node` are all in `DEFAULT_CONFIG` — keep README config table in sync when adding/removing keys

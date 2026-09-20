@@ -465,7 +465,7 @@ pip install paho-mqtt meshtastic
 pip install websockets
 
 # TLS: modern SSL stack for encrypted MQTT broker connections
-pip install 'pyopenssl>=25.3.0' 'cryptography>=45.0.7,<47'
+pip install 'pyopenssl>=26.4.0' 'cryptography>=50.0.1,<51'
 ```
 
 All optional dependencies degrade gracefully — features that require them are silently disabled when the libraries are not installed. The core map server works with zero pip packages.
@@ -862,7 +862,7 @@ Any pytest failure posts an extracted summary as a comment on the PR (via `tee /
 
 ### Testing Status
 
-This project is in **beta**. The unit test suite (~1,200 tests across <!--STAT:testfiles-->48<!--/STAT--> test files) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
+This project is in **beta**. The unit test suite (~1,200 tests across <!--STAT:testfiles-->49<!--/STAT--> test files) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
 
 | Area | Unit Tested | Live Tested | Notes |
 |------|:-----------:|:-----------:|-------|
