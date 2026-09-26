@@ -788,8 +788,15 @@ function renderMarkers() {
         }
 
         if (existing) {
-            // Update in place — no allocation
-            existing.setLatLng([lat, lon]);
+            // Update in place — no allocation. Move ONLY on a real change:
+            // setLatLng fires 'move', and markercluster answers every move by
+            // pulling the marker out of the cluster tree and re-inserting it,
+            // so an unconditional call re-clustered every node each refresh
+            // ("it rolls" — operator 2026-09-25).
+            const cur = existing.getLatLng();
+            if (cur.lat !== lat || cur.lng !== lon) {
+                existing.setLatLng([lat, lon]);
+            }
             existing.setStyle(style);
             existing._mmProps = props;
             existing._mmColor = color;
@@ -2596,15 +2603,27 @@ async function loadCoverageHeatmap() {
 }
 
 function renderCoverageHeatmap(data) {
+    var points = data.points || [];
+    document.getElementById('countHeatmapCells').textContent = points.length;
+
+    if (points.length === 0) {
+        if (heatmapLayer) {
+            map.removeLayer(heatmapLayer);
+            heatmapLayer = null;
+        }
+        return;
+    }
+
+    // Update IN PLACE on refresh: removing and re-creating the layer every
+    // 60 s blanked and repainted the canvas (operator 2026-09-25).
+    if (heatmapLayer && typeof heatmapLayer.setLatLngs === 'function') {
+        heatmapLayer.setLatLngs(points);
+        return;
+    }
     if (heatmapLayer) {
         map.removeLayer(heatmapLayer);
         heatmapLayer = null;
     }
-
-    var points = data.points || [];
-    document.getElementById('countHeatmapCells').textContent = points.length;
-
-    if (points.length === 0) return;
 
     // Leaflet.heat expects [[lat, lon, intensity], ...]
     heatmapLayer = L.heatLayer(points, {

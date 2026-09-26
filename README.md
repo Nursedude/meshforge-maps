@@ -862,7 +862,7 @@ Any pytest failure posts an extracted summary as a comment on the PR (via `tee /
 
 ### Testing Status
 
-This project is in **beta**. The unit test suite (~1,200 tests across <!--STAT:testfiles-->49<!--/STAT--> test files) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
+This project is in **beta**. The unit test suite (~1,200 tests across <!--STAT:testfiles-->50<!--/STAT--> test files) covers internal logic extensively, but many features have not been validated against live production meshes. Areas that need real-world testing:
 
 | Area | Unit Tested | Live Tested | Notes |
 |------|:-----------:|:-----------:|-------|
