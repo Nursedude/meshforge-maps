@@ -8,6 +8,11 @@ body {
 }
 
 #map { width: 100vw; height: 100vh; z-index: 1; }
+/* The gap between zoom levels shows the container, and Leaflet's default is
+   light grey — the "briefly white on zoom" (operator 2026-09-25). Zoom/fade
+   animations stay OFF (2e7a372: Pi GPU white-screen fix), so match the page's
+   dark background instead, as the :5000 map does. */
+.leaflet-container { background: #0a0e1a; }
 
 /* Header bar */
 .header {

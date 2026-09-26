@@ -26,3 +26,11 @@ def test_heatmap_updates_in_place_and_clears_when_empty():
     empty = fn[fn.index("if (points.length === 0)"):]
     empty = empty[:empty.index("return;")]
     assert "map.removeLayer(heatmapLayer)" in empty
+
+
+def test_zoom_gap_is_dark_not_leaflet_default_white():
+    """Zoom animations stay off (Pi GPU), so the gap between zoom levels shows
+    the container — it must be the page's dark background, not #ddd."""
+    css = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web", "css",
+                            "meshforge-maps.css"), encoding="utf-8").read()
+    assert ".leaflet-container { background: #0a0e1a; }" in css
