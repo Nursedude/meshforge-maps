@@ -10,11 +10,13 @@ MeshForge core writes to: ~/.config/meshforge/health_state.db
 This module provides read-only access using SQLite WAL mode for
 lock-free concurrent reads.
 
-Modeled after meshforge core's utils/shared_health_state.py:
-  - SQLite WAL mode for concurrent access
+Reads MeshForge core's REAL schema (utils/shared_health_state.py there):
+service_health + latency_samples. tests/test_core_health_contract.py builds
+the DB with core's own SharedHealthState — never a test-invented schema
+(domain audit 2026-10-18: the old reader queried tables core never creates,
+swallowed the error and served an empty, healthy-looking view).
   - Read-only connection (no writes to core's DB)
-  - Graceful fallback when DB doesn't exist
-  - Latency percentile reads
+  - Tri-state status: no_db / unreadable / empty / ok — never a bare []
 """
 
 import logging
@@ -32,6 +34,14 @@ logger = logging.getLogger(__name__)
 # Default location of MeshForge core's health state DB
 DEFAULT_HEALTH_DB_PATH = get_config_dir() / "health_state.db"
 
+# MeshForge core's own staleness rule (its SharedHealthState
+# DEFAULT_STALE_THRESHOLD): a row not updated this long is "can't tell".
+STALE_AFTER_S = 120
+# Latency percentiles look back this far (core's get_latency_percentiles: 1 h).
+LATENCY_WINDOW_S = 3600
+# A row stamped more than this far in the FUTURE is clock skew, not fresh.
+CLOCK_SKEW_TOLERANCE_S = 5
+
 
 class SharedHealthStateReader:
     """Read-only access to MeshForge core's shared health state.
@@ -48,6 +58,8 @@ class SharedHealthStateReader:
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
         self._available = False
+        self._last_error: Optional[str] = None
+        self._closed = False
         self._connect()
 
     def _connect(self) -> None:
@@ -78,133 +90,123 @@ class SharedHealthStateReader:
             with self._lock:
                 self._conn = conn
                 self._available = True
+                self._last_error = None
             logger.info("Connected to shared health DB at %s", self._db_path)
         except sqlite3.Error as e:
-            logger.debug("Failed to open shared health DB: %s", e)
+            # The file EXISTS: this is "can't read", never "absent".
+            if str(e) != self._last_error:
+                logger.warning("Core health DB %s exists but cannot be "
+                               "opened: %s", self._db_path, e)
             with self._lock:
                 self._conn = None
+                self._last_error = str(e)
 
     @property
     def available(self) -> bool:
-        """Whether the shared health DB is accessible."""
+        """Whether a connection to the DB file is OPEN. Not the same as the
+        summary's ``available`` (= its contents read as core's schema): a
+        garbage file is open-able but ``unreadable``."""
         with self._lock:
             return self._available and self._conn is not None
 
-    def get_service_states(self) -> List[Dict[str, Any]]:
-        """Read all service health states from the core DB.
+    def _read(self):
+        """``(status, error, services, latency)`` — tri-state, never a bare
+        ``[]`` (domain audit 2026-10-18: a read error used to come back as an
+        empty list, which reads as "no problems").
 
-        Returns a list of dicts with service_name, status, last_updated, etc.
+        status: ``closed`` (``close()`` was called) · ``no_db`` (core's DB
+        absent) · ``unreadable`` (it exists but
+        cannot be read as MeshForge's schema — ``error`` says why) ·
+        ``empty`` (core is there and has recorded nothing) · ``ok``.
         """
-        if not self._conn:
-            return []
-
+        if self._conn is None and not self._closed and self._db_path.exists():
+            # The DB appeared after this reader was made: TRY the open, so
+            # "unreadable" only ever follows a real failed open.
+            self._connect()
         with self._lock:
+            conn = self._conn
+            if conn is None:
+                if self._closed:
+                    return "closed", None, [], {}
+                if self._db_path.exists():
+                    return ("unreadable", self._last_error or "cannot open",
+                            [], {})
+                return "no_db", None, [], {}
             try:
-                rows = self._conn.execute(
-                    """SELECT service_name, status, last_updated,
-                              error_count, success_count, metadata
-                       FROM service_health
-                       ORDER BY service_name"""
+                rows = conn.execute(
+                    """SELECT service, state, reason, latency_ms, updated_at,
+                              consecutive_fails, uptime_pct
+                       FROM service_health ORDER BY service"""
                 ).fetchall()
-                return [
-                    {
-                        "service_name": r[0],
-                        "status": r[1],
-                        "last_updated": r[2],
-                        "error_count": r[3],
-                        "success_count": r[4],
-                        "metadata": r[5],
-                    }
-                    for r in rows
-                ]
-            except sqlite3.OperationalError:
-                # Table doesn't exist or schema mismatch
-                return []
-            except Exception as e:
-                logger.debug("Service states read failed: %s", e)
-                return []
-
-    def get_node_health(self, node_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Read node health records from core.
-
-        If node_id is provided, returns health for that node only.
-        Otherwise returns all node health records.
-        """
-        if not self._conn:
-            return []
-
-        with self._lock:
-            try:
-                if node_id:
-                    rows = self._conn.execute(
-                        """SELECT node_id, health_score, status, last_seen,
-                                  network, metadata
-                           FROM node_health WHERE node_id = ?""",
-                        (node_id,),
-                    ).fetchall()
-                else:
-                    rows = self._conn.execute(
-                        """SELECT node_id, health_score, status, last_seen,
-                                  network, metadata
-                           FROM node_health ORDER BY last_seen DESC"""
-                    ).fetchall()
-                return [
-                    {
-                        "node_id": r[0],
-                        "health_score": r[1],
-                        "status": r[2],
-                        "last_seen": r[3],
-                        "network": r[4],
-                        "metadata": r[5],
-                    }
-                    for r in rows
-                ]
-            except sqlite3.OperationalError:
-                return []
-            except Exception as e:
-                logger.debug("Node health read failed: %s", e)
-                return []
-
-    def get_latency_percentiles(self) -> Dict[str, Any]:
-        """Read message delivery latency percentiles from core.
-
-        Returns dict with p50, p90, p99, and sample_count.
-        """
-        if not self._conn:
-            return {}
-
-        with self._lock:
-            try:
-                row = self._conn.execute(
-                    """SELECT p50_ms, p90_ms, p99_ms, sample_count,
-                              last_updated
-                       FROM latency_stats ORDER BY last_updated DESC LIMIT 1"""
-                ).fetchone()
-                if not row:
-                    return {}
-                return {
-                    "p50_ms": row[0],
-                    "p90_ms": row[1],
-                    "p99_ms": row[2],
-                    "sample_count": row[3],
-                    "last_updated": row[4],
-                }
-            except sqlite3.OperationalError:
-                return {}
-            except Exception as e:
-                logger.debug("Latency percentiles read failed: %s", e)
-                return {}
+                samples = conn.execute(
+                    """SELECT service, latency_ms FROM latency_samples
+                       WHERE timestamp > ? ORDER BY service, latency_ms""",
+                    (time.time() - LATENCY_WINDOW_S,),
+                ).fetchall()
+            except sqlite3.Error as e:
+                if str(e) != self._last_error:
+                    self._last_error = str(e)
+                    logger.warning(
+                        "Core health DB %s unreadable as MeshForge's schema: "
+                        "%s — reporting can't-tell", self._db_path, e)
+                return "unreadable", str(e), [], {}
+        self._last_error = None
+        now = time.time()
+        services = []
+        for svc, state, reason, latency_ms, updated_at, fails, uptime in rows:
+            age = now - (updated_at or 0)
+            if age < -CLOCK_SKEW_TOLERANCE_S:
+                # Stamped ahead of now: a wall-clock step (RTC-less Pi,
+                # fake-hwclock, NTP) — no evidence of freshness.
+                stale_reason = f"clock skew: row is {-age:.0f}s in the future"
+            elif age > STALE_AFTER_S:
+                stale_reason = f"not updated for {age:.0f}s"
+            else:
+                stale_reason = ""
+            stale = bool(stale_reason)
+            services.append({
+                "service": svc,
+                # A stale row is "can't tell", never its last answer.
+                "state": "stale" if stale else state,
+                "last_state": state,
+                "stale": stale,
+                "stale_reason": stale_reason,
+                "age_s": round(age, 1),
+                "reason": reason or "",
+                "latency_ms": latency_ms,
+                "consecutive_fails": fails,
+                "uptime_pct": uptime,
+            })
+        by_service: Dict[str, List[float]] = {}
+        for svc, ms in samples:
+            by_service.setdefault(svc, []).append(ms)
+        latency = {}
+        for svc, vals in by_service.items():
+            n = len(vals)  # same index rule as core's get_latency_percentiles
+            latency[svc] = {"p50": vals[int(n * 0.50)], "p90": vals[int(n * 0.90)],
+                            "p99": vals[int(n * 0.99)], "max": vals[-1],
+                            "count": n}
+        if not services:
+            status = "empty"
+        elif all(svc["stale"] for svc in services):
+            status = "stale"  # a producer that ran once and stopped
+        else:
+            status = "ok"
+        return status, None, services, latency
 
     def get_summary(self) -> Dict[str, Any]:
-        """Get a summary of all shared health state data.
-
-        Returns a dict suitable for API responses with service states,
-        latency stats, and a timestamp.
-        """
+        """API shape for ``/api/core-health``: service states, per-service
+        latency percentiles, and a ``status`` that never lets "can't read"
+        pass for "nothing wrong"."""
+        status, error, services, latency = self._read()
         return {
-            "available": self.available,
-            "services": self.get_service_states(),
-            "latency": self.get_latency_percentiles(),
+            "available": status in ("ok", "empty"),
+            "status": status,
+            "error": error,
+            "services": services,
+            "stale_count": sum(1 for svc in services if svc["stale"]),
+            "latency": latency,
+            "stale_after_s": STALE_AFTER_S,
             "checked_at": int(time.time()),
             "db_path": str(self._db_path),
         }
@@ -217,6 +219,8 @@ class SharedHealthStateReader:
         with self._lock:
             if self._conn:
                 return True
+            if self._closed:
+                return False  # close means close — never a silent reopen
         self._connect()
         with self._lock:
             return self._available
@@ -231,3 +235,4 @@ class SharedHealthStateReader:
                     logger.debug("Error closing shared health DB: %s", e)
                 self._conn = None
                 self._available = False
+            self._closed = True

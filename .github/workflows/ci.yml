@@ -42,6 +42,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The core-health contract test builds its DB with MeshForge's REAL
+      # SharedHealthState (tests/test_core_health_contract.py) — a schema
+      # the test invents pins nothing (domain audit 2026-10-18). Public repo,
+      # default branch; the test FAILS in CI if this source is missing.
+      - name: Check out MeshForge (core-health producer)
+        uses: actions/checkout@v4
+        with:
+          repository: Nursedude/meshforge
+          path: _meshforge
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -78,6 +90,7 @@ jobs:
         env:
           CI: true
           PYTHONUNBUFFERED: "1"
+          MESHFORGE_SRC: ${{ github.workspace }}/_meshforge/src
 
       - name: Dump failure summary
         if: failure() && steps.pytest.outcome == 'failure'
