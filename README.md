@@ -101,7 +101,7 @@ A full curses-based terminal interface launched with `--tui` (alongside the serv
 - **OpenHamClock auto-detection** -- tries port 3000 first (OpenHamClock), falls back to port 8080 (HamClock legacy)
 - **Dark theme** -- matches MeshForge core UI (dark CartoDB + cyan accents)
 - **Zero required dependencies** -- stdlib only; paho-mqtt and meshtastic are optional for live MQTT
-- **Docker support** -- single-container deployment with env var configuration
+- **Docker (unsupported)** -- a `Dockerfile` ships, but CI never builds or tests it; the supported install is bare-metal + systemd
 - **Admin authentication** -- API key protects settings; public read-only map access
 - **Interactive setup wizard** -- `--setup` flag for first-run terminal configuration
 
@@ -594,7 +594,10 @@ OpenHamClock is an X11 application and won't run directly on a headless Pi (no d
 
 > The no-radio install (`--no-radio`) enables HamClock/NOAA by default. If no HamClock instance is reachable, NOAA fallback activates automatically — no configuration needed.
 
-### Docker Deployment
+### Docker Deployment (unsupported)
+
+> The supported install is bare-metal + systemd (above). This `Dockerfile` is
+> not built or tested in CI — use it at your own risk; reports welcome.
 
 ```bash
 # Build and run
