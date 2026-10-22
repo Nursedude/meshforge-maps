@@ -4,6 +4,8 @@ Unified multi-source mesh network map (Meshtastic, Reticulum/RMAP, AREDN, MeshCo
 Runs standalone (`python -m src.main`) or as a MeshForge extension via `manifest.json` auto-discovery.
 HTTP server on `:8808`, WebSocket on `:8809`. Python 3.9+, stdlib only for core.
 
+**Domain roadmap SSOT: meshforge `.claude/ROADMAP.md`** — items tagged `[maps]` are this repo's, and each declares `maps:both`: accepted only when it works as a MeshForge plugin AND standalone (8808/8809). This repo keeps no roadmap of its own (roadmap cohesion, decided 2026-10-19).
+
 ## Source Layout
 
 ```
