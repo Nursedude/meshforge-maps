@@ -15,3 +15,6 @@ venv/
 coverage.xml
 htmlcov/
 .claude/settings.local.json
+
+# Claude Code session lock (harness state, never repo content)
+.claude/scheduled_tasks.lock
